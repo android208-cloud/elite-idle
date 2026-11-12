@@ -1,0 +1,17 @@
+{
+  "name": "elite-idle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Elite Idle: Elite 1985 в формате капитана-менеджера",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  }
+}

@@ -1,0 +1,84 @@
+:root {
+  --bg: #0f1514;
+  --surface: #151d1c;
+  --surface-2: #1c2625;
+  --surface-3: #232f2e;
+  --on-surface: #dde4e2;
+  --on-variant: #a9b4b1;
+  --outline: #3b4a48;
+  --primary: #4fd8c4;
+  --on-primary: #003730;
+  --primary-container: #00504a;
+  --on-primary-container: #70f5df;
+  --good: #7ddc8f;
+  --bad: #ff8a80;
+  --warn: #ffd37a;
+  --radius: 16px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--on-surface);
+  font-family: Roboto, "Segoe UI", system-ui, sans-serif; }
+
+#app { display: flex; flex-direction: column; height: 100%; max-width: 640px; margin: 0 auto; }
+
+.top-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 14px) 20px 10px; }
+.top-bar h1 { margin: 0; font-size: 22px; font-weight: 500; }
+#top-info { color: var(--primary); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+
+.nav-bar { display: flex; background: var(--surface-2); padding: 8px 4px calc(env(safe-area-inset-bottom) + 10px); }
+.nav-bar button { flex: 1; background: none; border: 0; color: var(--on-variant); font: inherit; font-size: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; cursor: pointer; }
+.nav-bar .pill { width: 64px; height: 32px; border-radius: 16px; display: grid; place-items: center; font-size: 18px;
+  transition: background .2s; }
+.nav-bar button.active { color: var(--on-surface); }
+.nav-bar button.active .pill { background: var(--primary-container); color: var(--on-primary-container); }
+
+.card { background: var(--surface-2); border-radius: var(--radius); padding: 16px; margin: 10px 0; }
+.card h2 { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
+.card .sub { color: var(--on-variant); font-size: 13px; }
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.stat { background: var(--surface-3); border-radius: 12px; padding: 12px; }
+.stat .label { color: var(--on-variant); font-size: 12px; }
+.stat .value { font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.progress { height: 8px; background: var(--surface-3); border-radius: 4px; overflow: hidden; margin: 10px 0 6px; }
+.progress > div { height: 100%; background: var(--primary); transition: width .5s linear; }
+
+.btn { border: 0; border-radius: 20px; padding: 10px 18px; font: inherit; font-weight: 500; cursor: pointer;
+  background: var(--primary); color: var(--on-primary); }
+.btn.tonal { background: var(--primary-container); color: var(--on-primary-container); }
+.btn.text { background: none; color: var(--primary); padding: 10px 12px; }
+.btn:disabled { opacity: .38; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.spacer { flex: 1; }
+
+.good-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.good-row .name { font-weight: 500; }
+.chip { font-size: 11px; border-radius: 8px; padding: 2px 8px; border: 1px solid var(--outline); color: var(--on-variant); }
+.chip.cheap { color: var(--good); border-color: var(--good); }
+.chip.dear { color: var(--bad); border-color: var(--bad); }
+.price { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.muted { color: var(--on-variant); font-size: 13px; }
+
+canvas { width: 100%; border-radius: var(--radius); background: var(--surface); display: block; touch-action: manipulation; }
+
+.log { list-style: none; margin: 0; padding: 0; }
+.log li { padding: 8px 0; border-bottom: 1px solid var(--outline); font-size: 14px; }
+.log li:last-child { border-bottom: 0; }
+.log time { color: var(--on-variant); font-size: 12px; display: block; }
+
+select { background: var(--surface-3); color: var(--on-surface); border: 1px solid var(--outline);
+  border-radius: 12px; padding: 10px 12px; font: inherit; }
+
+
+.card.warn { border-left: 4px solid var(--warn); }
+.card.danger { border-left: 4px solid var(--bad); }
+.alert { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: rgba(255, 138, 128, .15); color: var(--bad); font-weight: 500; }
+.progress.enemy > div { background: var(--bad); }

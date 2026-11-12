@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Production build
+dist/
+
+# Reference materials (original ASM and libraries - not distributed)
+reference/
+
+# Environment / IDE
+.DS_Store
+*.local
+.vscode/
+.idea/
