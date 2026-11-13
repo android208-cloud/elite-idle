@@ -36,7 +36,11 @@ export interface EnemyType {
   bounty: number;
   /** Минимум убийств игрока, с которого корабль встречается среди пиратов */
   minKills: number;
-  /** Может ли встречаться как пират */
+  /**
+   * Может ли встречаться как пират. Примечание: в оригинале Moray помечен как
+   * Hostile+pirate (e_per_cent.asm), но из-за бага спавна не появлялся никогда.
+   * Мы применяем исправление Моксона, поэтому он доступен.
+   */
   pirate: boolean;
   /** Доля энергии, ниже которой противник может бежать */
   fleeBelow: number;
@@ -66,7 +70,7 @@ export const ENEMIES: readonly EnemyType[] = [
   { id: 'cobra1',      name: 'Cobra Mk I',    energy: 90,  laser: 9,  missiles: 2, bounty: 75,  minKills: 4,   pirate: true,  fleeBelow: 0.25 },
   { id: 'mamba',       name: 'Mamba',         energy: 90,  laser: 9,  missiles: 2, bounty: 150, minKills: 16,  pirate: true,  fleeBelow: 0.2  },
   { id: 'krait',       name: 'Krait',         energy: 80,  laser: 8,  missiles: 0, bounty: 100, minKills: 16,  pirate: true,  fleeBelow: 0.2  },
-  { id: 'moray',       name: 'Moray',         energy: 100, laser: 8,  missiles: 0, bounty: 50,  minKills: 24,  pirate: true,  fleeBelow: 0.2  },
+  { id: 'moray',       name: 'Moray',         energy: 100, laser: 8,  missiles: 0, bounty: 50,  minKills: 16,  pirate: true,  fleeBelow: 0.2  },
   { id: 'cobra3',      name: 'Cobra Mk III',  energy: 150, laser: 9,  missiles: 2, bounty: 175, minKills: 44,  pirate: true,  fleeBelow: 0.15 },
   { id: 'asp',         name: 'Asp Mk II',     energy: 150, laser: 20, missiles: 1, bounty: 200, minKills: 44,  pirate: true,  fleeBelow: 0.15 },
   { id: 'ferdelance',  name: 'Fer-de-Lance',  energy: 160, laser: 9,  missiles: 2, bounty: 0,   minKills: 130, pirate: true,  fleeBelow: 0.1  },

@@ -34,7 +34,7 @@ npm run dev
 # Сборка проекта
 npm run build
 
-# Запуск тестов (97+ тестов)
+# Запуск тестов (108+ тестов)
 npm test
 ```
 
@@ -45,6 +45,7 @@ npm test
 - `test/reference.test.ts` — сверка рынка с `txtelite.c`
 - `test/reference-ships.test.ts` — сверка параметров кораблей и цен оборудования с оригиналом
 - `test/reference-equipment.test.ts` — доступность оборудования на верфи по `EQSHP` (`QQ25 = min(tek + 3, 14)`)
+- `test/reference-spawn.test.ts` — таблицы спавна `XX21`, распределение пиратов и исправление Моксона для Moray
 - `test/reference-contraband.test.ts` — контрабанда при взлёте по `BAD`/`TT110` (`legal | (рабы + наркотики) * 2 + оружие`)
 - `test/encounters.test.ts` — боевой баланс, встречи, спасательная капсула и полиция
 - `test/state.test.ts` — торговля, полёты, сохранение/загрузка

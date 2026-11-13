@@ -10,6 +10,7 @@ import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type Co
 import { buildGalaxy, distance, type StarSystem } from './galaxy.ts';
 import { COMMODITIES, generateMarket, type MarketEntry } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
+import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
   ENEMIES,
   enemyById,
@@ -463,10 +464,20 @@ class Dice {
 }
 
 function pickPirate(kills: number, dice: Dice): string {
-  const pool = ENEMIES.filter((e) => e.pirate && e.minKills <= kills);
-  // чаще попадаются более слабые корабли из доступных
-  const weak = pool.slice(0, Math.max(1, Math.ceil(pool.length * (0.4 + 0.6 * dice.next()))));
-  return dice.pick(weak).id;
+  // Корабль из группы пиратов по таблице оригинала: (A AND T) AND #7 + PACK.
+  // Порог minKills — наше дополнение: редкие тяжёлые корабли появляются позже.
+  const a = Math.floor(dice.next() * 256);
+  const t = Math.floor(dice.next() * 256);
+  const id = pirateFromGroup(a, t);
+  const enemy = enemyById(id);
+  return enemy.minKills <= kills ? id : 'sidewinder';
+}
+
+function pickLoneHunter(kills: number, dice: Dice): string {
+  // Исправление Моксона: LSR A / AND #3 / ADC #CYL2 → 24..28, Moray на 28.
+  const id = loneHunter(Math.floor(dice.next() * 256));
+  const enemy = enemyById(id);
+  return enemy.minKills <= kills ? id : 'cobra1';
 }
 
 function spawnEncounter(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
@@ -506,7 +517,14 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     role = 'trader';
   }
 
-  const enemyId = role === 'police' ? 'viper' : role === 'trader' ? 'cobra3' : pickPirate(state.kills, dice);
+  const enemyId =
+    role === 'police'
+      ? 'viper'
+      : role === 'trader'
+        ? 'cobra3'
+        : role === 'hunter'
+          ? pickLoneHunter(state.kills, dice)
+          : pickPirate(state.kills, dice);
   const hostile = role === 'pirate' ? dice.next() < 0.8 : role === 'trader' ? false : state.legal >= 1;
 
   const duration = flight.arriveAt - flight.departAt;
