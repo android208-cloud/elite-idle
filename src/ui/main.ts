@@ -1,6 +1,6 @@
 import './styles.css';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
-import { distance, ECONOMIES, GOVERNMENTS } from '../core/galaxy.ts';
+import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
@@ -11,6 +11,7 @@ import {
   combatAction,
   combatAutoplay,
   currentSystem,
+  galacticJump,
   DEFAULT_SETTINGS,
   deserialize,
   jumpDuration,
@@ -313,7 +314,29 @@ function hangarScreen(): string {
       </div></div>
     <div class="card"><h2>Оборудование</h2>
       <div class="sub">Доступность зависит от технологического уровня станции (здесь ${currentSystem(state).techLevel + 1}). Установлен один лазер: новый заменяет прежний.</div>
-      ${equipmentRows()}</div>`;
+      ${equipmentRows()}</div>
+    ${galacticCard()}`;
+}
+
+/**
+ * Галактический гипердвигатель: одноразовый предмет (как GHYP в Ghy).
+ * Переход всегда приводит в точку (96, 96) новой галактики, а оттуда —
+ * в ближайшую систему; криминальное дозье при этом обнуляется.
+ */
+function galacticCard(): string {
+  const drive = state.ship.galacticHyperdrive;
+  const next = (state.galaxy % 8) + 1;
+  const arrival = systemsOf(next)[nearestSystem(systemsOf(next), GALACTIC_ARRIVAL.x, GALACTIC_ARRIVAL.y)];
+  const explain = drive
+    ? `Прибытие: точка (96, 96) → ближайшая система <b>${arrival.name}</b> в галактике ${next}. Двигатель одноразовый, криминальное дозье будет сброшено.`
+    : `Установите галактический гипердвигатель на станции с достаточным технологическим уровнем (№12 на верфи).`;
+  return `<div class="card warn"><h2>Галактический гиперпрыжок</h2>
+      <div class="sub">${explain}</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" data-action="galactic-jump" ${drive && !state.flight ? '' : 'disabled'}>
+          Перейти в галактику ${next}
+        </button>
+      </div></div>`;
 }
 
 function select(key: string, options: [string, string][], current: string): string {
@@ -543,6 +566,21 @@ function onAction(el: HTMLElement): void {
       const r = combatAction(state, el.dataset.a as CombatAction, Date.now(), settings);
       state = r.state;
       handleEvents(r.events);
+      break;
+    }
+    case 'galactic-jump': {
+      const from = state.galaxy;
+      const r = galacticJump(state);
+      if (r.error) {
+        addLog(r.error === 'no-drive' ? 'Галактический гипердвигатель не установлен' : 'Нельзя прыгнуть сейчас');
+      } else {
+        state = r.state;
+        selected = null;
+        addLog(
+          `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
+        );
+        tab = 'map';
+      }
       break;
     }
     case 'combat-auto': {

@@ -7,7 +7,7 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
-import { buildGalaxy, distance, type StarSystem } from './galaxy.ts';
+import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import { COMMODITIES, generateMarket, type MarketEntry } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
@@ -386,6 +386,13 @@ export function legalAfterLaunch(legal: number, cargo: readonly number[]): numbe
 
 export type JumpError = 'in-flight' | 'same-system' | 'too-far' | 'bad-target';
 
+export type GalacticJumpError = 'in-flight' | 'no-drive';
+
+export interface GalacticJumpResult {
+  state: GameState;
+  error?: GalacticJumpError;
+}
+
 export interface JumpResult {
   state: GameState;
   error?: JumpError;
@@ -434,6 +441,49 @@ export function startJump(state: GameState, target: number, now: number, setting
       fuel: state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
       flight: { from: state.system, to: target, departAt: now, arriveAt: now + duration, fuelUsed: d, pending },
+    },
+  };
+}
+
+/* ---------- Галактический гиперпрыжок ---------- */
+
+/**
+ * Переход в следующую галактику по подпрограмме Ghy.
+ *
+ * Что делает оригинал:
+ *   1. Требует установленный галактический гипердвигатель (GHYP).
+ *   2. Двигатель одноразовый: `STX GHYP` сразу после срабатывания.
+ *   3. `STX FIST` — смена галактики очищает криминальное дозье.
+ *   4. `INC GCNT / AND #7` — галактика идёт по кругу 0..7 (после 8-й — снова 1-я).
+ *   5. Координаты прибытия всегда (96, 96), затем TT111 ищет ближайшую систему.
+ *
+ * Мы не моделируем таймер обратного отсчёта: как и обычный прыжок, переход
+ * мгновенный (или, в idle-режиме, может быть растянут настройками темпа).
+ */
+export function galacticJump(state: GameState): GalacticJumpResult {
+  if (state.flight || state.combat) return { state, error: 'in-flight' };
+  if (!state.ship.galacticHyperdrive) return { state, error: 'no-drive' };
+
+  // GCNT идёт по кругу: 1..8 → снова 1
+  const galaxy = (state.galaxy % GALAXY_COUNT) + 1;
+  const systems = systemsOf(galaxy);
+  const system = nearestSystem(systems, GALACTIC_ARRIVAL.x, GALACTIC_ARRIVAL.y);
+  const [fluct, rng] = nextByte(state.rng);
+
+  return {
+    state: {
+      ...state,
+      galaxy,
+      system,
+      market: generateMarket(systems[system], fluct),
+      rng,
+      // Галактический гипердвигатель одноразовый
+      ship: { ...state.ship, galacticHyperdrive: false },
+      // Смена галактики очищает криминальное дозье
+      legal: 0,
+      encounter: null,
+      combat: null,
+      flight: null,
     },
   };
 }

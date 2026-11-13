@@ -167,3 +167,45 @@ export function distance(a: StarSystem, b: StarSystem): number {
   return Math.floor(4 * Math.sqrt(dx * dx + dy * dy));
 }
 
+/**
+ * Приблизительная «дистанция» из TT111 — сумма половинок модулей разностей
+ * координат:
+ *
+ *   LSR A / STA S        \ S = |s1_hi - QQ9| / 2
+ *   ... LSR A            \ A = |s0_hi - QQ10| / 2
+ *   CLC / ADC S          \ A = S + A
+ *
+ * Оригинал прямо оговаривает: «although this doesn't contain the actual
+ * distance between the systems, it's a good enough approximation to use for
+ * comparing distances». Используется при поиске ближайшей системы.
+ */
+export function tt111Distance(a: StarSystem, x: number, y: number): number {
+  return Math.floor(Math.abs(a.x - x) / 2) + Math.floor(Math.abs(a.y - y) / 2);
+}
+
+/**
+ * Координаты, в которых мы всегда оказываемся после галактического гиперпрыжка:
+ * (96, 96) — из Ghy: `LDA #96 / STA QQ9 / STA QQ10`.
+ */
+export const GALACTIC_ARRIVAL = { x: 96, y: 96 } as const;
+
+/**
+ * Ближайшая к точке (x, y) система галактики — подпрограмма TT111.
+ *
+ * Оригинал перебирает системы с 0 по 255 и берёт первую, чья приблизительная
+ * дистанция строго меньше текущего минимума (сравнение `CMP T / BCS`), поэтому
+ * при равенстве выигрывает система с меньшим номером.
+ */
+export function nearestSystem(systems: readonly StarSystem[], x: number, y: number): number {
+  let best = 0;
+  let bestDistance = Infinity;
+  systems.forEach((system, index) => {
+    const d = tt111Distance(system, x, y);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = index;
+    }
+  });
+  return best;
+}
+
