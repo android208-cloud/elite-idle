@@ -48,6 +48,9 @@ let settings: Settings = { ...DEFAULT_SETTINGS };
 let tab: Tab = 'ship';
 let selected: number | null = null;
 
+/** Момент последней записи в localStorage — чтобы не писать каждый тик. */
+let lastSaveAt = 0;
+
 function save(): void {
   localStorage.setItem(SAVE_KEY, JSON.stringify({ state: serialize(state), log, settings }));
 }
@@ -403,9 +406,13 @@ function updateFlight(): void {
   const bar = document.getElementById('flight-bar');
   const eta = document.getElementById('flight-eta');
   if (f && bar && eta) {
-    const frac = Math.min(1, Math.max(0, (now - f.departAt) / (f.arriveAt - f.departAt || 1)));
+    // Прогресс считаем в БАЗОВЫХ единицах: тогда при смене темпа он не
+    // прыгает назад/вперёд, а отражает реально пройденную часть маршрута.
+    const done = f.elapsedBaseMs;
+    const total = done + f.remainingBaseMs;
+    const frac = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
     bar.style.width = `${(frac * 100).toFixed(1)}%`;
-    eta.textContent = fmtDur(f.arriveAt - now);
+    eta.textContent = fmtDur(Math.max(0, f.arriveAt - now));
   }
   const encEta = document.getElementById('enc-eta');
   if (state.encounter && encEta) encEta.textContent = fmtDur(state.encounter.resolveAt - now);
@@ -610,15 +617,44 @@ function onAction(el: HTMLElement): void {
 /* ---------- Запуск ---------- */
 
 function tick(): void {
+  const prev = state;
   const result = advance(state, Date.now(), settings);
-  if (result.events.length > 0 || result.state !== state) {
+  const changed = result.state !== prev;
+  const structural = changed && structuralChange(prev, result.state);
+  if (result.events.length > 0 || changed) {
     state = result.state;
     handleEvents(result.events);
-    save();
+    // Движение полёта сохраняем не чаще раза в 10 с: терять секунду прогресса
+    // не страшно (`advance` всё равно досчитает по `dueAt`), а писать в
+    // localStorage каждую секунду незачем.
+    if (result.events.length > 0 || structural || Date.now() - lastSaveAt > 10_000) {
+      save();
+      lastSaveAt = Date.now();
+    }
+  }
+  // Полная перерисовка нужна только при событиях (рынок, бой, прибытие)
+  // или когда меняется структура экрана. Обычный тик лишь двигает полёт —
+  // тогда обновляем прогресс-бар на месте, иначе `innerHTML` каждую секунду
+  // убивал бы его вместе с обработчиками.
+  if (result.events.length > 0 || structural) {
     render();
   } else {
     updateFlight();
   }
+}
+
+/**
+ * Требует ли смена состояния перестроить разметку: полёт начался или
+ * закончился, бой, встреча, другой экран. Текущее время полёта — не повод.
+ */
+function structuralChange(prev: GameState, next: GameState): boolean {
+  return (
+    (next.flight === null) !== (prev.flight === null) ||
+    (next.combat === null) !== (prev.combat === null) ||
+    (next.encounter === null) !== (prev.encounter === null) ||
+    next.system !== prev.system ||
+    next.flight?.to !== prev.flight?.to
+  );
 }
 
 load();
@@ -641,6 +677,12 @@ document.addEventListener('change', (ev) => {
   const key = el.dataset.key as keyof Settings;
   const numeric = ['speed', 'encounterTimeoutMs', 'encounterRate'].includes(key);
   settings = { ...settings, [key]: numeric ? Number(el.value) : el.value };
+  save();
+  // Смена темпа должна действовать сразу, не дожидаясь следующего тика:
+  // пересчитываем полёт и перерисовываем экран в тот же момент.
+  const r = advance(state, Date.now(), settings);
+  if (r.events.length > 0) handleEvents(r.events);
+  state = r.state;
   save();
   render();
 });
