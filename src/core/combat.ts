@@ -89,6 +89,80 @@ export const LASER_POWER: Record<LaserType, number> = {
   military: 23,  // Armlas    = 151 → 151 & 127
   mining:   50,  // Mlas      = 50  → 50 & 127
 };
+
+/**
+ * Байт `LASER` для каждого лазера — то, что оригинал пишет при покупке
+ * (`eqshp.asm`: `LDA #POW : STA LASER,X`, `LDA #POW+128`, `LDA #Armlas`,
+ * `LDA #Mlas`). Бит 7 означает «луч», а не добавку к мощности.
+ */
+const LASER_BYTE: Record<LaserType, number> = {
+  none:     0,
+  pulse:    15,   // POW
+  beam:     143,  // POW + 128
+  military: 151,  // Armlas = INT(128.5 + 1.5*15)
+  mining:   50,   // Mlas
+};
+
+/**
+ * Темп огня — точная модель `LASCT` **и** перегрева `GNTMP`.
+ *
+ * Почему нужны оба. Счётчик `LASCT` ограничивает частоту выстрелов:
+ * главный цикл стреляет только при `LASCT == 0`, иначе декрементирует его;
+ * после выстрела `LASCT = (power & %11111010)`, а у лазеров с установленным
+ * битом 7 — ноль, то есть «не пульсирует».
+ *
+ * Но одного `LASCT` мало. Луч и военный лазер имеют `LASCT = 0` и в теории
+ * стреляли бы непрерывно, 50 раз в секунду — это в 10 раз быстрее
+ * импульсного. На деле их сдерживает температура: каждый выстрел добавляет
+ * `GNTMP += 8`, охлаждение даёт `DEC GNTMP` раз за проход, а при `GNTMP >= 242`
+ * (`CMP #242`) стрелять нельзя. Так что темп выходит ограничен перегревом.
+ *
+ * Ниже — симуляция одного этого контура на 600 игровых секунд с частотой
+ * главного цикла 50 Гц (VSYNC, `irq1.asm`). Значения получаются такие:
+ *
+ *     импульсный   ≈ 4.55 выстр/сек   (база)
+ *     луч/военный  ≈ 6.30 выстр/сек   (x1.39)
+ *     добывающий   ≈ 0.98 выстр/сек   (x0.22)
+ *
+ * Маска `& %11111010` ничего не меняет у наших значений (у добывающего
+ * 50 = %00110010 младший бит уже нулевой), но она важна как часть механики:
+ * именно поэтому счётчик всегда чётный и импульсы не «съезжают».
+ */
+export const LASER_RATE: Record<LaserType, number> = (() => {
+  const FPS = 50;            // частота главного цикла (VSYNC)
+  const SIM_SECONDS = 600;   // достаточно, чтобы контур вышел на режим
+  const OVERHEAT = 242;      // CMP #242 в main_flight_loop_part_3_of_16
+  const HEAT_PER_SHOT = 8;   // LDA GNTMP : ADC #8 : STA GNTMP (lasli.asm)
+  const result = {} as Record<LaserType, number>;
+  for (const key of Object.keys(LASER_BYTE) as LaserType[]) {
+    const byte = LASER_BYTE[key];
+    if (byte === 0) {
+      result[key] = 0;
+      continue;
+    }
+    const power = byte & 0x7f;
+    const isBeam = (byte & 0x80) !== 0;
+    const lasctAfterShot = isBeam ? 0 : power & 0xfa;
+    let lasct = 0;
+    let heat = 0;
+    let shots = 0;
+    for (let frame = 0; frame < FPS * SIM_SECONDS; frame++) {
+      if (lasct === 0 && heat < OVERHEAT) {
+        lasct = lasctAfterShot;
+        heat += HEAT_PER_SHOT;
+        shots += 1;
+      } else if (lasct > 0) {
+        lasct -= 1;
+      }
+      if (heat > 0) heat -= 1; // DEC GNTMP в main_game_loop_part_5_of_6
+    }
+    result[key] = shots / SIM_SECONDS;
+  }
+  return result;
+})();
+
+/** Опорный темп: импульсный лазер = 1 выстрел за раунд. */
+const PULSE_SHOTS_PER_ROUND = LASER_RATE.pulse;
 // Вероятность попадания игрока (адаптировано для idle: один выстрел в раунд)
 const PLAYER_HIT     = 0.65;
 // Раньше было SHOTS=3 попыток × ENEMY_HIT × лазер.
@@ -198,13 +272,42 @@ export function combatRound(prev: CombatState, action: CombatAction): CombatStat
   } else {
     switch (action) {
       case 'laser': {
-        // Один выстрел за раунд. Мощность = LASER_POWER[тип].
+        // Темп огня из оригинала: за раунд лазер успевает сделать столько
+        // выстрелов, сколько соответствует отношению LASER_RATE. Импульсный —
+        // ровно один (это наша базовая единица), луч и военный — в 10 раз
+        // больше, добывающий — примерно в 5 раз меньше.
+        const shots = LASER_RATE[c.laser] / PULSE_SHOTS_PER_ROUND;
         const dmg = LASER_POWER[c.laser];
-        if (dmg > 0 && rand() < PLAYER_HIT) {
-          c.enemyEnergy -= dmg;
-          c.log.push(`Лазер: попадание, урон ${dmg}`);
+        if (dmg <= 0) {
+          c.log.push('Лазер не установлен');
+          break;
+        }
+        let hits = 0;
+        let total = 0;
+        // Дробное число выстрелов разыгрываем вероятностно, чтобы добывающий
+        // лазер (0.2 выстрела за раунд) не округлялся в ноль навсегда.
+        const whole = Math.floor(shots);
+        const frac = shots - whole;
+        const count = whole + (rand() < frac ? 1 : 0);
+        for (let i = 0; i < count; i++) {
+          if (rand() < PLAYER_HIT) {
+            hits += 1;
+            total += dmg;
+          }
+        }
+        if (count === 0) {
+          c.log.push('Лазер: не успели выстрелить');
+          break;
+        }
+        if (hits > 0) {
+          c.enemyEnergy -= total;
+          c.log.push(
+            count === 1
+              ? `Лазер: попадание, урон ${dmg}`
+              : `Лазер: ${hits} из ${count} попали, урон ${total}`,
+          );
         } else {
-          c.log.push('Лазер: промах');
+          c.log.push(count === 1 ? 'Лазер: промах' : `Лазер: ${count} промахов`);
         }
         break;
       }
