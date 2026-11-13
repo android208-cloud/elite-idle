@@ -162,11 +162,44 @@ test('пауза боя сдвигает прибытие на время ожи
   const g = flying();
   const arrive = g.flight!.arriveAt;
   const won = { ...startCombat('sidewinder', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
-  const s: GameState = { ...g, combat: { combat: won, role: 'pirate', pausedAt: NOW + MIN } };
+  // Бой начался через минуту, игрок вернулся через три минуты после начала,
+  // но игра была открыта только две из них: простой = 2 минуты, остальное — офлайн
+  const s: GameState = {
+    ...g,
+    combat: { combat: won, role: 'pirate', pausedAt: NOW + MIN + 2 * MIN, pausedMs: 2 * MIN },
+  };
   const r = combatAutoplay(s, NOW + MIN + 3 * MIN);
-  assert.equal(r.state.flight!.arriveAt, arrive + 3 * MIN);
+  assert.equal(r.state.flight!.arriveAt, arrive + 2 * MIN);
   assert.equal(r.state.kills, 1);
   assert.ok(r.state.cash > s.cash, 'награда за убийство выплачена');
+});
+
+test('ход игрока спустя часы не откладывает прибытие на всё это время', () => {
+  const g = flying();
+  const arrive = g.flight!.arriveAt;
+  const won = { ...startCombat('sidewinder', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
+  // Игрок закрыл вкладку на два часа: пауза «стоит» с момента начала боя
+  const s: GameState = { ...g, combat: { combat: won, role: 'pirate', pausedAt: NOW + MIN, pausedMs: 0 } };
+  const r = combatAutoplay(s, NOW + MIN + 120 * MIN);
+  assert.equal(r.state.flight!.arriveAt, arrive, 'офлайн-время не должно сдвигать полёт');
+});
+
+test('досчёт перед ходом фиксирует простой, но не растягивает его на всё ожидание', () => {
+  const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
+  const g = flying(settings);
+  const arrive = g.flight!.arriveAt;
+  const c = startCombat('python', STARTER_SHIP, true, 0, 1);
+  const waiting: GameState = { ...g, combat: { combat: c, role: 'pirate', pausedAt: NOW, pausedMs: 0 } };
+
+  // Игрок вернулся через час: досчёт закрывает паузу ровно этим часом
+  const resumed = advance(waiting, NOW + 60 * MIN, settings).state;
+  assert.equal(resumed.combat!.pausedMs, 60 * MIN);
+  assert.equal(resumed.combat!.pausedAt, NOW + 60 * MIN);
+
+  // Ход игрока сам по себе простой не удлиняет — только онлайн-тики через advance
+  const acted = combatAction(resumed, 'laser', NOW + 61 * MIN, settings).state;
+  assert.equal(acted.combat!.pausedMs, 60 * MIN);
+  assert.equal(acted.flight!.arriveAt, arrive);
 });
 
 test('ручной бой: действие игрока не ломает состояние и в итоге завершается', () => {
@@ -189,7 +222,7 @@ function deadState(settings: Settings): { s: GameState; from: number } {
   const g = flying(settings);
   const bought: GameState = { ...g, cargo: g.cargo.map((_, i) => (i === 0 ? 5 : 0)), holdSpace: 15 };
   const died = { ...startCombat('python', STARTER_SHIP, true, 5, 1), outcome: 'died' as const };
-  return { s: { ...bought, combat: { combat: died, role: 'pirate', pausedAt: NOW } }, from: g.flight!.from };
+  return { s: { ...bought, combat: { combat: died, role: 'pirate', pausedAt: NOW, pausedMs: 0 } }, from: g.flight!.from };
 }
 
 test('смерть, режим «страховка»: потеря груза и части денег, возврат на станцию вылета', () => {
@@ -217,7 +250,7 @@ test('спасательная капсула: корабль и оборудо�
   const g = flying();
   const rich: GameState = { ...g, ship: { ...g.ship, ecm: true, escapePod: true } };
   const pod = { ...startCombat('python', rich.ship, true, 0, 1), outcome: 'pod' as const };
-  const s: GameState = { ...rich, combat: { combat: pod, role: 'pirate', pausedAt: NOW } };
+  const s: GameState = { ...rich, combat: { combat: pod, role: 'pirate', pausedAt: NOW, pausedMs: 0 } };
   const r = combatAutoplay(s, NOW);
   assert.equal(r.state.ship.ecm, false);
   assert.equal(r.state.ship.escapePod, false);
@@ -228,7 +261,7 @@ test('спасательная капсула: корабль и оборудо�
 test('убийство полицейского делает беглецом', () => {
   const g = flying();
   const won = { ...startCombat('viper', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
-  const s: GameState = { ...g, combat: { combat: won, role: 'police', pausedAt: NOW } };
+  const s: GameState = { ...g, combat: { combat: won, role: 'police', pausedAt: NOW, pausedMs: 0 } };
   const r = combatAutoplay(s, NOW);
   assert.equal(legalLabel(r.state.legal), 'Беглец');
 });
@@ -243,8 +276,8 @@ test('правовой статус уменьшается при прибыти
 
 test('оборудование: нужен технологический уровень, деньги; повторно не купить', () => {
   const g = newGame(1);
-  // Lave: тех. уровень невысок, ECM (ТУ 2) доступен, галактический гипердвигатель (ТУ 10) нет
-  assert.ok(currentSystem(g).techLevel + 1 < 10);
+  // Lave: tek = 4 → QQ25 = 7, ECM (номер 4) доступен, гипердвигатель (12) — нет
+  assert.equal(currentSystem(g).techLevel, 4);
   assert.equal(buyEquipment({ ...g, cash: 10 ** 7 }, 'galacticHyperdrive').error, 'tech');
   const ecm = buyEquipment({ ...g, cash: 10 ** 7 }, 'ecm');
   assert.equal(ecm.error, undefined);

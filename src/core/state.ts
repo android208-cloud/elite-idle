@@ -7,13 +7,15 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
-import { buildGalaxy, distance, type StarSystem } from './galaxy.ts';
+import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import { COMMODITIES, generateMarket, type MarketEntry } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
+import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
   ENEMIES,
   enemyById,
   EQUIPMENT,
+  equipmentAvailable,
   holdCapacity,
   HOLD_BASE,
   MAX_MISSILES,
@@ -92,8 +94,14 @@ export interface Encounter {
 export interface ActiveCombat {
   combat: CombatState;
   role: EncounterRole;
-  /** Когда полёт был поставлен на паузу */
+  /**
+   * Когда полёт был поставлен на паузу. Именно этот момент (а не время хода
+   * игрока) сдвигает прибытие: если игрок закрыл вкладку на три часа, полёт
+   * не должен сдвигаться на три часа.
+   */
   pausedAt: number;
+  /** Сколько миллисекунд полёт уже простоял на паузе из-за ожидания игрока */
+  pausedMs: number;
 }
 
 export interface GameState {
@@ -126,6 +134,7 @@ export type GameEventType =
   | 'combat-start'
   | 'combat-end'
   | 'canister'
+  | 'contraband'
   | 'death';
 
 export interface GameEvent {
@@ -290,7 +299,8 @@ export function owns(ship: PlayerShip, id: EquipmentId): boolean {
 export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult {
   if (state.flight) return { state, error: 'in-flight' };
   const item = EQUIPMENT.find((e) => e.id === id)!;
-  if (currentSystem(state).techLevel + 1 < item.minTech) return { state, error: 'tech' };
+  // Доступность по EQSHP: предмет виден на верфи, если его номер ≤ min(tek + 3, 14)
+  if (!equipmentAvailable(item, currentSystem(state).techLevel)) return { state, error: 'tech' };
   if (owns(state.ship, id)) return { state, error: id === 'missile' ? 'full' : 'owned' };
   if (state.cash < item.price) return { state, error: 'cash' };
 
@@ -335,9 +345,53 @@ export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult
   return { state: { ...state, ship, holdSpace, cash: state.cash - item.price } };
 }
 
+/* ---------- Контрабанда ---------- */
+
+/** Индексы запрещённых товаров в таблице QQ23 (и в массиве cargo). */
+export const SLAVES_INDEX = 3;
+export const NARCOTICS_INDEX = 6;
+export const FIREARMS_INDEX = 10;
+
+/**
+ * Насколько «плохо» мы выглядим по грузу в трюме — подпрограмма BAD из оригинала
+ * (library/common/main/subroutine/bad.asm):
+ *
+ *   (slaves + narcotics) * 2 + firearms
+ *
+ * «Рабы и наркотики вдвое незаконнее оружия». Возвращает 0 для пустого трюма.
+ */
+export function contrabandLevel(cargo: readonly number[]): number {
+  const slaves = cargo[SLAVES_INDEX] ?? 0;
+  const narcotics = cargo[NARCOTICS_INDEX] ?? 0;
+  const firearms = cargo[FIREARMS_INDEX] ?? 0;
+  return (slaves + narcotics) * 2 + firearms;
+}
+
+/**
+ * Правовой статус после взлёта со станции (TT110):
+ *
+ *   JSR BAD      \ A = (slaves + narcotics) * 2 + firearms
+ *   ORA FIST     \ именно побитовое ИЛИ, а не сложение
+ *   STA FIST
+ *
+ * Поэтому статус никогда не падает при взлёте с грузом: он только «поднимается»
+ * до контрабандного уровня. Результат в 8-битном диапазоне оригинала (0..255).
+ */
+export function legalAfterLaunch(legal: number, cargo: readonly number[]): number {
+  const bad = contrabandLevel(cargo) & 0xff;
+  return (legal | bad) & 0xff;
+}
+
 /* ---------- Прыжок ---------- */
 
 export type JumpError = 'in-flight' | 'same-system' | 'too-far' | 'bad-target';
+
+export type GalacticJumpError = 'in-flight' | 'no-drive';
+
+export interface GalacticJumpResult {
+  state: GameState;
+  error?: GalacticJumpError;
+}
 
 export interface JumpResult {
   state: GameState;
@@ -353,7 +407,12 @@ export function jumpDuration(settings: Settings): number {
 const ENCOUNTER_ATTEMPTS = 2;
 const ENCOUNTER_CHANCE = 0.35;
 
-/** Начало прыжка: топливо списывается сразу, прибытие по таймеру. */
+/**
+ * Начало прыжка: топливо списывается сразу, прибытие по таймеру.
+ *
+ * Здесь же применяется проверка контрабанды из TT110: взлёт со станции с
+ * запрещённым грузом поднимает правовой статус (`FIST = FIST OR BAD`).
+ */
 export function startJump(state: GameState, target: number, now: number, settings: Settings): JumpResult {
   if (state.flight) return { state, error: 'in-flight' };
   const systems = systemsOf(state.galaxy);
@@ -380,7 +439,51 @@ export function startJump(state: GameState, target: number, now: number, setting
       ...state,
       rng,
       fuel: state.fuel - d,
+      legal: legalAfterLaunch(state.legal, state.cargo),
       flight: { from: state.system, to: target, departAt: now, arriveAt: now + duration, fuelUsed: d, pending },
+    },
+  };
+}
+
+/* ---------- Галактический гиперпрыжок ---------- */
+
+/**
+ * Переход в следующую галактику по подпрограмме Ghy.
+ *
+ * Что делает оригинал:
+ *   1. Требует установленный галактический гипердвигатель (GHYP).
+ *   2. Двигатель одноразовый: `STX GHYP` сразу после срабатывания.
+ *   3. `STX FIST` — смена галактики очищает криминальное дозье.
+ *   4. `INC GCNT / AND #7` — галактика идёт по кругу 0..7 (после 8-й — снова 1-я).
+ *   5. Координаты прибытия всегда (96, 96), затем TT111 ищет ближайшую систему.
+ *
+ * Мы не моделируем таймер обратного отсчёта: как и обычный прыжок, переход
+ * мгновенный (или, в idle-режиме, может быть растянут настройками темпа).
+ */
+export function galacticJump(state: GameState): GalacticJumpResult {
+  if (state.flight || state.combat) return { state, error: 'in-flight' };
+  if (!state.ship.galacticHyperdrive) return { state, error: 'no-drive' };
+
+  // GCNT идёт по кругу: 1..8 → снова 1
+  const galaxy = (state.galaxy % GALAXY_COUNT) + 1;
+  const systems = systemsOf(galaxy);
+  const system = nearestSystem(systems, GALACTIC_ARRIVAL.x, GALACTIC_ARRIVAL.y);
+  const [fluct, rng] = nextByte(state.rng);
+
+  return {
+    state: {
+      ...state,
+      galaxy,
+      system,
+      market: generateMarket(systems[system], fluct),
+      rng,
+      // Галактический гипердвигатель одноразовый
+      ship: { ...state.ship, galacticHyperdrive: false },
+      // Смена галактики очищает криминальное дозье
+      legal: 0,
+      encounter: null,
+      combat: null,
+      flight: null,
     },
   };
 }
@@ -411,10 +514,20 @@ class Dice {
 }
 
 function pickPirate(kills: number, dice: Dice): string {
-  const pool = ENEMIES.filter((e) => e.pirate && e.minKills <= kills);
-  // чаще попадаются более слабые корабли из доступных
-  const weak = pool.slice(0, Math.max(1, Math.ceil(pool.length * (0.4 + 0.6 * dice.next()))));
-  return dice.pick(weak).id;
+  // Корабль из группы пиратов по таблице оригинала: (A AND T) AND #7 + PACK.
+  // Порог minKills — наше дополнение: редкие тяжёлые корабли появляются позже.
+  const a = Math.floor(dice.next() * 256);
+  const t = Math.floor(dice.next() * 256);
+  const id = pirateFromGroup(a, t);
+  const enemy = enemyById(id);
+  return enemy.minKills <= kills ? id : 'sidewinder';
+}
+
+function pickLoneHunter(kills: number, dice: Dice): string {
+  // Исправление Моксона: LSR A / AND #3 / ADC #CYL2 → 24..28, Moray на 28.
+  const id = loneHunter(Math.floor(dice.next() * 256));
+  const enemy = enemyById(id);
+  return enemy.minKills <= kills ? id : 'cobra1';
 }
 
 function spawnEncounter(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
@@ -454,7 +567,14 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     role = 'trader';
   }
 
-  const enemyId = role === 'police' ? 'viper' : role === 'trader' ? 'cobra3' : pickPirate(state.kills, dice);
+  const enemyId =
+    role === 'police'
+      ? 'viper'
+      : role === 'trader'
+        ? 'cobra3'
+        : role === 'hunter'
+          ? pickLoneHunter(state.kills, dice)
+          : pickPirate(state.kills, dice);
   const hostile = role === 'pirate' ? dice.next() < 0.8 : role === 'trader' ? false : state.legal >= 1;
 
   const duration = flight.arriveAt - flight.departAt;
@@ -487,7 +607,7 @@ function beginCombat(state: GameState, at: number, settings: Settings, events: G
   const next: GameState = {
     ...state,
     encounter: null,
-    combat: { combat, role: enc.role, pausedAt: at },
+    combat: { combat, role: enc.role, pausedAt: at, pausedMs: 0 },
   };
   if (settings.combatMode === 'manual') {
     events.push({ type: 'combat-start', at, text: startText, manual: true });
@@ -499,11 +619,15 @@ function beginCombat(state: GameState, at: number, settings: Settings, events: G
 }
 
 /** Применяет итог закончившегося боя и снимает паузу полёта. */
-function finishCombat(state: GameState, endAt: number, settings: Settings, events: GameEvent[]): GameState {
+function finishCombat(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
   const active = state.combat!;
   const c = active.combat;
   const enemy = enemyById(c.enemyId);
   const flight = state.flight;
+  // Сколько полёт реально простоял на паузе. Учитываем только время, которое
+  // игра успела «увидеть» онлайн-тиками (его копит advance). Календарный
+  // разрыв между ходами — это офлайн-время, оно полёт не откладывает.
+  const pausedMs = Math.max(0, active.pausedMs);
   let s: GameState = { ...state, rng: c.rng, combat: null, encounter: null };
 
   // расход ресурсов в бою
@@ -516,16 +640,15 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
     s = { ...s, cargo: s.cargo.map(() => 0), holdSpace: holdCapacity(s.ship) };
   }
 
-  /** Полёт продолжается: время боя добавляется к прибытию и ожидающим встречам. */
+  /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
   const resume = (st: GameState): GameState => {
     if (!st.flight) return st;
-    const shift = Math.max(0, endAt - active.pausedAt);
     return {
       ...st,
       flight: {
         ...st.flight,
-        arriveAt: st.flight.arriveAt + shift,
-        pending: st.flight.pending.map((t) => t + shift),
+        arriveAt: st.flight.arriveAt + pausedMs,
+        pending: st.flight.pending.map((t) => t + pausedMs),
       },
     };
   };
@@ -544,7 +667,7 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
   };
 
   const say = (text: string): void => {
-    events.push({ type: 'combat-end', at: endAt, text });
+    events.push({ type: 'combat-end', at, text });
   };
 
   switch (c.outcome) {
@@ -591,7 +714,7 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
       });
       events.push({
         type: 'death',
-        at: endAt,
+        at,
         text: 'Капсула доставила вас на станцию вылета. Корабль, груз и оборудование потеряны',
       });
       return next;
@@ -607,14 +730,14 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
         });
         events.push({
           type: 'death',
-          at: endAt,
+          at,
           text: 'Корабль уничтожен. Страховка вернула вас на станцию вылета, груз и часть денег потеряны',
         });
         return next;
       }
       events.push({
         type: 'death',
-        at: endAt,
+        at,
         text: 'Корабль серьёзно повреждён и отбуксирован на станцию вылета. Ничего не потеряно',
       });
       return returnToStation(s);
@@ -653,6 +776,13 @@ export function advance(
   let s = state;
   const events: GameEvent[] = [];
 
+  // Ручной бой ждёт игрока. Каждый вызов advance «закрывает» прошедший
+  // отрезок ожидания и копит его в pausedMs, чтобы прибытие сдвинулось
+  // ровно на время, когда игра действительно стояла на паузе.
+  if (s.combat && !s.combat.combat.outcome && now > s.combat.pausedAt) {
+    s = { ...s, combat: { ...s.combat, pausedAt: now, pausedMs: s.combat.pausedMs + (now - s.combat.pausedAt) } };
+  }
+
   for (let guard = 0; guard < 500; guard++) {
     if (s.combat || !s.flight) break;
     const f = s.flight;
@@ -689,9 +819,10 @@ export function combatAction(
   if (!state.combat || state.combat.combat.outcome) return { state, events };
   if (!canDo(state.combat.combat, action)) return { state, events };
   const combat = combatRound(state.combat.combat, action);
-  let s: GameState = { ...state, combat: { ...state.combat, combat } };
-  if (combat.outcome) s = finishCombat(s, now, settings, events);
-  return { state: s, events };
+  const s: GameState = { ...state, combat: { ...state.combat, combat } };
+  // Бой продолжается: ход сам по себе паузу не удлиняет, её копит advance
+  // по онлайн-тикам. Бой закончился: применяем итог.
+  return { state: combat.outcome ? finishCombat(s, now, settings, events) : s, events };
 }
 
 /** Передать бой автопилоту: доигрывает до конца. */
@@ -731,5 +862,10 @@ export function deserialize(json: string): GameState {
     return migrated;
   }
   if (data.version !== SAVE_VERSION) throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
-  return data as GameState;
+  const state = data as GameState;
+  // Совместимость с сохранениями, сделанными до появления накопленного простоя.
+  if (state.combat && typeof state.combat.pausedMs !== 'number') {
+    state.combat = { ...state.combat, pausedMs: 0 };
+  }
+  return state;
 }
