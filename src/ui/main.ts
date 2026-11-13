@@ -526,8 +526,15 @@ function onAction(el: HTMLElement): void {
       if (r.error) {
         addLog(JUMP_ERRORS[r.error]);
       } else {
+        const legalBefore = state.legal;
         state = r.state;
         addLog(`Отправление: ${currentSystem(state).name} → ${systemsOf(state.galaxy)[to].name}`);
+        // Взлёт с контрабандой поднимает правовой статус (TT110 / BAD)
+        if (state.legal > legalBefore) {
+          addLog(
+            `Контрабанда в трюме: правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`,
+          );
+        }
         tab = 'ship';
       }
       break;

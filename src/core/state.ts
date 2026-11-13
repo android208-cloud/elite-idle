@@ -133,6 +133,7 @@ export type GameEventType =
   | 'combat-start'
   | 'combat-end'
   | 'canister'
+  | 'contraband'
   | 'death';
 
 export interface GameEvent {
@@ -343,6 +344,43 @@ export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult
   return { state: { ...state, ship, holdSpace, cash: state.cash - item.price } };
 }
 
+/* ---------- Контрабанда ---------- */
+
+/** Индексы запрещённых товаров в таблице QQ23 (и в массиве cargo). */
+export const SLAVES_INDEX = 3;
+export const NARCOTICS_INDEX = 6;
+export const FIREARMS_INDEX = 10;
+
+/**
+ * Насколько «плохо» мы выглядим по грузу в трюме — подпрограмма BAD из оригинала
+ * (library/common/main/subroutine/bad.asm):
+ *
+ *   (slaves + narcotics) * 2 + firearms
+ *
+ * «Рабы и наркотики вдвое незаконнее оружия». Возвращает 0 для пустого трюма.
+ */
+export function contrabandLevel(cargo: readonly number[]): number {
+  const slaves = cargo[SLAVES_INDEX] ?? 0;
+  const narcotics = cargo[NARCOTICS_INDEX] ?? 0;
+  const firearms = cargo[FIREARMS_INDEX] ?? 0;
+  return (slaves + narcotics) * 2 + firearms;
+}
+
+/**
+ * Правовой статус после взлёта со станции (TT110):
+ *
+ *   JSR BAD      \ A = (slaves + narcotics) * 2 + firearms
+ *   ORA FIST     \ именно побитовое ИЛИ, а не сложение
+ *   STA FIST
+ *
+ * Поэтому статус никогда не падает при взлёте с грузом: он только «поднимается»
+ * до контрабандного уровня. Результат в 8-битном диапазоне оригинала (0..255).
+ */
+export function legalAfterLaunch(legal: number, cargo: readonly number[]): number {
+  const bad = contrabandLevel(cargo) & 0xff;
+  return (legal | bad) & 0xff;
+}
+
 /* ---------- Прыжок ---------- */
 
 export type JumpError = 'in-flight' | 'same-system' | 'too-far' | 'bad-target';
@@ -361,7 +399,12 @@ export function jumpDuration(settings: Settings): number {
 const ENCOUNTER_ATTEMPTS = 2;
 const ENCOUNTER_CHANCE = 0.35;
 
-/** Начало прыжка: топливо списывается сразу, прибытие по таймеру. */
+/**
+ * Начало прыжка: топливо списывается сразу, прибытие по таймеру.
+ *
+ * Здесь же применяется проверка контрабанды из TT110: взлёт со станции с
+ * запрещённым грузом поднимает правовой статус (`FIST = FIST OR BAD`).
+ */
 export function startJump(state: GameState, target: number, now: number, settings: Settings): JumpResult {
   if (state.flight) return { state, error: 'in-flight' };
   const systems = systemsOf(state.galaxy);
@@ -388,6 +431,7 @@ export function startJump(state: GameState, target: number, now: number, setting
       ...state,
       rng,
       fuel: state.fuel - d,
+      legal: legalAfterLaunch(state.legal, state.cargo),
       flight: { from: state.system, to: target, departAt: now, arriveAt: now + duration, fuelUsed: d, pending },
     },
   };
