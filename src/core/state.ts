@@ -8,7 +8,13 @@
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
-import { COMMODITIES, generateMarket, type MarketEntry } from './market.ts';
+import {
+  COMMODITIES,
+  generateMarket,
+  INDIVIDUAL_ITEM_LIMIT,
+  isTonneCargo,
+  type MarketEntry,
+} from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
@@ -212,7 +218,7 @@ export function currentSystem(state: GameState): StarSystem {
 }
 
 export function cargoTons(state: GameState): number {
-  return COMMODITIES.reduce((sum, c, i) => sum + (c.unit === 0 ? state.cargo[i] : 0), 0);
+  return cargoTonsOf(state.cargo);
 }
 
 export interface TradeResult {
@@ -221,14 +227,31 @@ export interface TradeResult {
   amount: number;
 }
 
-const isTonnes = (index: number): boolean => COMMODITIES[index].unit === 0;
+/**
+ * Сколько ещё единиц товара влезет в трюм — аналог `tnpr`.
+ *
+ * В оригинале две ветки:
+ *   * индексы 0–12  — по свободному тоннажу (CRGO = 22 или 37);
+ *   * индексы 13–16 — по 200 штук каждого вида, тоннаж не учитывается
+ *     (`CMP #200` в `tnpr`).
+ *
+ * Единица измерения тут не помощник: «Предметы пришельцев» печатаются
+ * в тоннах, но лимит у них всё равно 200, как в ветке `kg`.
+ */
+export function cargoRoom(state: GameState, index: number): number {
+  if (isTonneCargo(index)) return Math.max(0, state.holdSpace);
+  return Math.max(0, INDIVIDUAL_ITEM_LIMIT - state.cargo[index]);
+}
+
+/** Сколько тонн занимает груз: только индексы 0–12, как в `tnpr`. */
+const cargoTonsOf = (cargo: readonly number[]): number =>
+  cargo.reduce((sum, n, i) => sum + (isTonneCargo(i) ? n : 0), 0);
 
 /** Покупка: не больше, чем есть на рынке, влезает в трюм и хватает денег. */
 export function buy(state: GameState, index: number, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
   const entry = state.market[index];
-  let t = Math.min(entry.quantity, Math.floor(amount));
-  if (isTonnes(index)) t = Math.min(state.holdSpace, t);
+  let t = Math.min(entry.quantity, Math.floor(amount), cargoRoom(state, index));
   if (entry.price > 0) t = Math.min(t, Math.floor(state.cash / entry.price));
   if (t <= 0) return { state, amount: 0 };
 
@@ -243,7 +266,7 @@ export function buy(state: GameState, index: number, amount: number): TradeResul
       cargo,
       market,
       cash: state.cash - t * entry.price,
-      holdSpace: isTonnes(index) ? state.holdSpace - t : state.holdSpace,
+      holdSpace: isTonneCargo(index) ? state.holdSpace - t : state.holdSpace,
     },
   };
 }
@@ -266,7 +289,7 @@ export function sell(state: GameState, index: number, amount: number): TradeResu
       cargo,
       market,
       cash: state.cash + t * entry.price,
-      holdSpace: isTonnes(index) ? state.holdSpace + t : state.holdSpace,
+      holdSpace: isTonneCargo(index) ? state.holdSpace + t : state.holdSpace,
     },
   };
 }
@@ -655,11 +678,11 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     let next: GameState = { ...state, rng: dice.rng, flight: rest };
     let text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. Топливосборщика нет, проходим мимо`;
     if (state.ship.fuelScoops) {
-      const room = isTonnes(index) ? Math.min(amount, state.holdSpace) : amount;
+      const room = Math.min(amount, cargoRoom(state, index));
       if (room > 0) {
         const cargo = state.cargo.slice();
         cargo[index] += room;
-        next = { ...next, cargo, holdSpace: isTonnes(index) ? state.holdSpace - room : state.holdSpace };
+        next = { ...next, cargo, holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace };
         text = `Подобран контейнер: ${COMMODITIES[index].name}, ${room}`;
       } else {
         text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. В трюме нет места`;
@@ -787,11 +810,11 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
       if (next.ship.fuelScoops && dice.next() < 0.5) {
         const index = Math.floor(dice.next() * 16);
         const amount = 1 + Math.floor(dice.next() * 2);
-        const room = isTonnes(index) ? Math.min(amount, next.holdSpace) : amount;
+        const room = Math.min(amount, cargoRoom(next, index));
         if (room > 0) {
           const cargo = next.cargo.slice();
           cargo[index] += room;
-          next = { ...next, cargo, holdSpace: isTonnes(index) ? next.holdSpace - room : next.holdSpace };
+          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? next.holdSpace - room : next.holdSpace };
           text += `. Подобран груз: ${COMMODITIES[index].name}, ${room}`;
         }
       }
