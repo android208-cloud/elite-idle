@@ -99,7 +99,8 @@ const CFG = {
   // Скорость: тоже импульсы (оригинал: SPACE / SYMBOL SHIFT).
   SPEED_IMPULSE: 0.10,
   SPEED_MAX: 1.0,
-  SPEED_MIN: 0.0,
+  SPEED_MIN: -0.5,        // задний ход — отрицательная скорость
+  RETRO_FACTOR: 0.5,      // задний ход слабее переднего
 
   START_DIST: 100,
 
@@ -124,7 +125,7 @@ const S = {
   roll: 0,            // угловая скорость корабля
   angle: 0,           // текущий угол корабля
   stationAngle: 0,    // угол створа станции
-  stationRoll: 0.0,   // станция вращается
+  stationRoll: 0,     // скорость вращения станции — задаётся в seedStation()
   bet: "normal",
   phase: "flying",    // flying | docked | crashed
   cargo: 100,         // % груза
@@ -154,7 +155,6 @@ const btns = {
 
 function impulse(kind) {
   if (S.phase !== "flying") return;
-  const b = BETS[S.bet];
   if (kind === "left") {
     S.roll = Math.max(-CFG.ROLL_MAX, S.roll - CFG.ROLL_IMPULSE);
   } else if (kind === "right") {
@@ -205,18 +205,27 @@ document.querySelectorAll("#betbar button").forEach(b => {
 });
 
 // ─── Сброс ───────────────────────────────────────────────────────────────────
+// Станция всегда вращается — это то, к чему надо подстроиться.
+// Направление случайное, скорость зависит от ставки.
+function seedStation() {
+  const b = BETS[S.bet];
+  const base = 0.22 + Math.random() * 0.18;   // 0.22..0.40 рад/сек
+  const speed = base * (0.7 + b.spawnDrift * 0.8); // ставка влияет на скорость
+  S.stationRoll = (Math.random() < 0.5 ? -1 : 1) * speed;
+  S.stationAngle = Math.random() * Math.PI * 2;
+}
+
 function reset() {
   S.dist = CFG.START_DIST;
   S.speed = 0;
   S.roll = 0;
   S.angle = 0;
-  S.stationRoll = 0.15 + Math.random() * 0.2 * BETS[S.bet].spawnDrift;
-  S.stationAngle = Math.random() * Math.PI * 2;
+  seedStation();
   S.phase = "flying";
   S.cargo = 100;
   S.clean = false;
   S.attempts++;
-  log(`— попытка ${S.attempts} —`);
+  log(`— попытка ${S.attempts} · станция ${S.stationRoll > 0 ? "▶" : "◀"} ${Math.abs(S.stationRoll).toFixed(2)} —`);
 }
 
 // ─── Отрисовка ───────────────────────────────────────────────────────────────
@@ -339,36 +348,49 @@ function drawAlignmentRing() {
 }
 
 // Насколько скорость вне безопасного коридора: 0 — хорошо, 1 — плохо.
+// Задний ход всегда «плохо» для стыковки: с ним не сблизишься.
 function speedPenalty() {
   const [lo, hi] = CFG.SAFE_SPEED;
   if (S.speed >= lo && S.speed <= hi) return 0;
+  if (S.speed < 0) return 1;                       // назад — стыковка невозможна
   if (S.speed < lo) return (lo - S.speed) / lo;
   return Math.min(1, (S.speed - hi) / (CFG.SPEED_MAX - hi));
 }
 
 function drawSpeedGauge() {
-  const x = W / 2, y = H - 132, w = 260, h = 12;
+  const x = W / 2, y = H - 132, w = 300, h = 12;
+  const min = CFG.SPEED_MIN, max = CFG.SPEED_MAX;
+  const toX = (v) => x - w / 2 + ((v - min) / (max - min)) * w;
+
   ctx.save();
   ctx.strokeStyle = DIM;
   ctx.strokeRect(x - w / 2, y, w, h);
 
-  // безопасный коридор
+  // нулевая отметка — граница между вперёд и назад
+  const zx = toX(0);
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.beginPath();
+  ctx.moveTo(zx, y - 5); ctx.lineTo(zx, y + h + 5);
+  ctx.stroke();
+
+  // безопасный коридор (только для сближения)
   const [lo, hi] = CFG.SAFE_SPEED;
-  const lx = x - w / 2 + (lo / CFG.SPEED_MAX) * w;
-  const hx = x - w / 2 + (hi / CFG.SPEED_MAX) * w;
+  const lx = toX(lo), hx = toX(hi);
   ctx.fillStyle = "rgba(63,191,63,0.18)";
   ctx.fillRect(lx, y, hx - lx, h);
 
   // текущая скорость
-  const sx = x - w / 2 + (S.speed / CFG.SPEED_MAX) * w;
+  const sx = toX(S.speed);
   const inZone = S.speed >= lo && S.speed <= hi;
-  ctx.fillStyle = inZone ? GREEN : (S.speed > hi ? BAD : WARN);
-  ctx.fillRect(x - w / 2, y - 3, sx - (x - w / 2), h + 6);
+  const backwards = S.speed < 0;
+  ctx.fillStyle = inZone ? GREEN : (backwards ? CYAN : (S.speed > hi ? BAD : WARN));
+  const x0 = Math.min(zx, sx), x1 = Math.max(zx, sx);
+  ctx.fillRect(x0, y - 3, x1 - x0, h + 6);
 
   ctx.fillStyle = DIM;
   ctx.font = "10px Courier New";
   ctx.textAlign = "center";
-  ctx.fillText("СКОРОСТЬ СБЛИЖЕНИЯ", x, y - 8);
+  ctx.fillText("◀ ЗАДНИЙ ХОД   ·   СКОРОСТЬ СБЛИЖЕНИЯ   ·   ВПЕРЁД ▶", x, y - 9);
   ctx.restore();
 }
 
@@ -431,8 +453,13 @@ function step(dt) {
   // Станция медленно вращается — цель, к которой надо подстроиться.
   S.stationAngle = wrap(S.stationAngle + S.stationRoll * dt);
 
-  // Сближение
+  // Сближение. Отрицательная скорость = задний ход = расстояние растёт.
   S.dist -= S.speed * dt * 6;
+  if (S.dist < 0) S.dist = 0;
+
+  // Задний ход не должен уводить бесконечно — это не «спрятаться», а манёвр.
+  const MAX_BACK = 160;
+  if (S.dist > MAX_BACK) S.dist = MAX_BACK;
 
   // Попытка стыковки
   if (S.dist <= CFG.DOCK_DIST) {
@@ -483,8 +510,9 @@ const el = {
 
 function updateHud() {
   el.dist.textContent = Math.max(0, S.dist).toFixed(1) + " ед.";
-  el.speed.textContent = (S.speed * 100).toFixed(0) + "%" +
-    (speedPenalty() === 0 ? "  ок" : (S.speed > CFG.SAFE_SPEED[1] ? "  быстро" : "  медленно"));
+  const dir = S.speed < 0 ? " ◀ назад" : (S.speed > 0 ? " вперёд" : "");
+  el.speed.textContent = (S.speed * 100).toFixed(0) + "%" + dir +
+    (speedPenalty() === 0 ? "  ок" : (S.speed < 0 ? "" : (S.speed > CFG.SAFE_SPEED[1] ? "  быстро" : "  медленно")));
 
   const r = S.roll.toFixed(2);
   const st = S.stationRoll.toFixed(2);
@@ -525,7 +553,8 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-log("— попытка 1 —");
+seedStation();
+log(`— попытка 1 · станция ${S.stationRoll > 0 ? "▶" : "◀"} ${Math.abs(S.stationRoll).toFixed(2)} —`);
 requestAnimationFrame(loop);
 </script>
 </body>
