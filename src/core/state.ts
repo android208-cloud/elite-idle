@@ -92,8 +92,14 @@ export interface Encounter {
 export interface ActiveCombat {
   combat: CombatState;
   role: EncounterRole;
-  /** Когда полёт был поставлен на паузу */
+  /**
+   * Когда полёт был поставлен на паузу. Именно этот момент (а не время хода
+   * игрока) сдвигает прибытие: если игрок закрыл вкладку на три часа, полёт
+   * не должен сдвигаться на три часа.
+   */
   pausedAt: number;
+  /** Сколько миллисекунд полёт уже простоял на паузе из-за ожидания игрока */
+  pausedMs: number;
 }
 
 export interface GameState {
@@ -487,7 +493,7 @@ function beginCombat(state: GameState, at: number, settings: Settings, events: G
   const next: GameState = {
     ...state,
     encounter: null,
-    combat: { combat, role: enc.role, pausedAt: at },
+    combat: { combat, role: enc.role, pausedAt: at, pausedMs: 0 },
   };
   if (settings.combatMode === 'manual') {
     events.push({ type: 'combat-start', at, text: startText, manual: true });
@@ -499,11 +505,15 @@ function beginCombat(state: GameState, at: number, settings: Settings, events: G
 }
 
 /** Применяет итог закончившегося боя и снимает паузу полёта. */
-function finishCombat(state: GameState, endAt: number, settings: Settings, events: GameEvent[]): GameState {
+function finishCombat(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
   const active = state.combat!;
   const c = active.combat;
   const enemy = enemyById(c.enemyId);
   const flight = state.flight;
+  // Сколько полёт реально простоял на паузе. Учитываем только время, которое
+  // игра успела «увидеть» онлайн-тиками (его копит advance). Календарный
+  // разрыв между ходами — это офлайн-время, оно полёт не откладывает.
+  const pausedMs = Math.max(0, active.pausedMs);
   let s: GameState = { ...state, rng: c.rng, combat: null, encounter: null };
 
   // расход ресурсов в бою
@@ -516,16 +526,15 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
     s = { ...s, cargo: s.cargo.map(() => 0), holdSpace: holdCapacity(s.ship) };
   }
 
-  /** Полёт продолжается: время боя добавляется к прибытию и ожидающим встречам. */
+  /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
   const resume = (st: GameState): GameState => {
     if (!st.flight) return st;
-    const shift = Math.max(0, endAt - active.pausedAt);
     return {
       ...st,
       flight: {
         ...st.flight,
-        arriveAt: st.flight.arriveAt + shift,
-        pending: st.flight.pending.map((t) => t + shift),
+        arriveAt: st.flight.arriveAt + pausedMs,
+        pending: st.flight.pending.map((t) => t + pausedMs),
       },
     };
   };
@@ -544,7 +553,7 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
   };
 
   const say = (text: string): void => {
-    events.push({ type: 'combat-end', at: endAt, text });
+    events.push({ type: 'combat-end', at, text });
   };
 
   switch (c.outcome) {
@@ -591,7 +600,7 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
       });
       events.push({
         type: 'death',
-        at: endAt,
+        at,
         text: 'Капсула доставила вас на станцию вылета. Корабль, груз и оборудование потеряны',
       });
       return next;
@@ -607,14 +616,14 @@ function finishCombat(state: GameState, endAt: number, settings: Settings, event
         });
         events.push({
           type: 'death',
-          at: endAt,
+          at,
           text: 'Корабль уничтожен. Страховка вернула вас на станцию вылета, груз и часть денег потеряны',
         });
         return next;
       }
       events.push({
         type: 'death',
-        at: endAt,
+        at,
         text: 'Корабль серьёзно повреждён и отбуксирован на станцию вылета. Ничего не потеряно',
       });
       return returnToStation(s);
@@ -653,6 +662,13 @@ export function advance(
   let s = state;
   const events: GameEvent[] = [];
 
+  // Ручной бой ждёт игрока. Каждый вызов advance «закрывает» прошедший
+  // отрезок ожидания и копит его в pausedMs, чтобы прибытие сдвинулось
+  // ровно на время, когда игра действительно стояла на паузе.
+  if (s.combat && !s.combat.combat.outcome && now > s.combat.pausedAt) {
+    s = { ...s, combat: { ...s.combat, pausedAt: now, pausedMs: s.combat.pausedMs + (now - s.combat.pausedAt) } };
+  }
+
   for (let guard = 0; guard < 500; guard++) {
     if (s.combat || !s.flight) break;
     const f = s.flight;
@@ -689,9 +705,10 @@ export function combatAction(
   if (!state.combat || state.combat.combat.outcome) return { state, events };
   if (!canDo(state.combat.combat, action)) return { state, events };
   const combat = combatRound(state.combat.combat, action);
-  let s: GameState = { ...state, combat: { ...state.combat, combat } };
-  if (combat.outcome) s = finishCombat(s, now, settings, events);
-  return { state: s, events };
+  const s: GameState = { ...state, combat: { ...state.combat, combat } };
+  // Бой продолжается: ход сам по себе паузу не удлиняет, её копит advance
+  // по онлайн-тикам. Бой закончился: применяем итог.
+  return { state: combat.outcome ? finishCombat(s, now, settings, events) : s, events };
 }
 
 /** Передать бой автопилоту: доигрывает до конца. */
@@ -731,5 +748,10 @@ export function deserialize(json: string): GameState {
     return migrated;
   }
   if (data.version !== SAVE_VERSION) throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
-  return data as GameState;
+  const state = data as GameState;
+  // Совместимость с сохранениями, сделанными до появления накопленного простоя.
+  if (state.combat && typeof state.combat.pausedMs !== 'number') {
+    state.combat = { ...state.combat, pausedMs: 0 };
+  }
+  return state;
 }
