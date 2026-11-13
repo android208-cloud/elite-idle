@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Elite Idle — прототип стыковки</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #08080c; color: #9be89b;
+    font-family: "Courier New", monospace; overflow: hidden;
+  }
+  #wrap { position: relative; width: 100vw; height: 100vh; display: flex; }
+  canvas { display: block; }
+  #hud {
+    position: absolute; left: 20px; top: 16px; font-size: 13px;
+    line-height: 1.7; text-shadow: 0 0 6px #0f0; pointer-events: none;
+  }
+  #hud .k { color: #4a8; }
+  #hud .v { color: #cff; }
+  #hud .bad { color: #f66; }
+  #hud .good { color: #6f6; }
+  #ctrl {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 14px; align-items: flex-end;
+  }
+  .pad {
+    display: grid; grid-template-columns: repeat(2, 68px);
+    gap: 8px;
+  }
+  button {
+    background: #10161a; color: #7fe07f; border: 1px solid #2a5a2a;
+    border-radius: 8px; height: 62px; font-size: 22px; font-family: inherit;
+    cursor: pointer; user-select: none; transition: background .08s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:hover { background: #16231a; }
+  button:active, button.held { background: #204020; color: #cfffc0; }
+  button.wide { grid-column: span 2; height: 46px; font-size: 13px; letter-spacing: 1px; }
+  #betbar {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; font-size: 12px;
+  }
+  #betbar button { height: 34px; font-size: 11px; padding: 0 12px; }
+  #betbar button.on { background: #2a5028; color: #dfffd0; border-color: #4a8a4a; }
+  #log {
+    position: absolute; right: 18px; top: 16px; width: 260px; font-size: 12px;
+    line-height: 1.6; text-align: right; opacity: .85;
+  }
+  #log div { margin-bottom: 3px; }
+  .hint {
+    position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; opacity: .45; letter-spacing: .5px; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    <div><span class="k">РАССТОЯНИЕ </span><span class="v" id="hDist">—</span></div>
+    <div><span class="k">СКОРОСТЬ   </span><span class="v" id="hSpeed">—</span></div>
+    <div><span class="k">ВРАЩЕНИЕ   </span><span class="v" id="hRoll">—</span></div>
+    <div><span class="k">СТВОР      </span><span class="v" id="hAlign">—</span></div>
+  </div>
+
+  <div id="betbar">
+    <span style="color:#4a8">СТАВКА</span>
+    <button data-bet="safe">ОСТОРОЖНО</button>
+    <button data-bet="normal" class="on">ОБЫЧНО</button>
+    <button data-bet="risk">РИСКОВАННО</button>
+  </div>
+
+  <div id="log"></div>
+
+  <div class="hint">◀ ▶ — импульс вращения &nbsp;·&nbsp; ▲ ▼ — импульс скорости &nbsp;·&nbsp; R — заново</div>
+
+  <div id="ctrl">
+    <div class="pad">
+      <button id="bLeft">◀</button>
+      <button id="bRight">▶</button>
+      <button id="bDown">▼</button>
+      <button id="bUp">▲</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ─── Параметры модели ────────────────────────────────────────────────────────
+// Всё выведено из механики оригинала, где это возможно.
+const CFG = {
+  // Импульс вращения: в оригинале ($FE01) нажатие «подталкивает» счётчик.
+  ROLL_IMPULSE: 0.055,     // рад/сек за одно нажатие
+  ROLL_MAX: 1.6,           // предел угловой скорости
+  ROLL_DAMPING: 0.0,       // НЕТ затухания — подтверждено кодом (опция "D" выключена)
+
+  // Скорость: тоже импульсы (оригинал: SPACE / SYMBOL SHIFT).
+  SPEED_IMPULSE: 0.10,
+  SPEED_MAX: 1.0,
+  SPEED_MIN: 0.0,
+
+  START_DIST: 100,
+
+  // Зона стыковки
+  DOCK_DIST: 3.0,          // ближе — попытка стыковки
+  ALIGN_TOL: 0.30,         // рад: насколько створ должен совпасть
+  ROLL_TOL: 0.55,          // рад/сек: насколько вращение должно совпасть
+  SAFE_SPEED: [0.18, 0.55] // коридор безопасной скорости
+};
+
+// Ставка меняет цену ошибки (см. раздел 15.4 в session_log.md)
+const BETS = {
+  safe:   { name: "осторожно",  damage: 0.00, bonus: 1.0, spawnDrift: 0.25 },
+  normal: { name: "обычно",     damage: 0.35, bonus: 2.0, spawnDrift: 0.55 },
+  risk:   { name: "рискованно", damage: 0.85, bonus: 4.0, spawnDrift: 1.0  }
+};
+
+// ─── Состояние ───────────────────────────────────────────────────────────────
+const S = {
+  dist: CFG.START_DIST,
+  speed: 0,
+  roll: 0,            // угловая скорость корабля
+  angle: 0,           // текущий угол корабля
+  stationAngle: 0,    // угол створа станции
+  stationRoll: 0.0,   // станция вращается
+  bet: "normal",
+  phase: "flying",    // flying | docked | crashed
+  cargo: 100,         // % груза
+  clean: false,
+  attempts: 0
+};
+
+const keys = { left: false, right: false, up: false, down: false };
+
+// ─── Лог ─────────────────────────────────────────────────────────────────────
+const logEl = document.getElementById("log");
+function log(msg, cls) {
+  const d = document.createElement("div");
+  d.textContent = msg;
+  if (cls) d.className = cls;
+  logEl.prepend(d);
+  while (logEl.children.length > 7) logEl.lastChild.remove();
+}
+
+// ─── Кнопки ──────────────────────────────────────────────────────────────────
+const btns = {
+  left:  document.getElementById("bLeft"),
+  right: document.getElementById("bRight"),
+  up:    document.getElementById("bUp"),
+  down:  document.getElementById("bDown")
+};
+
+function impulse(kind) {
+  if (S.phase !== "flying") return;
+  const b = BETS[S.bet];
+  if (kind === "left") {
+    S.roll = Math.max(-CFG.ROLL_MAX, S.roll - CFG.ROLL_IMPULSE);
+  } else if (kind === "right") {
+    S.roll = Math.min(CFG.ROLL_MAX, S.roll + CFG.ROLL_IMPULSE);
+  } else if (kind === "up") {
+    S.speed = Math.min(CFG.SPEED_MAX, S.speed + CFG.SPEED_IMPULSE);
+  } else if (kind === "down") {
+    S.speed = Math.max(CFG.SPEED_MIN, S.speed - CFG.SPEED_IMPULSE);
+  }
+}
+
+// Нажатие = один импульс. Удержание (для удобства) = повтор импульсов.
+for (const [kind, el] of Object.entries(btns)) {
+  const fire = (e) => {
+    e.preventDefault();
+    impulse(kind);
+    el.classList.add("held");
+  };
+  el.addEventListener("pointerdown", fire);
+  el.addEventListener("pointerup", () => el.classList.remove("held"));
+  el.addEventListener("pointerleave", () => el.classList.remove("held"));
+  // авто-повтор при удержании
+  el.addEventListener("pointerdown", () => {
+    const id = setInterval(() => {
+      if (!el.classList.contains("held")) { clearInterval(id); return; }
+      impulse(kind);
+    }, 130);
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  const map = { ArrowLeft:"left", ArrowRight:"right", ArrowUp:"up", ArrowDown:"down",
+                n:"left", m:"right", " ":"up" };
+  const k = map[e.key];
+  if (k) { e.preventDefault(); impulse(k); }
+  if (e.key === "r" || e.key === "R") reset();
+});
+document.addEventListener("keyup", () => {});
+
+// Переключатель ставки
+document.querySelectorAll("#betbar button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#betbar button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    S.bet = b.dataset.bet;
+    log(`ставка: ${BETS[S.bet].name}`);
+  });
+});
+
+// ─── Сброс ───────────────────────────────────────────────────────────────────
+function reset() {
+  S.dist = CFG.START_DIST;
+  S.speed = 0;
+  S.roll = 0;
+  S.angle = 0;
+  S.stationRoll = 0.15 + Math.random() * 0.2 * BETS[S.bet].spawnDrift;
+  S.stationAngle = Math.random() * Math.PI * 2;
+  S.phase = "flying";
+  S.cargo = 100;
+  S.clean = false;
+  S.attempts++;
+  log(`— попытка ${S.attempts} —`);
+}
+
+// ─── Отрисовка ───────────────────────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, CX = 0, CY = 0;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  CX = W / 2; CY = H / 2 - 40;
+}
+window.addEventListener("resize", resize);
+resize();
+
+const GREEN = "#3fbf3f";
+const DIM   = "rgba(63,191,63,0.28)";
+const WARN  = "#e8a020";
+const BAD   = "#e04040";
+const CYAN  = "#7fe0ff";
+
+// Нормализация угла в [-PI, PI]
+function wrap(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+// Расхождение створа: насколько корабль развёрнут относительно станции.
+function alignmentError() {
+  return Math.abs(wrap(S.angle - S.stationAngle));
+}
+
+// Расхождение вращения: насколько скорость вращения отличается от станции.
+function rollError() {
+  return Math.abs(S.roll - S.stationRoll);
+}
+
+function drawStation() {
+  // Станция вращается — якорь узнавания (раздел 15.4).
+  const scale = Math.max(0.18, Math.min(1.6, 12 / Math.max(S.dist, 1)));
+  const R = 46 * scale;
+
+  ctx.save();
+  ctx.translate(CX, CY);
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = 2;
+  ctx.shadowBlur = 10; ctx.shadowColor = "rgba(63,191,63,0.6)";
+
+  // Корпус — вращается сам по себе
+  ctx.rotate(S.stationAngle + S.stationAngle);
+  const g = ctx;
+  g.beginPath();
+  // ромбовидный корпус
+  g.moveTo(0, -R); g.lineTo(R * 0.9, 0); g.lineTo(0, R); g.lineTo(-R * 0.9, 0);
+  g.closePath();
+  g.stroke();
+  // внутренняя деталь
+  g.beginPath();
+  g.moveTo(0, -R * 0.5); g.lineTo(R * 0.45, 0); g.lineTo(0, R * 0.5); g.lineTo(-R * 0.45, 0);
+  g.closePath();
+  g.strokeStyle = DIM; g.stroke();
+  ctx.restore();
+
+  // Створ — «ворота», куда надо попасть. Отдельно, чтобы быть читаемым.
+  ctx.save();
+  ctx.translate(CX, CY);
+  ctx.rotate(S.stationAngle);
+  ctx.strokeStyle = alignmentError() < CFG.ALIGN_TOL ? CYAN : WARN;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-R * 0.42, -R * 0.42);
+  ctx.lineTo(R * 0.42, -R * 0.42);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawShipAlignment() {
+  // Корабль показываем только угловым маркером, чтобы не мешать створу.
+  const err = alignmentError();
+  const R = 96;
+  ctx.save();
+  ctx.translate(CX, CY);
+  ctx.rotate(S.angle);
+  ctx.strokeStyle = err < CFG.ALIGN_TOL ? GREEN : (err < CFG.ALIGN_TOL * 2 ? WARN : BAD);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-R, 0); ctx.lineTo(-R + 16, -8);
+  ctx.moveTo(-R, 0); ctx.lineTo(-R + 16, 8);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawAlignmentRing() {
+  // Кольцо расхождения: сходится в точку, когда всё совпало.
+  const err = alignmentError();
+  const rollErr = rollError();
+  const speedErr = speedPenalty();
+
+  const total = Math.min(1, (err / (Math.PI)) + (rollErr / 2) + speedErr);
+  const R = 90 + total * 120;
+
+  let col = GREEN;
+  if (total > 0.55) col = BAD;
+  else if (total > 0.28) col = WARN;
+
+  ctx.save();
+  ctx.translate(CX, CY);
+  ctx.strokeStyle = col;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 8]);
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Насколько скорость вне безопасного коридора: 0 — хорошо, 1 — плохо.
+function speedPenalty() {
+  const [lo, hi] = CFG.SAFE_SPEED;
+  if (S.speed >= lo && S.speed <= hi) return 0;
+  if (S.speed < lo) return (lo - S.speed) / lo;
+  return Math.min(1, (S.speed - hi) / (CFG.SPEED_MAX - hi));
+}
+
+function drawSpeedGauge() {
+  const x = W / 2, y = H - 132, w = 260, h = 12;
+  ctx.save();
+  ctx.strokeStyle = DIM;
+  ctx.strokeRect(x - w / 2, y, w, h);
+
+  // безопасный коридор
+  const [lo, hi] = CFG.SAFE_SPEED;
+  const lx = x - w / 2 + (lo / CFG.SPEED_MAX) * w;
+  const hx = x - w / 2 + (hi / CFG.SPEED_MAX) * w;
+  ctx.fillStyle = "rgba(63,191,63,0.18)";
+  ctx.fillRect(lx, y, hx - lx, h);
+
+  // текущая скорость
+  const sx = x - w / 2 + (S.speed / CFG.SPEED_MAX) * w;
+  const inZone = S.speed >= lo && S.speed <= hi;
+  ctx.fillStyle = inZone ? GREEN : (S.speed > hi ? BAD : WARN);
+  ctx.fillRect(x - w / 2, y - 3, sx - (x - w / 2), h + 6);
+
+  ctx.fillStyle = DIM;
+  ctx.font = "10px Courier New";
+  ctx.textAlign = "center";
+  ctx.fillText("СКОРОСТЬ СБЛИЖЕНИЯ", x, y - 8);
+  ctx.restore();
+}
+
+function drawRollIndicator() {
+  // Стрелка текущего ω — видно, куда крутит и с какой силой.
+  const x = W / 2, y = H - 84, w = 260, h = 8;
+  ctx.save();
+  ctx.strokeStyle = DIM;
+  ctx.strokeRect(x - w / 2, y, w, h);
+
+  const mid = x;
+  ctx.fillStyle = DIM;
+  ctx.fillRect(mid - 0.5, y - 4, 1, h + 8);
+
+  const px = mid + (S.roll / CFG.ROLL_MAX) * (w / 2);
+  const ok = rollError() < CFG.ROLL_TOL;
+  ctx.fillStyle = ok ? CYAN : (rollError() < CFG.ROLL_TOL * 2 ? WARN : BAD);
+  ctx.fillRect(mid, y, px - mid, h);
+  ctx.fillStyle = ok ? CYAN : DIM;
+  ctx.font = "10px Courier New";
+  ctx.textAlign = "center";
+  ctx.fillText("ВРАЩЕНИЕ · метка станции ⟂", x, y - 8);
+
+  // метка скорости вращения станции
+  const stx = mid + (S.stationRoll / CFG.ROLL_MAX) * (w / 2);
+  ctx.fillStyle = CYAN;
+  ctx.fillRect(stx - 1, y - 6, 2, h + 12);
+  ctx.restore();
+}
+
+function drawBanner() {
+  if (S.phase === "flying") return;
+  ctx.save();
+  ctx.textAlign = "center";
+  const ok = S.phase === "docked";
+  ctx.fillStyle = ok ? GREEN : BAD;
+  ctx.font = "bold 40px Courier New";
+  ctx.shadowBlur = 24; ctx.shadowColor = ctx.fillStyle;
+  ctx.fillText(ok ? "СТЫКОВКА" : "ПОВРЕЖДЕНИЕ", CX, CY - 10);
+  ctx.font = "16px Courier New";
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 0.9;
+  if (ok) {
+    ctx.fillText(S.clean ? "чистая стыковка  ×" + BETS[S.bet].bonus : "обычная стыковка", CX, CY + 26);
+  } else {
+    ctx.fillText("потеряно груза: " + Math.round((1 - S.cargo / 100) * 100) + "%", CX, CY + 26);
+  }
+  ctx.globalAlpha = 0.6;
+  ctx.fillText("R — заново", CX, CY + 56);
+  ctx.restore();
+}
+
+// ─── Логика кадра ────────────────────────────────────────────────────────────
+function step(dt) {
+  if (S.phase !== "flying") return;
+
+  // Затухания нет (подтверждено кодом): вращение держится само.
+  S.angle = wrap(S.angle + S.roll * dt);
+
+  // Станция медленно вращается — цель, к которой надо подстроиться.
+  S.stationAngle = wrap(S.stationAngle + S.stationRoll * dt);
+
+  // Сближение
+  S.dist -= S.speed * dt * 6;
+
+  // Попытка стыковки
+  if (S.dist <= CFG.DOCK_DIST) {
+    tryDock();
+  }
+}
+
+function tryDock() {
+  const err = alignmentError();
+  const rErr = rollError();
+  const spd = speedPenalty();
+
+  if (err < CFG.ALIGN_TOL && rErr < CFG.ROLL_TOL && spd === 0) {
+    S.phase = "docked";
+    S.clean = true;
+    log("ЧИСТАЯ СТЫКОВКА ×" + BETS[S.bet].bonus, "good");
+  } else if (err < CFG.ALIGN_TOL * 2.2 && spd < 0.5) {
+    S.phase = "docked";
+    S.clean = false;
+    log("обычная стыковка");
+  } else {
+    // Промах. Цена ошибки зависит от ставки.
+    const b = BETS[S.bet];
+    if (b.damage <= 0) {
+      S.phase = "docked";
+      S.clean = false;
+      log("мимо створа — но ставка «осторожно», обошлось");
+    } else {
+      S.cargo = Math.max(0, S.cargo - Math.round(30 * b.damage));
+      if (S.cargo <= 0) {
+        S.phase = "crashed";
+        log("ГРУЗ ПОТЕРЯН ЦЕЛИКОМ", "bad");
+      } else {
+        S.phase = "crashed";
+        log("удар о станцию — потеря " + Math.round((1 - S.cargo / 100) * 100) + "% груза", "bad");
+      }
+    }
+  }
+}
+
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+const el = {
+  dist:   document.getElementById("hDist"),
+  speed:  document.getElementById("hSpeed"),
+  roll:   document.getElementById("hRoll"),
+  align:  document.getElementById("hAlign")
+};
+
+function updateHud() {
+  el.dist.textContent = Math.max(0, S.dist).toFixed(1) + " ед.";
+  el.speed.textContent = (S.speed * 100).toFixed(0) + "%" +
+    (speedPenalty() === 0 ? "  ок" : (S.speed > CFG.SAFE_SPEED[1] ? "  быстро" : "  медленно"));
+
+  const r = S.roll.toFixed(2);
+  const st = S.stationRoll.toFixed(2);
+  el.roll.textContent = r + " / станция " + st;
+  el.roll.className = rollError() < CFG.ROLL_TOL ? "good" : "v";
+
+  const err = alignmentError();
+  const deg = (err * 180 / Math.PI).toFixed(0);
+  el.align.textContent = deg + "°" + (err < CFG.ALIGN_TOL ? "  в створе" : "");
+  el.align.className = err < CFG.ALIGN_TOL ? "good" : (err < CFG.ALIGN_TOL * 2 ? "v" : "bad");
+}
+
+// ─── Главный цикл ────────────────────────────────────────────────────────────
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  step(dt);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // фон — редкие точки
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  for (let i = 0; i < 60; i++) {
+    const x = (i * 137.5) % W, y = (i * 89.3) % H;
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  drawAlignmentRing();
+  drawStation();
+  drawShipAlignment();
+  drawSpeedGauge();
+  drawRollIndicator();
+  drawBanner();
+  updateHud();
+
+  requestAnimationFrame(loop);
+}
+
+log("— попытка 1 —");
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
