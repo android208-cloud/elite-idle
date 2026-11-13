@@ -2,7 +2,7 @@ import './styles.css';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GOVERNMENTS } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
-import { EQUIPMENT, enemyById, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
+import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
   advance,
   buy,
@@ -279,17 +279,21 @@ function marketScreen(): string {
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div>${rows}`;
 }
 
+/** Номер предмета на верфи (1 — топливо), как в EQSHP; используется в подсказке. */
+const equipmentNote = (item: (typeof EQUIPMENT)[number]): string => `${cr(item.price)} · №${item.screenNumber} на верфи`;
+
 function equipmentRows(): string {
   const docked = !state.flight;
-  const tech = currentSystem(state).techLevel + 1;
+  const tek = currentSystem(state).techLevel;
   return EQUIPMENT.map((item) => {
     const have = owns(state.ship, item.id);
-    let note = `${cr(item.price)} · тех. уровень ${item.minTech}`;
+    const available = equipmentAvailable(item, tek);
+    let note = equipmentNote(item);
     if (item.id === 'missile') note += ` · сейчас ${state.ship.missiles}`;
     let action: string;
     if (have && item.id !== 'missile') action = '<span class="chip">установлено</span>';
     else if (have) action = '<span class="chip">полный боекомплект</span>';
-    else if (tech < item.minTech) action = '<span class="chip dear">нет на этой станции</span>';
+    else if (!available) action = '<span class="chip dear">нет на этой станции</span>';
     else
       action = `<button class="btn tonal" data-action="equip" data-id="${item.id}" ${docked && state.cash >= item.price ? '' : 'disabled'}>Купить</button>`;
     return `<div class="good-row" style="margin:10px 0"><div><div class="name">${item.name}</div>

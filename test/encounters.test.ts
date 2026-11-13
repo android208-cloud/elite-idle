@@ -276,8 +276,8 @@ test('правовой статус уменьшается при прибыти
 
 test('оборудование: нужен технологический уровень, деньги; повторно не купить', () => {
   const g = newGame(1);
-  // Lave: тех. уровень невысок, ECM (ТУ 2) доступен, галактический гипердвигатель (ТУ 10) нет
-  assert.ok(currentSystem(g).techLevel + 1 < 10);
+  // Lave: tek = 4 → QQ25 = 7, ECM (номер 4) доступен, гипердвигатель (12) — нет
+  assert.equal(currentSystem(g).techLevel, 4);
   assert.equal(buyEquipment({ ...g, cash: 10 ** 7 }, 'galacticHyperdrive').error, 'tech');
   const ecm = buyEquipment({ ...g, cash: 10 ** 7 }, 'ecm');
   assert.equal(ecm.error, undefined);

@@ -134,24 +134,53 @@ export interface EquipmentItem {
   name: string;
   /** Цена в десятых долях кредита */
   price: number;
-  /** Минимальный технологический уровень системы (в игровой нумерации, от 1) */
-  minTech: number;
+  /**
+   * Номер предмета в списке верфи по EQSHP (XX13), где 1 — топливо.
+   * Доступность определяется так же, как в оригинале:
+   *   screenNumber <= min(tek + 3, QQ25_MAX)
+   * где tek — технологический уровень системы (0..14).
+   */
+  screenNumber: number;
 }
 
+/** Максимум QQ25 в оригинале для версии с диска/улучшенных версий (14 предметов). */
+export const QQ25_MAX = 14;
+/** Смещение из EQSHP: QQ25 = tek + 3, но не больше QQ25_MAX. */
+export const EQSHP_TECH_OFFSET = 3;
+
+/**
+ * Сколько последний предмет на верфи доступен в системе с данным техуровнем.
+ * Точно по EQSHP: QQ25 = min(tek + 3, 14) для disc/enhanced версий.
+ * (В кассетной версии было 12 — отсюда отсутствие военного и добывающего лазеров.)
+ */
+export function maxEquipmentNumber(tek: number): number {
+  return Math.min(tek + EQSHP_TECH_OFFSET, QQ25_MAX);
+}
+
+/**
+ * Доступен ли предмет на верфи системы с техуровнем tek (0..14).
+ * В оригинале это просто проверка «номер предмета не больше QQ25».
+ */
+export function equipmentAvailable(item: EquipmentItem, tek: number): boolean {
+  return item.screenNumber <= maxEquipmentNumber(tek);
+}
+
+// Номера соответствуют XX13 в EQSHP: 1 = FUEL (топливо продаётся всегда и
+// отдельно), 2 = ракета … 13 = военный лазер, 14 = добывающий лазер.
 export const EQUIPMENT: readonly EquipmentItem[] = [
-  { id: 'missile', name: 'Ракета', price: 300, minTech: 2 },
-  { id: 'cargoBay', name: 'Увеличенный трюм (35 т)', price: 4000, minTech: 1 },
-  { id: 'ecm', name: 'ECM (РЭБ)', price: 6000, minTech: 2 },
-  { id: 'pulse', name: 'Импульсный лазер', price: 4000, minTech: 3 },
-  { id: 'beam', name: 'Лучевой лазер', price: 10000, minTech: 4 },
-  { id: 'scoops', name: 'Топливосборщик', price: 5250, minTech: 5 },
-  { id: 'pod', name: 'Спасательная капсула', price: 10000, minTech: 6 },
-  { id: 'bomb', name: 'Энергобомба', price: 9000, minTech: 7 },
-  { id: 'energyUnit', name: 'Доп. энергоблок', price: 15000, minTech: 8 },
-  { id: 'dockingComputer', name: 'Стыковочный компьютер', price: 10000, minTech: 9 },
-  { id: 'galacticHyperdrive', name: 'Галактический гипердвигатель', price: 50000, minTech: 10 },
-  { id: 'military', name: 'Военный лазер', price: 60000, minTech: 10 },
-  { id: 'mining', name: 'Добывающий лазер', price: 8000, minTech: 10 },
+  { id: 'missile', name: 'Ракета', price: 300, screenNumber: 2 },
+  { id: 'cargoBay', name: 'Увеличенный трюм (35 т)', price: 4000, screenNumber: 3 },
+  { id: 'ecm', name: 'ECM (РЭБ)', price: 6000, screenNumber: 4 },
+  { id: 'pulse', name: 'Импульсный лазер', price: 4000, screenNumber: 5 },
+  { id: 'beam', name: 'Лучевой лазер', price: 10000, screenNumber: 6 },
+  { id: 'scoops', name: 'Топливосборщик', price: 5250, screenNumber: 7 },
+  { id: 'pod', name: 'Спасательная капсула', price: 10000, screenNumber: 8 },
+  { id: 'bomb', name: 'Энергобомба', price: 9000, screenNumber: 9 },
+  { id: 'energyUnit', name: 'Доп. энергоблок', price: 15000, screenNumber: 10 },
+  { id: 'dockingComputer', name: 'Стыковочный компьютер', price: 10000, screenNumber: 11 },
+  { id: 'galacticHyperdrive', name: 'Галактический гипердвигатель', price: 50000, screenNumber: 12 },
+  { id: 'military', name: 'Военный лазер', price: 60000, screenNumber: 13 },
+  { id: 'mining', name: 'Добывающий лазер', price: 8000, screenNumber: 14 },
 ] as const;
 
 export const LASER_NAMES: Record<LaserType, string> = {

@@ -14,6 +14,7 @@ import {
   ENEMIES,
   enemyById,
   EQUIPMENT,
+  equipmentAvailable,
   holdCapacity,
   HOLD_BASE,
   MAX_MISSILES,
@@ -296,7 +297,8 @@ export function owns(ship: PlayerShip, id: EquipmentId): boolean {
 export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult {
   if (state.flight) return { state, error: 'in-flight' };
   const item = EQUIPMENT.find((e) => e.id === id)!;
-  if (currentSystem(state).techLevel + 1 < item.minTech) return { state, error: 'tech' };
+  // Доступность по EQSHP: предмет виден на верфи, если его номер ≤ min(tek + 3, 14)
+  if (!equipmentAvailable(item, currentSystem(state).techLevel)) return { state, error: 'tech' };
   if (owns(state.ship, id)) return { state, error: id === 'missile' ? 'full' : 'owned' };
   if (state.cash < item.price) return { state, error: 'cash' };
 
