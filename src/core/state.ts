@@ -8,7 +8,13 @@
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
-import { COMMODITIES, generateMarket, type MarketEntry } from './market.ts';
+import {
+  COMMODITIES,
+  generateMarket,
+  INDIVIDUAL_ITEM_LIMIT,
+  isTonneCargo,
+  type MarketEntry,
+} from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
@@ -66,9 +72,34 @@ export interface Flight {
   from: number;
   to: number;
   departAt: number;
+  /**
+   * Момент прибытия, рассчитанный по текущему темпу игры.
+   *
+   * Поле производное: истина хранится в `remainingBaseMs`, а `arriveAt`
+   * пересчитывается при каждой смене темпа. Это позволяет менять скорость
+   * на ходу — иначе прыжок, начатый при ×1, не ускорялся бы никогда.
+   */
   arriveAt: number;
   fuelUsed: number;
-  /** Моменты появления встреч по ходу полёта, по возрастанию */
+  /**
+   * Сколько «базовых» миллисекунд полёта осталось (при speed = 1).
+   * Именно это значение живёт в сохранении; `arriveAt` из неё выводится.
+   */
+  remainingBaseMs: number;
+  /**
+   * Сколько «базовых» миллисекунд полёта уже пройдено (при speed = 1).
+   * Вместе с `remainingBaseMs` даёт полную длительность в базовых единицах.
+   */
+  elapsedBaseMs: number;
+  /** Момент, для которого посчитан `arriveAt` (чтобы не пересчитывать без нужды) */
+  dueAt: number;
+  /**
+   * Моменты встреч в «базовых» миллисекундах ОТ ВЫЛЕТА (`departAt`).
+   *
+   * Базовая шкала не зависит от текущего темпа: при его смене двигается
+   * только `dueAt`/`arriveAt`, а встречи остаются на своих местах полёта
+   * и потому наступают раньше или позже вместе с прибытием.
+   */
   pending: number[];
 }
 
@@ -187,7 +218,7 @@ export function currentSystem(state: GameState): StarSystem {
 }
 
 export function cargoTons(state: GameState): number {
-  return COMMODITIES.reduce((sum, c, i) => sum + (c.unit === 0 ? state.cargo[i] : 0), 0);
+  return cargoTonsOf(state.cargo);
 }
 
 export interface TradeResult {
@@ -196,14 +227,31 @@ export interface TradeResult {
   amount: number;
 }
 
-const isTonnes = (index: number): boolean => COMMODITIES[index].unit === 0;
+/**
+ * Сколько ещё единиц товара влезет в трюм — аналог `tnpr`.
+ *
+ * В оригинале две ветки:
+ *   * индексы 0–12  — по свободному тоннажу (CRGO = 22 или 37);
+ *   * индексы 13–16 — по 200 штук каждого вида, тоннаж не учитывается
+ *     (`CMP #200` в `tnpr`).
+ *
+ * Единица измерения тут не помощник: «Предметы пришельцев» печатаются
+ * в тоннах, но лимит у них всё равно 200, как в ветке `kg`.
+ */
+export function cargoRoom(state: GameState, index: number): number {
+  if (isTonneCargo(index)) return Math.max(0, state.holdSpace);
+  return Math.max(0, INDIVIDUAL_ITEM_LIMIT - state.cargo[index]);
+}
+
+/** Сколько тонн занимает груз: только индексы 0–12, как в `tnpr`. */
+const cargoTonsOf = (cargo: readonly number[]): number =>
+  cargo.reduce((sum, n, i) => sum + (isTonneCargo(i) ? n : 0), 0);
 
 /** Покупка: не больше, чем есть на рынке, влезает в трюм и хватает денег. */
 export function buy(state: GameState, index: number, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
   const entry = state.market[index];
-  let t = Math.min(entry.quantity, Math.floor(amount));
-  if (isTonnes(index)) t = Math.min(state.holdSpace, t);
+  let t = Math.min(entry.quantity, Math.floor(amount), cargoRoom(state, index));
   if (entry.price > 0) t = Math.min(t, Math.floor(state.cash / entry.price));
   if (t <= 0) return { state, amount: 0 };
 
@@ -218,7 +266,7 @@ export function buy(state: GameState, index: number, amount: number): TradeResul
       cargo,
       market,
       cash: state.cash - t * entry.price,
-      holdSpace: isTonnes(index) ? state.holdSpace - t : state.holdSpace,
+      holdSpace: isTonneCargo(index) ? state.holdSpace - t : state.holdSpace,
     },
   };
 }
@@ -241,7 +289,7 @@ export function sell(state: GameState, index: number, amount: number): TradeResu
       cargo,
       market,
       cash: state.cash + t * entry.price,
-      holdSpace: isTonnes(index) ? state.holdSpace + t : state.holdSpace,
+      holdSpace: isTonneCargo(index) ? state.holdSpace + t : state.holdSpace,
     },
   };
 }
@@ -398,9 +446,71 @@ export interface JumpResult {
   error?: JumpError;
 }
 
+/** Темп не может быть нулевым или отрицательным: защита от деления на 0. */
+const safeSpeed = (settings: Settings): number => Math.max(settings.speed, 0.0001);
+
 /** Длительность прыжка в миллисекундах с учётом настроек темпа. */
 export function jumpDuration(settings: Settings): number {
-  return Math.max(0, Math.round(settings.baseJumpMs / Math.max(settings.speed, 0.0001)));
+  return Math.max(0, Math.round(settings.baseJumpMs / safeSpeed(settings)));
+}
+
+/** Переводит «базовые» миллисекунды полёта в реальные при текущем темпе. */
+export function baseToReal(baseMs: number, settings: Settings): number {
+  return Math.round(baseMs / safeSpeed(settings));
+}
+
+/**
+ * Реальный момент следующей встречи полёта, либо Infinity.
+ *
+ * Встречи хранятся в базовой шкале от вылета, а игра живёт в реальном
+ * времени, поэтому остаток базовых миллисекунд переводится по текущему темпу.
+ */
+export function nextEncounterAt(flight: Flight, settings: Settings): number {
+  const elapsedBase = flight.elapsedBaseMs;
+  for (const at of flight.pending) {
+    if (at > elapsedBase) {
+      // Сколько базовых миллисекунд осталось до встречи, переводим в реальные
+      return flight.dueAt + baseToReal(at - elapsedBase, settings);
+    }
+  }
+  return Infinity;
+}
+
+/**
+ * Приводит полёт к текущему темпу: пересчитывает `arriveAt` из остатка
+ * базового времени, сохраняя при этом уже прошедшую часть пути.
+ *
+ * Вызывается перед каждым досчётом, поэтому смена темпа действует сразу,
+ * в том числе посреди полёта.
+ */
+export function syncFlightToSpeed(flight: Flight, now: number, settings: Settings): Flight {
+  // Сколько реального времени прошло с прошлой синхронизации
+  const realMs = Math.max(0, now - flight.dueAt);
+  // …и сколько это «базовых» миллисекунд при текущем темпе
+  const baseMs = realMs * safeSpeed(settings);
+  const elapsedBase = flight.elapsedBaseMs + baseMs;
+  const remainingBase = Math.max(0, flight.remainingBaseMs - baseMs);
+  const arriveAt = now + baseToReal(remainingBase, settings);
+  // Ничего не изменилось (тот же момент и тот же темп) — возвращаем исходный
+  // объект. Это важно для UI: `tick` сравнивает ссылки и при «пустом» тике
+  // не перерисовывает экран целиком.
+  if (
+    arriveAt === flight.arriveAt &&
+    elapsedBase === flight.elapsedBaseMs &&
+    remainingBase === flight.remainingBaseMs &&
+    now === flight.dueAt
+  ) {
+    return flight;
+  }
+  return {
+    ...flight,
+    elapsedBaseMs: elapsedBase,
+    remainingBaseMs: remainingBase,
+    dueAt: now,
+    arriveAt,
+    // `pending` не трогаем: встречи хранятся в базовой шкале от вылета
+    // и от смены темпа не зависят — двигается только точка отсчёта `dueAt`.
+  };
 }
 
 /** Попыток встречи за прыжок и шанс каждой (до умножения на encounterRate) */
@@ -421,7 +531,9 @@ export function startJump(state: GameState, target: number, now: number, setting
   const d = distance(systems[state.system], systems[target]);
   if (d > state.fuel) return { state, error: 'too-far' };
 
-  const duration = jumpDuration(settings);
+  // Длительность хранится в «базовых» миллисекундах (при speed = 1),
+  // поэтому смена темпа потом влияет и на уже начатый полёт.
+  const baseDuration = Math.max(0, Math.round(settings.baseJumpMs));
   let rng = state.rng;
   const pending: number[] = [];
   for (let k = 0; k < ENCOUNTER_ATTEMPTS; k++) {
@@ -429,7 +541,8 @@ export function startJump(state: GameState, target: number, now: number, setting
     const [when, r2] = nextFloat(r1);
     rng = r2;
     if (roll < ENCOUNTER_CHANCE * settings.encounterRate) {
-      pending.push(Math.round(now + duration * (0.1 + 0.8 * when)));
+      // Встречи — тоже в базовых миллисекундах от начала полёта
+      pending.push(Math.round(baseDuration * (0.1 + 0.8 * when)));
     }
   }
   pending.sort((a, b) => a - b);
@@ -440,7 +553,17 @@ export function startJump(state: GameState, target: number, now: number, setting
       rng,
       fuel: state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
-      flight: { from: state.system, to: target, departAt: now, arriveAt: now + duration, fuelUsed: d, pending },
+      flight: {
+        from: state.system,
+        to: target,
+        departAt: now,
+        arriveAt: now + baseToReal(baseDuration, settings),
+        fuelUsed: d,
+        remainingBaseMs: baseDuration,
+        elapsedBaseMs: 0,
+        dueAt: now,
+        pending,
+      },
     },
   };
 }
@@ -534,7 +657,11 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
   const flight = state.flight!;
   const dice = new Dice(state.rng);
   const gov = systemsOf(state.galaxy)[flight.to].government;
-  const rest: Flight = { ...flight, pending: flight.pending.slice(1) };
+  // Сработавшую встречу убираем из базовой шкалы
+  const rest: Flight = {
+    ...flight,
+    pending: flight.pending.filter((at) => at > flight.elapsedBaseMs),
+  };
 
   let r = dice.next();
   let role: EncounterRole;
@@ -551,11 +678,11 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     let next: GameState = { ...state, rng: dice.rng, flight: rest };
     let text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. Топливосборщика нет, проходим мимо`;
     if (state.ship.fuelScoops) {
-      const room = isTonnes(index) ? Math.min(amount, state.holdSpace) : amount;
+      const room = Math.min(amount, cargoRoom(state, index));
       if (room > 0) {
         const cargo = state.cargo.slice();
         cargo[index] += room;
-        next = { ...next, cargo, holdSpace: isTonnes(index) ? state.holdSpace - room : state.holdSpace };
+        next = { ...next, cargo, holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace };
         text = `Подобран контейнер: ${COMMODITIES[index].name}, ${room}`;
       } else {
         text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. В трюме нет места`;
@@ -683,11 +810,11 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
       if (next.ship.fuelScoops && dice.next() < 0.5) {
         const index = Math.floor(dice.next() * 16);
         const amount = 1 + Math.floor(dice.next() * 2);
-        const room = isTonnes(index) ? Math.min(amount, next.holdSpace) : amount;
+        const room = Math.min(amount, cargoRoom(next, index));
         if (room > 0) {
           const cargo = next.cargo.slice();
           cargo[index] += room;
-          next = { ...next, cargo, holdSpace: isTonnes(index) ? next.holdSpace - room : next.holdSpace };
+          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? next.holdSpace - room : next.holdSpace };
           text += `. Подобран груз: ${COMMODITIES[index].name}, ${room}`;
         }
       }
@@ -786,11 +913,19 @@ export function advance(
   for (let guard = 0; guard < 500; guard++) {
     if (s.combat || !s.flight) break;
     const f = s.flight;
-    const tArrive = f.arriveAt;
+    // Следующее событие полёта в реальном времени — по ТЕКУЩЕМУ темпу.
+    // Так смена темпа действует на уже начатый полёт, но события посреди
+    // интервала не теряются при досчёте одним вызовом.
+    const tArrive = f.dueAt + baseToReal(f.remainingBaseMs, settings);
     const tEnc = s.encounter ? s.encounter.resolveAt : Infinity;
-    const tSpawn = s.encounter ? Infinity : (f.pending[0] ?? Infinity);
+    const tSpawn = s.encounter ? Infinity : nextEncounterAt(f, settings);
     const t = Math.min(tArrive, tEnc, tSpawn);
     if (t > now) break;
+
+    // Подводим полёт ровно к моменту события: начисляем прошедшие базовые
+    // миллисекунды и заново выводим `arriveAt` из остатка.
+    const advanced = syncFlightToSpeed(f, t, settings);
+    if (advanced !== f) s = { ...s, flight: advanced };
 
     if (s.encounter && tEnc <= tArrive) {
       if (s.encounter.outcome === 'leave') {
@@ -804,6 +939,16 @@ export function advance(
     } else {
       s = arrive(s, tArrive, events);
     }
+  }
+
+  // После разбора событий подтягиваем остаток полёта к текущему моменту —
+  // именно здесь темп применяется к ещё не наступившему прибытию.
+  // Условие `>=`: если темп сменили в тот же момент, когда полёт уже
+  // синхронизирован, `arriveAt` всё равно надо пересчитать по-новому.
+  if (s.flight && !s.combat && now >= s.flight.dueAt) {
+    const synced = syncFlightToSpeed(s.flight, now, settings);
+    // Ссылочное равенство сохраняем: холостой тик не должен менять состояние
+    if (synced !== s.flight) s = { ...s, flight: synced };
   }
   return { state: s, events };
 }
@@ -866,6 +1011,22 @@ export function deserialize(json: string): GameState {
   // Совместимость с сохранениями, сделанными до появления накопленного простоя.
   if (state.combat && typeof state.combat.pausedMs !== 'number') {
     state.combat = { ...state.combat, pausedMs: 0 };
+  }
+  // Совместимость с сохранениями, где полёт хранил только абсолютный arriveAt
+  // (до появления базовых миллисекунд — нужно для смены темпа на ходу).
+  if (state.flight && typeof state.flight.remainingBaseMs !== 'number') {
+    const f = state.flight;
+    // Считаем, что на момент сохранения темп был базовым: восстанавливаем
+    // остаток из разницы arriveAt и departAt, а встречи переводим в остаток
+    // от текущего момента.
+    const total = Math.max(0, f.arriveAt - f.departAt);
+    state.flight = {
+      ...f,
+      remainingBaseMs: total,
+      elapsedBaseMs: 0,
+      dueAt: f.departAt,
+      pending: f.pending.map((t) => Math.max(0, t - f.departAt)),
+    };
   }
   return state;
 }
