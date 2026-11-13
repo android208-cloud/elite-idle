@@ -23,9 +23,31 @@ export const MAX_ROUNDS  = 60;
 
 /**
  * Мощность лазера игрока за один раунд боя.
- * Значения из elite-source-docked.asm:
- *   POW=15 (pulse), Mlas=50 (mining), Armlas=151 (military), beam=POW|32=47
- * В idle-игре за раунд стреляем один раз, урон = laserPower.
+ *
+ * ВАЖНО: это НЕ значения констант POW/Mlas/Armlas как есть, а биты 0–6
+ * байта LASER — именно их оригинал использует как силу удара:
+ *
+ *   elite-source-docked.asm:  POW = 15, Mlas = 50, Armlas = INT(128.5 + 1.5*POW)
+ *   main_flight_loop_part_3_of_16.asm:
+ *     PHA                        \ мощность лазера текущего вида
+ *     AND #%01111111             \ LAS = биты 0–6 (бит 7 = «луч, а не импульс»)
+ *     STA LAS
+ *   main_flight_loop_part_11_of_16.asm:
+ *     LDA #LASER,X
+ *     SEC : SBC LAS              \ урон = энергия цели − LAS
+ *
+ * Отсюда реальные значения:
+ *   импульсный  LASER = POW        = 15           → LAS = 15
+ *   луч         LASER = POW + 128  = 143          → LAS = 143 & 127 = 15
+ *   военный     LASER = Armlas     = 151          → LAS = 151 & 127 = 23
+ *   добывающий  LASER = Mlas       = 50           → LAS = 50
+ *
+ * Раньше у нас стояли 47 и 151 — это сами константы, без маски. Луч и
+ * военный лазер из-за этого были в 3 и 6.5 раза мощнее оригинала.
+ * Подтверждение из оригинала же: `CMP #(Armlas AND 127)` — автор сравнивает
+ * силу удара именно с 23, а не с 151.
+ *
+ * В idle-игре за раунд стреляем один раз, урон = LAS.
  */
 
 export type CombatAction = 'laser' | 'missile' | 'ecm' | 'bomb' | 'pod' | 'flee' | 'dump';
@@ -56,13 +78,16 @@ export interface CombatState {
   rng: number;
 }
 
-// Мощность лазеров игрока (elite-source-docked.asm, строки POW/Mlas/Armlas)
-const LASER_POWER: Record<LaserType, number> = {
+/**
+ * Сила удара лазера (биты 0–6 байта LASER, см. пояснение в шапке файла).
+ * Значения выведены из констант оригинала, а не списаны напрямую.
+ */
+export const LASER_POWER: Record<LaserType, number> = {
   none:     0,
-  pulse:    15,  // POW = 15
-  beam:     47,  // POW | 32 = 15 | 32 = 47
-  military: 151, // INT(128.5 + 1.5*POW) = INT(128.5 + 22.5) = 151
-  mining:   50,  // Mlas = 50
+  pulse:    15,  // POW       = 15  → 15 & 127
+  beam:     15,  // POW + 128 = 143 → 143 & 127
+  military: 23,  // Armlas    = 151 → 151 & 127
+  mining:   50,  // Mlas      = 50  → 50 & 127
 };
 // Вероятность попадания игрока (адаптировано для idle: один выстрел в раунд)
 const PLAYER_HIT     = 0.65;
