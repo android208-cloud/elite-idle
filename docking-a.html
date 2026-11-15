@@ -153,7 +153,11 @@ function draw() {
 
   // Поворот станции: крен (roll) + собственное вращение.
   // yaw/pitch = 0: створ всегда смотрит на игрока, крен — то, что нужно совместить.
-  const rot = rotationMatrix(0, 0, st.target.roll);
+  // Станция повёрнута на свой крен, но МЫ видим её с учётом крена корабля:
+  // относительный крен = roll станции − angle корабля.
+  // Именно эту разницу игрок должен обнулить кнопками ↺ ↻.
+  const relRoll = st.target.roll - st.player.angle;
+  const rot = rotationMatrix(0, 0, relRoll);
 
   // Проецируем все 16 вершин
   const proj = VERTICES.map(v => {
@@ -227,6 +231,20 @@ function drawHUD(cx, cy) {
   ctx.beginPath();
   ctx.arc(px, py, 4, 0, Math.PI * 2);
   ctx.fill();
+
+  // --- МАРКЕР КРЕНА КОРАБЛЯ ---
+  // Треугольник на кольце прицела, вращается вместе с кораблём.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(st.player.angle);
+  ctx.beginPath();
+  ctx.moveTo(0, -R - 14);
+  ctx.lineTo(-7, -R - 26);
+  ctx.lineTo(7, -R - 26);
+  ctx.closePath();
+  ctx.fillStyle = m.angleErr < CFG.ANGLE_TOL_DEG ? '#00ff66' : '#ffaa00';
+  ctx.fill();
+  ctx.restore();
 
   // телеметрия
   ctx.font = 'bold 13px Courier New';

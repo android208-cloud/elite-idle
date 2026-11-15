@@ -160,7 +160,9 @@ function draw() {
 
   ctx.save();
   ctx.translate(cx + dx, cy + dy);
-  ctx.rotate(st.target.roll);             // крен станции — то, что нужно совместить
+  // Видим станцию с учётом СВОЕГО крена: относительный крен.
+  // Кнопки ↺ ↻ меняют player.angle — и станция на экране поворачивается.
+  ctx.rotate(st.target.roll - st.player.angle);
   ctx.scale(scale, scale);
 
   const lw = Math.max(1.2, 1.8 / scale);
@@ -220,6 +222,19 @@ function drawHUD(cx, cy) {
   ctx.beginPath();
   ctx.arc(cx + Math.max(-110, Math.min(110, dx * 8)), cy + Math.max(-110, Math.min(110, dy * 8)), 4, 0, Math.PI * 2);
   ctx.fill();
+
+  // --- МАРКЕР КРЕНА КОРАБЛЯ ---
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(st.player.angle);
+  ctx.beginPath();
+  ctx.moveTo(0, -52 - 14);
+  ctx.lineTo(-7, -52 - 26);
+  ctx.lineTo(7, -52 - 26);
+  ctx.closePath();
+  ctx.fillStyle = m.angleErr < CFG.ANGLE_TOL_DEG ? '#00ff66' : '#ffaa00';
+  ctx.fill();
+  ctx.restore();
 
   ctx.font = 'bold 13px Courier New';
   ctx.textAlign = 'left';
