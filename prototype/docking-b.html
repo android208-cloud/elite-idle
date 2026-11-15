@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Стыковка B — Кориолис 2.5D</title>
+<style>
+  :root { --g:#00ff66; --a:#ffaa00; --r:#ff3333; }
+  * { box-sizing:border-box; user-select:none; -webkit-user-select:none; touch-action:none; }
+  html,body { margin:0; padding:0; width:100vw; height:100dvh; background:#000; color:var(--g);
+    font-family:'Courier New',monospace; overflow:hidden; display:flex; flex-direction:column; }
+  #screen { position:relative; flex:1; background:#050805; overflow:hidden; border-bottom:3px solid #222; }
+  canvas { display:block; width:100%; height:100%; }
+  #screen::after { content:" "; position:absolute; inset:0; pointer-events:none;
+    background:linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,.25) 50%), radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,.8) 100%);
+    background-size:100% 4px, 100% 100%; }
+  #deck { height:36dvh; min-height:210px; background:#111; padding:10px; display:grid;
+    grid-template-columns:1.1fr 1fr; gap:10px; border-top:2px solid #333; }
+  .grp { background:#1a1a1a; border:1px solid #333; border-radius:10px; padding:8px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; }
+  .ttl { position:absolute; top:4px; font-size:9px; color:#666; letter-spacing:1px; }
+  .dpad { display:grid; grid-template-columns:repeat(3,44px); grid-template-rows:repeat(3,44px); gap:4px; margin-top:12px; }
+  .rpad { display:grid; grid-template-columns:repeat(2,58px); grid-template-rows:repeat(2,52px); gap:8px; margin-top:12px; }
+  .zpad { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:12px; width:100%; }
+  .btn { background:#222; border:2px solid #444; border-radius:8px; color:var(--g); font-family:inherit;
+    font-size:17px; font-weight:bold; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 3px 0 #0a0a0a; cursor:pointer; }
+  .btn:active, .btn.on { background:#0a3a1a; border-color:var(--g); transform:translateY(2px); box-shadow:none; }
+  .btn.wide { padding:12px 4px; font-size:13px; }
+  #overlay { position:absolute; inset:0; background:rgba(0,10,5,.94); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; padding:20px; z-index:10; }
+  #overlay.hide { display:none; }
+  #otitle { font-size:22px; margin-bottom:10px; }
+  #odesc { font-size:13px; color:#8f8; line-height:1.6; margin-bottom:18px; max-width:420px; }
+  #ostart { background:#0a3a1a; border:2px solid var(--g); border-radius:8px; color:var(--g);
+    font-family:inherit; font-size:16px; font-weight:bold; padding:12px 30px; cursor:pointer; }
+  #hint { position:absolute; bottom:8px; left:0; right:0; text-align:center; font-size:11px; color:#585; }
+</style>
+</head>
+<body>
+<div id="screen">
+  <canvas id="cv"></canvas>
+  <div id="hint">B · 2.5D · как в прототипе пользователя, но шлюз — прямоугольник</div>
+  <div id="overlay">
+    <div id="otitle">СТЫКОВКА B</div>
+    <div id="odesc">
+      Камера следует за кораблём.<br>
+      Совместите <b>центр</b>, <b>угол</b> и <b>скорость вращения</b>,<br>
+      затем плавно подходите.<br><br>
+      <span style="color:#585">Проще, чем A: нет 3D-перспективы станции.</span>
+    </div>
+    <button id="ostart">НАЧАТЬ ЗАХОД</button>
+  </div>
+</div>
+
+<div id="deck">
+  <div class="grp">
+    <div class="ttl">МАНЕВР X/Y</div>
+    <div class="dpad">
+      <div></div><div class="btn" data-act="up">▲</div><div></div>
+      <div class="btn" data-act="left">◄</div><div></div><div class="btn" data-act="right">►</div>
+      <div></div><div class="btn" data-act="down">▼</div><div></div>
+    </div>
+  </div>
+  <div class="grp">
+    <div class="ttl">КРЕН / ТЯГА</div>
+    <div class="rpad">
+      <div class="btn" data-act="ccw">↺</div><div class="btn" data-act="cw">↻</div>
+    </div>
+    <div class="zpad">
+      <div class="btn wide" data-act="forward">ТЯГА +</div>
+      <div class="btn wide" data-act="backward">ТОРМ −</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { VERTICES, EDGES, DOCK_EDGES, DOCK_VERTICES } from './coriolis.js';
+import { createState, step, CFG, measure, isClean, failures, FAILURE_TEXT, crashDamage } from './docking-core.js';
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const otitle = document.getElementById('otitle');
+const odesc = document.getElementById('odesc');
+const ostart = document.getElementById('ostart');
+
+let W = 0, H = 0;
+function resize() {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = r.width * dpr;
+  cv.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  W = r.width; H = r.height;
+}
+window.addEventListener('resize', resize);
+
+const input = { up:false, down:false, left:false, right:false, ccw:false, cw:false, forward:false, backward:false };
+document.querySelectorAll('.btn[data-act]').forEach(btn => {
+  const act = btn.dataset.act;
+  const on = e => { e.preventDefault(); input[act]=true; btn.classList.add('on'); };
+  const off = e => { e.preventDefault(); input[act]=false; btn.classList.remove('on'); };
+  btn.addEventListener('touchstart', on, {passive:false});
+  btn.addEventListener('touchend', off, {passive:false});
+  btn.addEventListener('touchcancel', off, {passive:false});
+  btn.addEventListener('mousedown', on);
+  btn.addEventListener('mouseup', off);
+  btn.addEventListener('mouseleave', off);
+});
+
+let st = null, active = false;
+
+function start() {
+  st = createState();
+  st.player.x = st.target.x + 6;
+  st.player.y = st.target.y + 4;
+  st.player.z = CFG.START_Z;
+  st.player.vAngle = 0;
+  st.player.angle = 0;
+  active = true;
+  overlay.classList.add('hide');
+}
+ostart.addEventListener('click', start);
+
+/* ---------- отрисовка 2.5D ----------
+ * В отличие от A: станция рисуется в её собственной системе координат,
+ * без 3D-матрицы. Крен — это поворот холста на st.target.roll.
+ * Смещение X/Y и дистанция Z дают масштаб и сдвиг. Ровно как в прототипе
+ * пользователя, только вместо восьмиугольника — кубооктаэдр.
+ */
+function draw() {
+  ctx.fillStyle = '#050805';
+  ctx.fillRect(0, 0, W, H);
+  if (!st) return;
+
+  const cx = W / 2, cy = H / 2;
+  const fov = Math.min(W, H) * 1.2;
+
+  // Звёзды — фон, вращаются вместе с креном корабля
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-st.player.angle);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 90; i++) {
+    // псевдослучайные, но стабильные звёзды
+    const a = (i * 137.508) * Math.PI / 180;
+    const rr = 60 + ((i * 61) % 400);
+    ctx.globalAlpha = 0.3 + ((i * 7) % 10) / 15;
+    ctx.fillRect(Math.cos(a) * rr, Math.sin(a) * rr, 1.6, 1.6);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Станция: масштаб от дистанции, сдвиг от смещения
+  const z = Math.max(st.player.z, 3);
+  const scale = fov / (z * 4);            // 4 — «поджатие» под размер экрана
+  const dx = (st.target.x - st.player.x) * scale * 0.6;
+  const dy = (st.target.y - st.player.y) * scale * 0.6;
+
+  ctx.save();
+  ctx.translate(cx + dx, cy + dy);
+  ctx.rotate(st.target.roll);             // крен станции — то, что нужно совместить
+  ctx.scale(scale, scale);
+
+  const lw = Math.max(1.2, 1.8 / scale);
+
+  // корпус
+  ctx.strokeStyle = '#00ff66';
+  ctx.lineWidth = lw;
+  for (const [a, b] of EDGES) {
+    if (DOCK_EDGES.has(`${a}-${b}`)) continue;
+    const va = VERTICES[a], vb = VERTICES[b];
+    ctx.beginPath();
+    ctx.moveTo(va[0], va[1]);
+    ctx.lineTo(vb[0], vb[1]);
+    ctx.stroke();
+  }
+
+  // шлюз — прямоугольник
+  const dv = DOCK_VERTICES.map(i => VERTICES[i]);
+  ctx.beginPath();
+  ctx.moveTo(dv[0][0], dv[0][1]);
+  for (let i = 1; i < 4; i++) ctx.lineTo(dv[i][0], dv[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,40,20,0.9)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffaa00';
+  ctx.lineWidth = lw * 1.5;
+  ctx.stroke();
+
+  ctx.restore();
+
+  drawHUD(cx, cy);
+}
+
+function drawHUD(cx, cy) {
+  const m = measure(st);
+
+  // прицел
+  ctx.strokeStyle = 'rgba(0,255,102,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 16, cy); ctx.lineTo(cx - 6, cy);
+  ctx.moveTo(cx + 6, cy);  ctx.lineTo(cx + 16, cy);
+  ctx.moveTo(cx, cy - 16); ctx.lineTo(cx, cy - 6);
+  ctx.moveTo(cx, cy + 6);  ctx.lineTo(cx, cy + 16);
+  ctx.strokeStyle = '#00ff66';
+  ctx.stroke();
+
+  // маркер направления на створ
+  const dx = st.target.x - st.player.x;
+  const dy = st.target.y - st.player.y;
+  const okPos = m.posErr < CFG.POS_TOL_RATIO;
+  ctx.fillStyle = okPos ? '#00ff66' : '#ff3333';
+  ctx.beginPath();
+  ctx.arc(cx + Math.max(-110, Math.min(110, dx * 8)), cy + Math.max(-110, Math.min(110, dy * 8)), 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.font = 'bold 13px Courier New';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#00ff66';
+  ctx.fillText(`ДИСТ ${st.player.z.toFixed(1)}`, 16, 28);
+
+  const spd = Math.abs(st.player.vz);
+  ctx.fillStyle = spd > CFG.SPEED_TOL ? '#ff3333' : spd > CFG.SPEED_TOL*0.6 ? '#ffaa00' : '#00ff66';
+  ctx.fillText(`СКОР ${(spd*10).toFixed(1)}`, 16, 48);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = okPos ? '#00ff66' : '#ff3333';
+  ctx.fillText(`ЦЕНТР ${okPos ? 'ОК' : (m.posErr*100).toFixed(0)+'%'}`, W-16, 28);
+  ctx.fillStyle = m.angleErr < CFG.ANGLE_TOL_DEG ? '#00ff66' : '#ffaa00';
+  ctx.fillText(`УГОЛ ${m.angleErr.toFixed(0)}°`, W-16, 48);
+  ctx.fillStyle = m.spinErr < CFG.SPIN_TOL ? '#00ff66' : '#ffaa00';
+  ctx.fillText(`СИНХР ${m.spinErr.toFixed(4)}`, W-16, 68);
+
+  ctx.textAlign = 'left';
+  if (isClean(m)) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#00ff66';
+    ctx.fillText('[ ЗАХВАТ — МОЖНО ВХОДИТЬ ]', cx, H-16);
+    ctx.textAlign = 'left';
+  }
+}
+
+function finish() {
+  active = false;
+  const m = st.errors;
+  const ok = st.outcome === 'ok';
+  otitle.textContent = ok ? 'СТЫКОВКА УСПЕШНА' : 'АВАРИЯ ШЛЮЗА';
+  otitle.style.color = ok ? 'var(--g)' : 'var(--r)';
+  if (ok) {
+    odesc.innerHTML = `Чистая стыковка!<br><br>Центр: ${(m.posErr*100).toFixed(0)}%<br>Угол: ${m.angleErr.toFixed(1)}°<br>Синхр: ${m.spinErr.toFixed(4)}<br>Скорость: ${m.speedErr.toFixed(2)}`;
+  } else {
+    const f = failures(m).map(k => FAILURE_TEXT[k]).join('<br>');
+    odesc.innerHTML = `Причины:<br><span style="color:var(--a)">${f}</span><br><br>Урон: <b>${crashDamage(m)}</b>`;
+  }
+  ostart.textContent = ok ? 'ЕЩЁ ЗАХОД' : 'ПОВТОРИТЬ';
+  overlay.classList.remove('hide');
+}
+
+let last = 0;
+function loop(t) {
+  if (!last) last = t;
+  const dtMs = t - last;
+  last = t;
+  const steps = Math.min(3, Math.max(0, Math.round(dtMs / 16.67)));
+  if (active) {
+    for (let i = 0; i < steps; i++) {
+      step(st, input);
+      if (st.done) { finish(); break; }
+    }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
