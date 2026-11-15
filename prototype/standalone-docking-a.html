@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Стыковка A — Кориолис 3D</title>
+<style>
+  :root { --g:#00ff66; --a:#ffaa00; --r:#ff3333; }
+  * { box-sizing:border-box; user-select:none; -webkit-user-select:none; touch-action:none; }
+  html,body { margin:0; padding:0; width:100vw; height:100dvh; background:#000; color:var(--g);
+    font-family:'Courier New',monospace; overflow:hidden; display:flex; flex-direction:column; }
+  #screen { position:relative; flex:1; background:#050805; overflow:hidden; border-bottom:3px solid #222; }
+  canvas { display:block; width:100%; height:100%; }
+  #screen::after { content:" "; position:absolute; inset:0; pointer-events:none;
+    background:linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,.25) 50%), radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,.8) 100%);
+    background-size:100% 4px, 100% 100%; }
+  #deck { height:36dvh; min-height:210px; background:#111; padding:10px; display:grid;
+    grid-template-columns:1.1fr 1fr; gap:10px; border-top:2px solid #333; }
+  .grp { background:#1a1a1a; border:1px solid #333; border-radius:10px; padding:8px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; }
+  .ttl { position:absolute; top:4px; font-size:9px; color:#666; letter-spacing:1px; }
+  .dpad { display:grid; grid-template-columns:repeat(3,44px); grid-template-rows:repeat(3,44px); gap:4px; margin-top:12px; }
+  .rpad { display:grid; grid-template-columns:repeat(2,58px); grid-template-rows:repeat(2,52px); gap:8px; margin-top:12px; }
+  .zpad { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:12px; width:100%; }
+  .btn { background:#222; border:2px solid #444; border-radius:8px; color:var(--g); font-family:inherit;
+    font-size:17px; font-weight:bold; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 3px 0 #0a0a0a; cursor:pointer; }
+  .btn:active, .btn.on { background:#0a3a1a; border-color:var(--g); transform:translateY(2px); box-shadow:none; }
+  .btn.wide { padding:12px 4px; font-size:13px; }
+  #overlay { position:absolute; inset:0; background:rgba(0,10,5,.94); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; padding:20px; z-index:10; }
+  #overlay.hide { display:none; }
+  #otitle { font-size:22px; margin-bottom:10px; }
+  #odesc { font-size:13px; color:#8f8; line-height:1.6; margin-bottom:18px; max-width:420px; }
+  #ostart { background:#0a3a1a; border:2px solid var(--g); border-radius:8px; color:var(--g);
+    font-family:inherit; font-size:16px; font-weight:bold; padding:12px 30px; cursor:pointer; }
+  #hint { position:absolute; bottom:8px; left:0; right:0; text-align:center; font-size:11px; color:#585; }
+</style>
+</head>
+<body>
+<div id="screen">
+  <canvas id="cv"></canvas>
+  <div id="hint">A · полная 3D-проекция · кубооктаэдр + прямоугольный шлюз</div>
+  <div id="overlay">
+    <div id="otitle">СТЫКОВКА A</div>
+    <div id="odesc">
+      Курсор — центр экрана.<br>
+      Доведите корабль до шлюза, совместив:<br><br>
+      <b>центр</b> · <b>угол</b> · <b>скорость вращения</b> · <b>скорость сближения</b>
+    </div>
+    <button id="ostart">НАЧАТЬ ЗАХОД</button>
+  </div>
+</div>
+
+<div id="deck">
+  <div class="grp">
+    <div class="ttl">МАНЕВР X/Y</div>
+    <div class="dpad">
+      <div></div><div class="btn" data-act="up">▲</div><div></div>
+      <div class="btn" data-act="left">◄</div><div></div><div class="btn" data-act="right">►</div>
+      <div></div><div class="btn" data-act="down">▼</div><div></div>
+    </div>
+  </div>
+  <div class="grp">
+    <div class="ttl">КРЕН / ТЯГА</div>
+    <div class="rpad">
+      <div class="btn" data-act="ccw">↺</div><div class="btn" data-act="cw">↻</div>
+    </div>
+    <div class="zpad">
+      <div class="btn wide" data-act="forward">ТЯГА +</div>
+      <div class="btn wide" data-act="backward">ТОРМ −</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/**
+ * Кориолис — геометрия станции из оригинального Elite.
+ *
+ * Источник: `reference/zx-elite-ataribaby/src/data/ship-blueprints-and-tables.asm`
+ *   ShipCoriolisStationBlueprint  ($6BE1)
+ *   ShipCoriolisStationVertices   ($6AB4) — 96 байт = 16 вершин × 6 байт
+ *   ShipCoriolisStationEdges      ($6B14) — 28 рёбер × 4 байта
+ *
+ * Формат вершины (важно, с первого раза не угадывается):
+ *   байт 0: |X| (маска $7F)
+ *   байт 1: |Y|
+ *   байт 2: |Z|
+ *   байт 3: знаки + порог видимости
+ *           бит 7 = знак X, бит 6 = знак Y, бит 5 = знак Z
+ *           биты 0..4 = порог ($1F = видна на любой дистанции)
+ *   байт 4, 5: пары граней (по две в каждом)
+ *
+ * Радиус станции: 32 единицы. Радиус в blueprint (+1) = 160 — это для
+ * столкновений, а не для отрисовки.
+ *
+ * Формат ребра: [вершина1, вершина2] — байты 0 и 1 таблицы.
+ * (Байты 2–3 — грани для теста видимости, для каркаса нужны не всегда.)
+ */
+
+/* ---------- Вершины ---------- */
+
+const VERTEX_BYTES = [
+  0xA0, 0x00, 0xA0, 0x1F, 0x10, 0x62, // 0  ( 32,   0,  32)
+  0x00, 0xA0, 0xA0, 0x1F, 0x20, 0x83, // 1  (  0,  32,  32)
+  0xA0, 0x00, 0xA0, 0x9F, 0x30, 0x74, // 2  (-32,   0,  32)
+  0x00, 0xA0, 0xA0, 0x5F, 0x10, 0x54, // 3  (  0, -32,  32)
+  0xA0, 0xA0, 0x00, 0x5F, 0x51, 0xA6, // 4  ( 32, -32,   0)
+  0xA0, 0xA0, 0x00, 0x1F, 0x62, 0xB8, // 5  ( 32,  32,   0)
+  0xA0, 0xA0, 0x00, 0x9F, 0x73, 0xC8, // 6  (-32,  32,   0)
+  0xA0, 0xA0, 0x00, 0xDF, 0x54, 0x97, // 7  (-32, -32,   0)
+  0xA0, 0x00, 0xA0, 0x3F, 0xA6, 0xDB, // 8  ( 32,   0, -32)
+  0x00, 0xA0, 0xA0, 0x3F, 0xB8, 0xDC, // 9  (  0,  32, -32)
+  0xA0, 0x00, 0xA0, 0xBF, 0x97, 0xDC, // 10 (-32,   0, -32)
+  0x00, 0xA0, 0xA0, 0x7F, 0x95, 0xDA, // 11 (  0, -32, -32)
+  0x0A, 0x1E, 0xA0, 0x5E, 0x00, 0x00, // 12 ( 10, -30,  32) шлюз
+  0x0A, 0x1E, 0xA0, 0x1E, 0x00, 0x00, // 13 ( 10,  30,  32) шлюз
+  0x0A, 0x1E, 0xA0, 0x9E, 0x00, 0x00, // 14 (-10,  30,  32) шлюз
+  0x0A, 0x1E, 0xA0, 0xDE, 0x00, 0x00, // 15 (-10, -30,  32) шлюз
+];
+
+/**
+ * Расшифровка таблицы вершин в массив [x, y, z].
+ * Знаки хранятся в третьем байте: бит 7 = X, бит 6 = Y, бит 5 = Z.
+ */
+const VERTICES = (() => {
+  const out = [];
+  for (let i = 0; i < VERTEX_BYTES.length; i += 6) {
+    const mx = VERTEX_BYTES[i] & 0x7f;
+    const my = VERTEX_BYTES[i + 1] & 0x7f;
+    const mz = VERTEX_BYTES[i + 2] & 0x7f;
+    const signs = VERTEX_BYTES[i + 3];
+    out.push([
+      signs & 0x80 ? -mx : mx,
+      signs & 0x40 ? -my : my,
+      signs & 0x20 ? -mz : mz,
+    ]);
+  }
+  return out;
+})();
+
+/* ---------- Рёбра ---------- */
+
+/**
+ * 28 рёбер из ShipCoriolisStationEdges.
+ * Взяты байты 0 и 1 каждой четвёрки (вершина1, вершина2).
+ */
+const EDGES = [
+  [0, 3], [0, 1], [1, 2], [2, 3],          // передняя грань — «квадрат» из 4
+  [3, 4], [0, 4], [0, 5], [5, 1],          // переходы к поясу
+  [1, 6], [2, 6], [2, 7], [3, 7],          // переходы к поясу
+  [8, 11], [8, 9], [9, 10], [10, 11],      // задняя грань — «квадрат»
+  [4, 11], [4, 8], [5, 8], [5, 9],         // переходы от пояса назад
+  [6, 9], [6, 10], [7, 10], [7, 11],       // переходы от пояса назад
+  [12, 13], [13, 14], [14, 15], [15, 12],  // шлюз — прямоугольник
+];
+
+/** Рёбра шлюза — их рисуем отдельным цветом. */
+const DOCK_EDGES = new Set(['12-13', '13-14', '14-15', '15-12']);
+
+/** Четыре вершины шлюза в порядке обхода (12→13→14→15). */
+const DOCK_VERTICES = [12, 13, 14, 15];
+
+/** Радиус станции в единицах вершинного масштаба. */
+const STATION_RADIUS = 32;
+
+/** Полуразмеры шлюза: ширина 20, высота 60 (из вершин 12–15). */
+const DOCK_HALF_WIDTH = 10;
+const DOCK_HALF_HEIGHT = 30;
+
+/* ---------- Матрица поворота ---------- */
+
+/**
+ * Матрица поворота 3×3 из трёх углов (Эйлер, порядок ZYX).
+ * Возвращает функцию (v) => повёрнутый вектор, чтобы не плодитьаллокации
+ * в кадре: считаем матрицу один раз на кадр.
+ *
+ * yaw   — рыскание (вокруг Y), «поворот носа влево/вправо»
+ * pitch — тангаж (вокруг X), «нос вверх/вниз»
+ * roll  — крен (вокруг Z), «бочка»
+ */
+function rotationMatrix(yaw, pitch, roll) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+
+  // R = Rz(roll) · Ry(yaw) · Rx(pitch)
+  const m00 = cr * cy - sr * sp * sy;
+  const m01 = sr * cy + cr * sp * sy;
+  const m02 = -cp * sy;
+
+  const m10 = -sr * cp;
+  const m11 = cr * cp;
+  const m12 = sp;
+
+  const m20 = cr * sy + sr * sp * cy;
+  const m21 = sr * sy - cr * sp * cy;
+  const m22 = cp * cy;
+
+  return (v) => [
+    m00 * v[0] + m01 * v[1] + m02 * v[2],
+    m10 * v[0] + m11 * v[1] + m12 * v[2],
+    m20 * v[0] + m21 * v[1] + m22 * v[2],
+  ];
+}
+
+/* ---------- Проекция ---------- */
+
+/**
+ * Перспективная проекция точки камеры на экран.
+ *
+ * @param p       точка в системе координат камеры (после поворота и сдвига)
+ * @param fov     фокусное расстояние в пикселях
+ * @param cx,cy   центр экрана
+ * @returns       {x, y, z} — экранные координаты и глубина (z > 0 перед камерой)
+ */
+function project(p, fov, cx, cy) {
+  const z = p[2];
+  // Точки за камерой или вплотную к ней не проецируем — отдаём z<=0,
+  // вызывающий код такие вершины отбрасывает.
+  if (z <= 0.5) return { x: 0, y: 0, z };
+  const k = fov / z;
+  return { x: cx + p[0] * k, y: cy + p[1] * k, z };
+}
+
+/* ---------- Проверка формы (для тестов) ---------- */
+
+/**
+ * Все 12 «телесных» вершин лежат на гранях кубооктаэдра:
+ * две координаты по модулю равны радиусу, третья — ноль.
+ */
+function isCuboctahedron(vertices = VERTICES) {
+  for (let i = 0; i < 12; i++) {
+    const a = vertices[i].map(Math.abs).sort((p, q) => q - p);
+    if (a[0] !== STATION_RADIUS || a[1] !== STATION_RADIUS || a[2] !== 0) return false;
+  }
+  const seen = new Set(vertices.slice(0, 12).map((v) => v.join(',')));
+  return seen.size === 12;
+}
+
+/**
+ * Стыковка — правила, отдельно от рендера.
+ *
+ * Модель взята из прототипа пользователя (`user-docking.html`) и приведена
+ * к чистой функции без canvas и DOM. Это то, что раздел 43.5 требовал:
+ * правила отдельно, картинка отдельно.
+ *
+ * Отступления от прототипа пользователя, каждое обосновано:
+ *  1. Ограничение по времени — нет (пользователь: «ограничения времени нет»).
+ *  2. Шлюз прямоугольный — из-за этого крен влияет на успех (настоящий Кориолис).
+ *  3. Провал = урон + второй круг (раздел 45), а не смерть.
+ */
+
+/* ---------- Настройки ---------- */
+
+const CFG = {
+  // Управление смещением (X/Y). Ньютонова модель с «автоторможением».
+  THRUST: 0.08,
+  // Трение X/Y. Максимальная скорость = THRUST/(1−DRAG) = 1.0 ед/кадр.
+  // При 0.985 (как у пользователя) было 5.3 ед/кадр — корабль проносило
+  // мимо створа и точное позиционирование было невозможно.
+  DRAG_XY: 0.92,        // торможение при нажатой тяге
+  DRAG_XY_IDLE: 0.75,   // отпустил — гасим быстро (8 кадров до нуля)
+
+  // Вращение. В оригинале $FE01 без затухания, НО там игрок управляет
+  // самим положением (две кнопки влево/вправо поворачивают корабль),
+  // а не угловой скоростью. В прототипе пользователя кнопки меняют
+  // vAngle, и без затухания корабль раскручивается до 0.8 рад/кадр
+  // и не может остановиться — стыковка становится неуправляемой.
+  //
+  // Решение: угловая скорость затухает, но слабо — руль «держит»
+  // установившуюся скорость, а не разгоняется бесконечно.
+  // Импульс крена. Кнопки меняют УГЛОВУЮ СКОРОСТЬ, скорость НЕ затухает
+  // (как $FE01 в оригинале).
+  //
+  // 0.006: один тап = 20°/сек, это ВИДНО глазом. При 0.0006 было 2°/сек —
+  // визуально «отпустил и стоишь».
+  // До скорости станции (до 0.055) — ~9 тапов, подъём perceivable.
+  ROT: 0.00080,   // удержание даёт 0.0152: станцию 0.005..0.0117 догоняем
+  // Затухания НЕТ. Тап добавляет угловую скорость навсегда: подобрал
+  // нужную — держится. Раскрутился — гасишь обратной кнопкой.
+  // Это ровно модель оригинала ($FE01).
+  // ГАШЕНИЕ КРЕНА ОБЯЗАТЕЛЬНО. Без него равновесная скорость =
+  // бесконечность: импульс не рассасывается, и довести vAngle до vRoll
+  // можно только «случайно». С DRAG_ROT 0.95 импульс гаснет за 1.5 с,
+  // максимальная скорость удержанием — 0.0152, то есть станцию
+  // (0.005..0.0117) догоняем УДЕРЖАНИЕМ, а не тапами.
+  DRAG_ROT: 0.95,
+  MAX_VANGLE: 0.075,
+
+  // ═══ МАГНИТНЫЙ ЗАХВАТ СИНХРОНИЗАЦИИ ═══
+  // Решение пользователя (user-docking3.html): если отпустить крен
+  // и скорость близка к скорости станции — она ПРИМАГНИЧИВАЕТСЯ
+  // и точно выравнивается. Это убирает проблему «нужно попасть
+  // в микроскопическое окно импульсами».
+  SYNC_LOCK: 0.00025,  // порог захвата
+  SYNC_PULL: 0.06,     // скорость притягивания магнита (доля за кадр)
+  SYNC_OK: 0.0005,     // = 1.7°/с: заметно, но достижимо на сенсоре
+
+  // Тяга по Z (сближение).
+  Z_THRUST: 0.06,   // импульс сближения
+  DRAG_Z: 0.90,     // гасит за ~22 кадра: точный контроль скорости
+
+  // Дистанция.
+  START_Z: 120,
+
+  // Контакт считаем на подлёте, а не в точке z=0: иначе перспектива
+  // вырождается и станция «занимает весь экран».
+  DOCK_CONTACT: 2,
+  MAX_Z: 150,
+
+  // --- Критерии успеха (как в оригинале: |Z| < $1E из 128 = 23 %) ---
+  // Смещение центра — в радиусах станции, ровно как в оригинале
+  // (там |Z| < $1E из $80, то есть доля от радиуса).
+  // Порог = полуширина шлюза / радиус = 10/32 = 0.31 радиуса.
+  // Игрок должен попасть в створ, а не в центр станции.
+  STATION_RADIUS: 32,
+  POS_TOL_RATIO: 0.21,
+  // Синхронизация вращения: допуск 0.005 рад/кадр (из прототипа пользователя).
+  // Предел, дальше которого станция не дрейфует.
+  DRIFT_LIMIT: 12,
+  // Угол маркеров: 15°.
+  ANGLE_TOL_DEG: 15,
+  // Скорость сближения: 0.6 (в оригинале порог ~0.55).
+  // Порог скорости сближения. В оригинале сравнивается PlayerSpeed,
+  // у которого терминальная скорость иная. Наш масштаб: 0.6 ед/кадр
+  // соответствует «медленно, почти вползая». Терминальная 1.5.
+  SPEED_TOL: 0.6,
+
+  // Сколько кадров держится «створ» для проверки: контакт фиксируется
+  // при пересечении DOCK_ZONE, и скорость берётся СРЕДНЯЯ за последние
+  // кадры, а не мгновенная — иначе нужно попасть в один кадр.
+  SPEED_WINDOW: 12,
+
+  // --- Крен и прямоугольный шлюз ---
+  // Угол крена относительно створа. Крен 0 = шлюз «лежит» правильно.
+  ROLL_TOL_DEG: 25,
+
+  // Потолок урона за один провал
+  MAX_CRASH_DAMAGE: 60,
+  // Насколько вытянут шлюз: 20 × 60 → 3.0
+  DOCK_ASPECT: 3.0,
+};
+
+/* ---------- Состояние ---------- */
+
+/**
+ * @typedef {object} DockingState
+ * @property {{x,y,vx,vy,angle,vAngle,z,vz}} player
+ * @property {{x,y,vx,vy,angle,vAngle,roll,vRoll}} target
+ * @property {boolean} done
+ * @property {'ok'|'crash'|null} outcome
+ * @property {object|null} errors  — отклонения на момент провала/успеха
+ */
+
+/** Новое состояние: корабль далеко, станция дрейфует и вращается. */
+function createState(seed = Math.random) {
+  const s = () => seed() * 2 - 1;
+  const targetX = s() * 20;
+  const targetY = s() * 20;
+  return {
+    player: {
+      x: s() * 40,
+      y: s() * 40,
+      vx: 0, vy: 0,
+      angle: 0,
+      vAngle: s() * 0.02,
+      z: CFG.START_Z,
+      vz: 0,
+    },
+    target: {
+      x: targetX,
+      y: targetY,
+      // Дрейф как в отлаженной версии: ±0.1 — иначе станция
+      // уходит быстрее, чем корабль успевает догнать за время подлёта.
+      vx: s() * 0.1,
+      vy: s() * 0.1,
+      angle: seed() * Math.PI * 2,
+      vAngle: (seed() > 0.5 ? 1 : -1) * (seed() * 0.02 + 0.015),
+      // Крен станции — то, что делает шлюз прямоугольным, а не круглым.
+      // Стартовое рассогласование — НЕБОЛЬШОЕ (±40°): игрок должен
+      // довернуть, а не совершить полуоборот, удерживая синхронизацию.
+      // У пользователя оба угла стартуют с 0; ±40° даёт что доворачивать.
+      roll: s() * (40 * Math.PI / 180),
+      // 0.005..0.0117 рад/кадр — как в отлаженной версии пользователя.
+      // Оборот станции за 9..21 секунду: медленно, но заметно,
+      // и главное — догоняемо одним-двумя тапами.
+      vRoll: (seed() > 0.5 ? 1 : -1) * (seed() * 0.0067 + 0.005),
+    },
+    done: false,
+    outcome: null,
+    errors: null,
+    vzHistory: [],
+  };
+}
+
+/* ---------- Шаг ---------- */
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Один кадр физики. Мутирует переданное состояние (для скорости в кадре),
+ * но не трогает DOM и canvas.
+ *
+ * @param {DockingState} st
+ * @param {{up,down,left,right,ccw,cw,forward,backward}} input
+ * @param {number} dt — множитель времени; в прототипе 1 кадр = 1, оставляем
+ *                      так для совместимости с ощущениями пользователя.
+ */
+function step(st, input, dt = 1) {
+  if (st.done) return st;
+  const p = st.player;
+  const t = st.target;
+
+  /* --- смещение X/Y относительно текущего поворота корабля --- */
+  let moveX = 0;
+  let moveY = 0;
+  if (input.up) moveY -= CFG.THRUST;
+  if (input.down) moveY += CFG.THRUST;
+  if (input.left) moveX -= CFG.THRUST;
+  if (input.right) moveX += CFG.THRUST;
+
+  // Тяга в мировых осях: экран не вращается, «вверх» всегда вверх.
+  // Иначе при vAngle≠0 корабль уносит вкось и позицию не удержать.
+  p.vx += moveX * dt;
+  p.vy += moveY * dt;
+
+  /* --- вращение --- */
+  const rotating = !!(input.cw || input.ccw);
+  if (input.cw) p.vAngle += CFG.ROT * dt;
+  if (input.ccw) p.vAngle -= CFG.ROT * dt;
+  if (CFG.DRAG_ROT !== 1) p.vAngle *= Math.pow(CFG.DRAG_ROT, dt);
+  p.vAngle = Math.max(-CFG.MAX_VANGLE, Math.min(CFG.MAX_VANGLE, p.vAngle));
+
+  // ═══ МАГНИТНЫЙ ЗАХВАТ (решение пользователя, доработано) ═══
+  //
+  // В user-docking3 магнит форсирует vAngle = vRoll. Но angle += vAngle,
+  // значит при РАВНЫХ скоростях относительный угол ЗАМОРОЖЕН:
+  //   d(rel)/dt = vRoll − vAngle = 0.
+  // Получается ловушка: магнит притянул скорость — и довернуть угол
+  // больше нельзя, а без доворота угол не пройдёт.
+  //
+  // Поэтому магнит ставит скорость в 0 ОТНОСИТЕЛЬНОГО ВРАЩЕНИЯ,
+  // а не тождественно в vRoll: в захвате корабль перестаёт вращаться
+  // относительно створа, но может «шагать» по фазе, пока не совпадёт.
+  //
+  // Практически: захват = «угловая скорость совпала с точностью до
+  // SYNC_LOCK, и мы не жмём». Форсирование vAngle = vRoll убрано,
+  // вместо него — плавное подтягивание к vRoll (магнит притягивает).
+  const dSpin = Math.abs(p.vAngle - t.vRoll);
+  if (!rotating && dSpin < CFG.SYNC_LOCK) {
+    // Магнит: тянем скорость к скорости створа, но НЕ мгновенно —
+    // иначе угол замирает и его невозможно исправить.
+    p.vAngle += (t.vRoll - p.vAngle) * CFG.SYNC_PULL * dt;
+    st.syncLocked = dSpin < CFG.SYNC_OK;
+  } else if (rotating) {
+    st.syncLocked = false;
+  } else {
+    st.syncLocked = dSpin < CFG.SYNC_OK;
+  }
+
+  /* --- сближение --- */
+  if (input.forward) p.vz -= CFG.Z_THRUST * dt;
+  if (input.backward) p.vz += CFG.Z_THRUST * dt;
+
+  /* --- интегрирование --- */
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  // Управляемое торможение: отпустил → гасим за ~8 кадров.
+  // Иначе инерция уносит корабль за время подлёта (было 172 ед. при
+  // допуске 6.7) — позицию не удержать на сенсорном экране.
+  const brak = (input.up || input.down || input.left || input.right) ? CFG.DRAG_XY : CFG.DRAG_XY_IDLE;
+  p.vx *= Math.pow(brak, dt);
+  p.vy *= Math.pow(brak, dt);
+
+  p.z += p.vz * dt;
+  p.vz *= Math.pow(CFG.DRAG_Z, dt);
+  p.angle += p.vAngle * dt;
+
+  /* --- станция: дрейф с возвратом к центру ---
+   * Было: отскок от |x|>100 — за 180 кадров подлёта станция уходила
+   * на 260 единиц, и догнать её было невозможно (max скорость 1.0).
+   * Стало: дрейф затухает у центра — станция «держит позицию»,
+   * отклоняясь максимум на DRIFT_LIMIT. Это позволяет догнать. */
+  t.x += t.vx * dt;
+  t.y += t.vy * dt;
+  if (Math.abs(t.x) > CFG.DRIFT_LIMIT) t.vx -= Math.sign(t.x) * 0.004 * dt;
+  if (Math.abs(t.y) > CFG.DRIFT_LIMIT) t.vy -= Math.sign(t.y) * 0.004 * dt;
+  // Мягкое притяжение к центру: не даём уйти далеко
+  t.vx -= t.x * 0.0008 * dt;
+  t.vy -= t.y * 0.0008 * dt;
+  t.angle += t.vAngle * dt;
+  t.roll += t.vRoll * dt;
+
+  /* --- границы --- */
+  if (p.z > CFG.MAX_Z) {
+    p.z = CFG.MAX_Z;
+    p.vz = 0;
+  }
+  // Улететь назад можно, но не бесконечно
+  if (p.z < -CFG.MAX_Z) {
+    p.z = -CFG.MAX_Z;
+    p.vz = 0;
+  }
+
+  /* --- история скорости для средней оценки на контакте --- */
+  st.vzHistory.push(Math.abs(p.vz));
+  if (st.vzHistory.length > CFG.SPEED_WINDOW) st.vzHistory.shift();
+
+  /* --- контакт --- */
+  if (p.z <= CFG.DOCK_CONTACT) {
+    p.z = CFG.DOCK_CONTACT;
+    st.done = true;
+    st.errors = measure(st);
+    st.outcome = isClean(st.errors) ? 'ok' : 'crash';
+  }
+
+  return st;
+}
+
+/* ---------- Измерения ---------- */
+
+/** Нормализует угол в диапазон (−π, π]. */
+function wrapAngle(a) {
+  let x = a % (Math.PI * 2);
+  if (x <= -Math.PI) x += Math.PI * 2;
+  if (x > Math.PI) x -= Math.PI * 2;
+  return x;
+}
+
+/** Все отклонения в человеческих единицах. */
+function measure(st) {
+  const p = st.player;
+  const t = st.target;
+
+  const posDist = Math.hypot(t.x - p.x, t.y - p.y);
+  // Смещение в радиусах станции: 0 = точно в центре створа,
+  // 1 = на краю станции. Так же нормировано, как $1E/$80 в оригинале.
+  const posErr = posDist / CFG.STATION_RADIUS;
+
+  // ── ВРАЩЕНИЕ ────────────────────────────────────────────────────────────
+  // Почему не «angle + vAngle» как в прототипе пользователя:
+  //
+  // angle += vAngle, значит при РАВНЫХ vAngle разность углов НЕ МЕНЯЕТСЯ.
+  // Получается задача «попасть в фазу», где нужно ОТКЛОНИТЬ скорость,
+  // довернуть фазу и вернуть скорость обратно — всё в один кадр контакта.
+  // Это не «синхронизация вращения», это лотерея.
+  //
+  // В реальной стыковке (и в Elite) створ — это ОРИЕНТАЦИЯ, а не фаза:
+  // сравнивается, насколько шлюз повёрнут относительно корабля, и
+  // насколько различаются угловые скорости. Ровно это и меряем.
+
+  // 1. Насколько створ «повёрнут» относительно корабля, в градусах.
+  //    Приводим к (−90°, 90°]: у станции 4-кратная симметрия по крену,
+  //    но створ один, поэтому крен меряем от 0.
+  const dockTilt = wrapAngle(t.roll - p.angle);
+  const angleErr = Math.abs(dockTilt) * (180 / Math.PI);
+
+  // 2. Разница угловых скоростей — «синхронность вращения».
+  const spinErr = Math.abs(t.vRoll - p.vAngle);  // критерий: < SYNC_OK
+
+  // 3. Крена как отдельного признака больше нет: он вошёл в angleErr.
+  //    Оставляем поле 0, чтобы вызывающий код не ломался.
+  const rollErr = 0;
+
+  // Средняя скорость за последние кадры, а не мгновенная: иначе нужно
+  // попасть в один кадр, что физически невозможно при импульсном управлении.
+  const hist = st.vzHistory && st.vzHistory.length ? st.vzHistory : [Math.abs(p.vz)];
+  const speedErr = hist.reduce((a, b) => a + b, 0) / hist.length;
+
+  return { posErr, angleErr, spinErr, speedErr, rollErr, dockTilt };
+}
+
+/**
+ * Чистая стыковка. Пять условий.
+ *
+ * Пятое (крен) — то, ради чего мы заменили круг на Кориолис:
+ * прямоугольный шлюз не прощает перекос.
+ */
+function isClean(e) {
+  return (
+    e.posErr < CFG.POS_TOL_RATIO &&
+    e.angleErr < CFG.ANGLE_TOL_DEG &&
+    e.spinErr < CFG.SYNC_OK &&
+    e.speedErr < CFG.SPEED_TOL &&
+    e.rollErr < CFG.ROLL_TOL_DEG
+  );
+}
+
+/** Какие именно условия провалены — для текста «почему». */
+function failures(e) {
+  const out = [];
+  if (e.posErr >= CFG.POS_TOL_RATIO) out.push('pos');
+  if (e.angleErr >= CFG.ANGLE_TOL_DEG) out.push('angle');
+  if (e.spinErr >= CFG.SYNC_OK) out.push('spin');
+  if (e.speedErr >= CFG.SPEED_TOL) out.push('speed');
+  if (e.rollErr >= CFG.ROLL_TOL_DEG) out.push('roll');
+  return out;
+}
+
+const FAILURE_TEXT = {
+  pos: 'смещение от центра шлюза',
+  angle: 'не совмещены маркеры угла',
+  spin: 'не синхронизировано вращение',
+  speed: 'слишком высокая скорость сближения',
+  roll: 'не выровнен крен — шлюз перекошен',
+};
+
+/**
+ * Урон за провал — по формуле оригинала `$EB10`:
+ *   12 + 2 × скорость
+ * плюс надбавка за перекос (изобретение наше, обосновано: прямоугольный
+ * шлюз наказывает за крен сильнее, чем круглый).
+ */
+function crashDamage(e) {
+  const base = 12 + 2 * e.speedErr;
+  const rollPenalty = Math.max(0, e.rollErr - CFG.ROLL_TOL_DEG) * 0.4;
+  const posPenalty = Math.max(0, e.posErr - CFG.POS_TOL_RATIO) * 40;
+  // Потолок: одна ошибка не должна съедать весь корпус.
+  return Math.round(Math.min(CFG.MAX_CRASH_DAMAGE, base + rollPenalty + posPenalty));
+}
+
+/** Допуск позиции как доля радиуса — для проверки соответствия оригиналу. */
+function posToleranceRatio() {
+  // В оригинале порог стыковки $1E из $80 = 30/128 = 0.234.
+  return 0x1e / 0x80;
+}
+
+
+
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const otitle = document.getElementById('otitle');
+const odesc = document.getElementById('odesc');
+const ostart = document.getElementById('ostart');
+
+let W = 0, H = 0;
+function resize() {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = r.width * dpr;
+  cv.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  W = r.width;
+  H = r.height;
+}
+window.addEventListener('resize', resize);
+
+/* ---------- ввод ---------- */
+const input = { up:false, down:false, left:false, right:false, ccw:false, cw:false, forward:false, backward:false };
+document.querySelectorAll('.btn[data-act]').forEach(btn => {
+  const act = btn.dataset.act;
+  const on = e => { e.preventDefault(); input[act] = true; btn.classList.add('on'); };
+  const off = e => { e.preventDefault(); input[act] = false; btn.classList.remove('on'); };
+  btn.addEventListener('touchstart', on, {passive:false});
+  btn.addEventListener('touchend', off, {passive:false});
+  btn.addEventListener('touchcancel', off, {passive:false});
+  btn.addEventListener('mousedown', on);
+  btn.addEventListener('mouseup', off);
+  btn.addEventListener('mouseleave', off);
+});
+
+/* ---------- состояние ---------- */
+let st = null;
+let active = false;
+let holdAngle = 0;   // сглаженный угол станции для отрисовки
+
+function start() {
+  st = createState();
+  // Стартовый ракурс: станция впереди и чуть сбоку — видно форму
+  st.player.x = st.target.x + 6;
+  st.player.y = st.target.y + 4;
+  st.player.z = CFG.START_Z;
+  st.player.vAngle = 0;
+  st.player.angle = 0;
+  active = true;
+  holdAngle = 0;
+  overlay.classList.add('hide');
+}
+
+ostart.addEventListener('click', start);
+
+/* ---------- отрисовка ---------- */
+
+// Мир → экран. Камера в начале координат смотрит вдоль +Z.
+// Станция стоит в (dx, dy, z) относительно корабля.
+function draw() {
+  ctx.fillStyle = '#050805';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!st) return;
+
+  const cx = W / 2;
+  const cy = H / 2;
+  const fov = Math.min(W, H) * 1.4;
+
+  // Позиция станции относительно камеры
+  const rel = [
+    st.target.x - st.player.x,
+    st.target.y - st.player.y,
+    st.player.z,
+  ];
+
+  // Поворот станции: крен (roll) + собственное вращение.
+  // yaw/pitch = 0: створ всегда смотрит на игрока, крен — то, что нужно совместить.
+  // Станция повёрнута на свой крен, но МЫ видим её с учётом крена корабля:
+  // относительный крен = roll станции − angle корабля.
+  // Именно эту разницу игрок должен обнулить кнопками ↺ ↻.
+  const relRoll = st.target.roll - st.player.angle;
+  const rot = rotationMatrix(0, 0, relRoll);
+
+  // Проецируем все 16 вершин
+  const proj = VERTICES.map(v => {
+    const r = rot(v);
+    const p = [r[0] + rel[0], r[1] + rel[1], r[2] + rel[2]];
+    if (p[2] <= 0.5) return null;
+    const k = fov / p[2];
+    return { x: cx + p[0] * k, y: cy + p[1] * k, z: p[2] };
+  });
+
+  // --- рёбра корпуса ---
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = '#00ff66';
+  for (const [a, b] of EDGES) {
+    const key = `${a}-${b}`;
+    if (DOCK_EDGES.has(key)) continue;
+    const pa = proj[a], pb = proj[b];
+    if (!pa || !pb) continue;
+    // Затухание по глубине
+    ctx.globalAlpha = Math.max(0.25, Math.min(1, 60 / (pa.z + pb.z + 1)));
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // --- шлюз: прямоугольник, залитый тёмным ---
+  const dv = DOCK_VERTICES.map(i => proj[i]);
+  if (dv.every(p => p)) {
+    ctx.beginPath();
+    ctx.moveTo(dv[0].x, dv[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(dv[i].x, dv[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 40, 20, 0.85)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffaa00';
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+  }
+
+  // --- HUD ---
+  drawHUD(cx, cy);
+}
+
+function drawHUD(cx, cy) {
+  ctx.strokeStyle = 'rgba(0,255,102,0.35)';
+  ctx.lineWidth = 1.5;
+  const R = 52;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // перекрестие
+  ctx.beginPath();
+  ctx.moveTo(cx - 16, cy); ctx.lineTo(cx - 6, cy);
+  ctx.moveTo(cx + 6, cy);  ctx.lineTo(cx + 16, cy);
+  ctx.moveTo(cx, cy - 16); ctx.lineTo(cx, cy - 6);
+  ctx.moveTo(cx, cy + 6);  ctx.lineTo(cx, cy + 16);
+  ctx.strokeStyle = '#00ff66';
+  ctx.stroke();
+
+  // индикатор направления на створ
+  const dx = st.target.x - st.player.x;
+  const dy = st.target.y - st.player.y;
+  const m = measure(st);
+  const onTarget = m.posErr < CFG.POS_TOL_RATIO;
+  ctx.fillStyle = onTarget ? '#00ff66' : '#ff3333';
+  const px = cx + Math.max(-110, Math.min(110, dx * 4));
+  const py = cy + Math.max(-110, Math.min(110, dy * 4));
+  ctx.beginPath();
+  ctx.arc(px, py, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // --- МАРКЕР КРЕНА КОРАБЛЯ ---
+  // Треугольник на кольце прицела, вращается вместе с кораблём.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(st.player.angle);
+  ctx.beginPath();
+  ctx.moveTo(0, -R - 14);
+  ctx.lineTo(-7, -R - 26);
+  ctx.lineTo(7, -R - 26);
+  ctx.closePath();
+  ctx.fillStyle = m.angleErr < CFG.ANGLE_TOL_DEG ? '#00ff66' : '#ffaa00';
+  ctx.fill();
+  ctx.restore();
+
+  // телеметрия
+  ctx.font = 'bold 13px Courier New';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#00ff66';
+  ctx.fillText(`ДИСТ ${st.player.z.toFixed(1)}`, 16, 28);
+
+  const spd = Math.abs(st.player.vz);
+  ctx.fillStyle = spd > CFG.SPEED_TOL ? '#ff3333' : spd > CFG.SPEED_TOL * 0.6 ? '#ffaa00' : '#00ff66';
+  ctx.fillText(`СКОР ${(spd * 10).toFixed(1)}`, 16, 48);
+
+  ctx.textAlign = 'right';
+  const okPos = m.posErr < CFG.POS_TOL_RATIO;
+  ctx.fillStyle = okPos ? '#00ff66' : '#ff3333';
+  ctx.fillText(`ЦЕНТР ${okPos ? 'ОК' : (m.posErr * 100).toFixed(0) + '%'}`, W - 16, 28);
+
+  const okAng = m.angleErr < CFG.ANGLE_TOL_DEG;
+  ctx.fillStyle = okAng ? '#00ff66' : '#ffaa00';
+  ctx.fillText(`УГОЛ ${m.angleErr.toFixed(0)}°`, W - 16, 48);
+
+  const okSpin = m.spinErr < CFG.SYNC_OK;
+  ctx.fillStyle = okSpin ? '#00ff66' : '#ffaa00';
+  ctx.fillText(st.syncLocked ? '✓ СИНХР: ЗАХВАТ' : `СИНХР ${m.spinErr.toFixed(4)}`, W - 16, 68);
+
+  ctx.textAlign = 'left';
+  if (isClean(m)) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#00ff66';
+    ctx.fillText('[ ЗАХВАТ — МОЖНО ВХОДИТЬ ]', cx, H - 16);
+    ctx.textAlign = 'left';
+  }
+}
+
+/* ---------- итог ---------- */
+function finish() {
+  active = false;
+  const m = st.errors;
+  const ok = st.outcome === 'ok';
+  otitle.textContent = ok ? 'СТЫКОВКА УСПЕШНА' : 'АВАРИЯ ШЛЮЗА';
+  otitle.style.color = ok ? 'var(--g)' : 'var(--r)';
+  if (ok) {
+    odesc.innerHTML = `Чистая стыковка!<br><br>Центр: ${(m.posErr * 100).toFixed(0)}%<br>Угол: ${m.angleErr.toFixed(1)}°<br>Синхр: ${m.spinErr.toFixed(4)}<br>Скорость: ${m.speedErr.toFixed(2)}`;
+  } else {
+    const f = failures(m).map(k => FAILURE_TEXT[k]).join('<br>');
+    odesc.innerHTML = `Причины:<br><span style="color:var(--a)">${f}</span><br><br>Урон: <b>${crashDamage(m)}</b>`;
+  }
+  ostart.textContent = ok ? 'ЕЩЁ ЗАХОД' : 'ПОВТОРИТЬ';
+  overlay.classList.remove('hide');
+}
+
+/* ---------- цикл ---------- */
+let last = 0;
+function loop(t) {
+  // фиксированный шаг: 60 Гц, чтобы физика не зависела от монитора
+  if (!last) last = t;
+  const dtMs = t - last;
+  last = t;
+  const steps = Math.min(3, Math.max(0, Math.round(dtMs / 16.67)));
+
+  if (active) {
+    for (let i = 0; i < steps; i++) {
+      step(st, input);
+      if (st.done) { finish(); break; }
+    }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
