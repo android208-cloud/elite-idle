@@ -4985,3 +4985,35 @@ if (!rotating && Math.abs(player.vAngle - target.vAngle) < SYNC_LOCK) {
 Проверено curl: `/`, `/index.html`, `/menu.html`, `/user-docking3.html`,
 `/docking-a.html`, `/docking-b.html`, `/docking-core.js`, `/coriolis.js`
 — все 200.
+
+## §55. Превью не открывается вне Arena — автономные HTML
+
+Скриншот пользователя: «Preview Unavailable. Previews open inside Arena.
+Open this preview from your chat to view it.» Он открыл адрес
+`ciocask5qoclbb3.arena.site` в браузере телефона.
+
+Это **не ошибка прототипа**. Превью в Arena — не самостоятельный сайт,
+а окно внутри чата: адрес требует контекста Arena и в обычном браузере
+отдаёт заглушку. Сервер при этом жив (`process-096679c8`), файлы
+отдаются с кодом 200 — журнал подтверждает запросы.
+
+Проверил и альтернативу с GitHub Pages: репозиторий публичный,
+Pages настроен (`android208-cloud.github.io/elite-idle`), но деплой
+идёт только с `main`, а наша ветка туда не влита.
+
+### Решение
+
+Собрал **самодостаточные HTML**: `coriolis.js` и `docking-core.js`
+встроены прямо в файл, `import`/`export` убраны, внешних зависимостей
+нет. Открывается двойным щелчком, в том числе с телефона.
+
+- `prototype/standalone-docking-a.html` — 40 КБ
+- `prototype/standalone-docking-b.html` — 39 КБ
+- `user-docking3.html` пользователя автономным был изначально
+
+Проверка: `node --check` на извлечённом скрипте — чисто; физика
+исполняется, `DRAG_ROT 0.95`, `ROT 0.0008`, `SYNC_OK 0.0005`
+совпадают с исходниками; `step()` и `measure()` работают.
+
+Меню переключено на автономные версии (`docking-a.html`/`docking-b.html`
+остались как модульные исходники для разработки).
