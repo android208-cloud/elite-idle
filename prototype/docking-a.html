@@ -74,8 +74,8 @@
 </div>
 
 <script type="module">
-import { VERTICES, EDGES, DOCK_EDGES, DOCK_VERTICES, rotationMatrix } from './coriolis.js?v=1794761112';
-import { createState, step, CFG, measure, isClean, failures, FAILURE_TEXT, crashDamage } from './docking-core.js?v=1794761112';
+import { VERTICES, EDGES, DOCK_EDGES, DOCK_VERTICES, rotationMatrix } from './coriolis.js?v=1794769909';
+import { createState, step, CFG, measure, isClean, failures, FAILURE_TEXT, crashDamage } from './docking-core.js?v=1794769909';
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -265,9 +265,9 @@ function drawHUD(cx, cy) {
   ctx.fillStyle = okAng ? '#00ff66' : '#ffaa00';
   ctx.fillText(`УГОЛ ${m.angleErr.toFixed(0)}°`, W - 16, 48);
 
-  const okSpin = m.spinErr < CFG.SPIN_TOL;
+  const okSpin = m.spinErr < CFG.SYNC_OK;
   ctx.fillStyle = okSpin ? '#00ff66' : '#ffaa00';
-  ctx.fillText(`СИНХР ${m.spinErr.toFixed(4)}`, W - 16, 68);
+  ctx.fillText(st.syncLocked ? '✓ СИНХР: ЗАХВАТ' : `СИНХР ${m.spinErr.toFixed(4)}`, W - 16, 68);
 
   ctx.textAlign = 'left';
   if (isClean(m)) {
