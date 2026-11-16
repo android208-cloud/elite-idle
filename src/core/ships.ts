@@ -44,6 +44,16 @@ export interface EnemyType {
   pirate: boolean;
   /** Доля энергии, ниже которой противник может бежать */
   fleeBelow: number;
+  /**
+   * Сколько грузовых контейнеров выпадает из уничтоженного корабля.
+   *
+   * Младший ниббл байта $00 блюпринта в оригинале. Значения — из
+   * `docs/cargo-canisters.md` (BBC-исходник, `elite-ships-*.asm`).
+   *
+   * У торговцев и пиратов байт разный: гружёный торговец-Питон роняет
+   * пять контейнеров, пиратский — два. Поэтому поле задаётся парой.
+   */
+  canisters: { trader: number; pirate: number };
 }
 
 // Значения из tools/extract-ships.ts (оригинальный исходник Elite):
@@ -64,19 +74,19 @@ export interface EnemyType {
 // viper:        byte#19=(2<<3)|1=17  → урон=8  bounty=0
 export const ENEMIES: readonly EnemyType[] = [
   //              id            name           energy  laser  missiles  bounty  minKills  pirate  fleeBelow
-  { id: 'sidewinder',  name: 'Sidewinder',    energy: 70,  laser: 8,  missiles: 0, bounty: 50,  minKills: 0,   pirate: true,  fleeBelow: 0.3  },
-  { id: 'gecko',       name: 'Gecko',         energy: 70,  laser: 8,  missiles: 0, bounty: 55,  minKills: 0,   pirate: true,  fleeBelow: 0.3  },
-  { id: 'adder',       name: 'Adder',         energy: 85,  laser: 8,  missiles: 0, bounty: 40,  minKills: 4,   pirate: true,  fleeBelow: 0.25 },
-  { id: 'cobra1',      name: 'Cobra Mk I',    energy: 90,  laser: 9,  missiles: 2, bounty: 75,  minKills: 4,   pirate: true,  fleeBelow: 0.25 },
-  { id: 'mamba',       name: 'Mamba',         energy: 90,  laser: 9,  missiles: 2, bounty: 150, minKills: 16,  pirate: true,  fleeBelow: 0.2  },
-  { id: 'krait',       name: 'Krait',         energy: 80,  laser: 8,  missiles: 0, bounty: 100, minKills: 16,  pirate: true,  fleeBelow: 0.2  },
-  { id: 'moray',       name: 'Moray',         energy: 100, laser: 8,  missiles: 0, bounty: 50,  minKills: 16,  pirate: true,  fleeBelow: 0.2  },
-  { id: 'cobra3',      name: 'Cobra Mk III',  energy: 150, laser: 9,  missiles: 2, bounty: 175, minKills: 44,  pirate: true,  fleeBelow: 0.15 },
-  { id: 'asp',         name: 'Asp Mk II',     energy: 150, laser: 20, missiles: 1, bounty: 200, minKills: 44,  pirate: true,  fleeBelow: 0.15 },
-  { id: 'ferdelance',  name: 'Fer-de-Lance',  energy: 160, laser: 9,  missiles: 2, bounty: 0,   minKills: 130, pirate: true,  fleeBelow: 0.1  },
-  { id: 'python',      name: 'Python',        energy: 250, laser: 13, missiles: 3, bounty: 200, minKills: 130, pirate: true,  fleeBelow: 0.1  },
-  { id: 'anaconda',    name: 'Anaconda',      energy: 252, laser: 31, missiles: 7, bounty: 0,   minKills: 512, pirate: true,  fleeBelow: 0.1  },
-  { id: 'viper',       name: 'Viper',         energy: 120, laser: 8,  missiles: 1, bounty: 0,   minKills: 0,   pirate: false, fleeBelow: 0    },
+  { id: 'sidewinder',  name: 'Sidewinder',    energy: 70,  laser: 8,  missiles: 0, bounty: 50,  minKills: 0,   pirate: true,  fleeBelow: 0.3, canisters: { trader: 0, pirate: 0 } },
+  { id: 'gecko',       name: 'Gecko',         energy: 70,  laser: 8,  missiles: 0, bounty: 55,  minKills: 0,   pirate: true,  fleeBelow: 0.3, canisters: { trader: 0, pirate: 0 } },
+  { id: 'adder',       name: 'Adder',         energy: 85,  laser: 8,  missiles: 0, bounty: 40,  minKills: 4,   pirate: true,  fleeBelow: 0.25, canisters: { trader: 0, pirate: 0 } },
+  { id: 'cobra1',      name: 'Cobra Mk I',    energy: 90,  laser: 9,  missiles: 2, bounty: 75,  minKills: 4,   pirate: true,  fleeBelow: 0.25, canisters: { trader: 3, pirate: 3 } },
+  { id: 'mamba',       name: 'Mamba',         energy: 90,  laser: 9,  missiles: 2, bounty: 150, minKills: 16,  pirate: true,  fleeBelow: 0.2, canisters: { trader: 1, pirate: 1 } },
+  { id: 'krait',       name: 'Krait',         energy: 80,  laser: 8,  missiles: 0, bounty: 100, minKills: 16,  pirate: true,  fleeBelow: 0.2, canisters: { trader: 1, pirate: 1 } },
+  { id: 'moray',       name: 'Moray',         energy: 100, laser: 8,  missiles: 0, bounty: 50,  minKills: 16,  pirate: true,  fleeBelow: 0.2, canisters: { trader: 1, pirate: 1 } },
+  { id: 'cobra3',      name: 'Cobra Mk III',  energy: 150, laser: 9,  missiles: 2, bounty: 175, minKills: 44,  pirate: true,  fleeBelow: 0.15, canisters: { trader: 3, pirate: 1 } },
+  { id: 'asp',         name: 'Asp Mk II',     energy: 150, laser: 20, missiles: 1, bounty: 200, minKills: 44,  pirate: true,  fleeBelow: 0.15, canisters: { trader: 0, pirate: 0 } },
+  { id: 'ferdelance',  name: 'Fer-de-Lance',  energy: 160, laser: 9,  missiles: 2, bounty: 0,   minKills: 130, pirate: true,  fleeBelow: 0.1, canisters: { trader: 0, pirate: 0 } },
+  { id: 'python',      name: 'Python',        energy: 250, laser: 13, missiles: 3, bounty: 200, minKills: 130, pirate: true,  fleeBelow: 0.1, canisters: { trader: 5, pirate: 2 } },
+  { id: 'anaconda',    name: 'Anaconda',      energy: 252, laser: 31, missiles: 7, bounty: 0,   minKills: 512, pirate: true,  fleeBelow: 0.1, canisters: { trader: 7, pirate: 7 } },
+  { id: 'viper',       name: 'Viper',         energy: 120, laser: 8,  missiles: 1, bounty: 0,   minKills: 0,   pirate: false, fleeBelow: 0, canisters: { trader: 0, pirate: 0 } },
 ] as const;
 
 export function enemyById(id: string): EnemyType {

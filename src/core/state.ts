@@ -7,6 +7,7 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
+import { autoScoop, canisterCount, rollCanisters, scoopOne, type CargoCanister } from './cargo-canisters.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import {
   COMMODITIES,
@@ -67,6 +68,15 @@ export interface Settings {
    * как в простом варианте.
    */
   dockingModule: boolean;
+  /**
+   * Забирать контейнеры после боя автоматически.
+   *
+   * Если выключено — после победы появляется список обломков и игрок сам
+   * решает, что взять (и что выбросить, если места нет). Если включено —
+   * берётся всё, что влезает, без вопросов, как в оригинале, где выбора
+   * не было вовсе.
+   */
+  autoScoop: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -77,6 +87,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   encounterTimeoutMs: 5 * 60 * 1000,
   encounterRate: 1,
   dockingModule: true,
+  autoScoop: false,
 };
 
 export interface Flight {
@@ -146,6 +157,27 @@ export interface ActiveCombat {
   pausedMs: number;
 }
 
+/**
+ * Подбор груза из обломков после победы.
+ *
+ * Пока это поле не пусто, полёт стоит на паузе — ровно как во время боя.
+ * Игрок либо забирает контейнеры по одному, либо закрывает подбор, и
+ * игра продолжает путь. Автоподбор в настройках снимает вопрос вовсе.
+ */
+export interface Salvage {
+  /** Что осталось в обломках после победы */
+  canisters: CargoCanister[];
+  /** Какие контейнеры уже взяты (для показа «взято») */
+  taken: number;
+  /** Сколько контейнеров пришлось бросить из-за нехватки места */
+  left: number;
+  /** Когда обломки появились — для сроков паузы, как у боя */
+  pausedAt: number;
+  pausedMs: number;
+  /** Название уничтоженного корабля — в заголовке подбора */
+  enemyName: string;
+}
+
 export interface GameState {
   version: number;
   galaxy: number;
@@ -167,6 +199,8 @@ export interface GameState {
   legal: number;
   encounter: Encounter | null;
   combat: ActiveCombat | null;
+  /** Обломки после победы, ждущие решения игрока. */
+  salvage: Salvage | null;
   /** Статистика за игру — для журнала. */
   stats: GameStats;
   /**
@@ -276,6 +310,7 @@ export function newGame(rngSeed: number): GameState {
     legal: 0,
     encounter: null,
     combat: null,
+    salvage: null,
     stats: { ...ZERO_STATS },
     cargoBasis: COMMODITIES.map(() => 0),
   };
@@ -283,6 +318,20 @@ export function newGame(rngSeed: number): GameState {
 
 export function currentSystem(state: GameState): StarSystem {
   return systemsOf(state.galaxy)[state.system];
+}
+
+/**
+ * Русское склонение по числу: 1 контейнер, 2 контейнера, 5 контейнеров.
+ * Вынесено отдельно, потому что журнал печатает числа постоянно, а
+ * «5 контейнер» в тексте выглядит как ошибка.
+ */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
 }
 
 export function cargoTons(state: GameState): number {
@@ -912,15 +961,10 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
 
   /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
   const resume = (st: GameState): GameState => {
-    if (!st.flight) return st;
-    return {
-      ...st,
-      flight: {
-        ...st.flight,
-        arriveAt: st.flight.arriveAt + pausedMs,
-        pending: st.flight.pending.map((t) => t + pausedMs),
-      },
-    };
+    if (!st.flight || pausedMs <= 0) return st;
+    // Сдвиг через `dueAt`, а не правкой одного `arriveAt`: иначе следующий
+    // досчёт пересчитает прибытие из остатка и сотрёт сдвиг (§73).
+    return { ...st, flight: shiftFlightBy(st.flight, pausedMs) };
   };
 
   /** Возврат на станцию вылета: полёт отменяется, рынок обновляется. */
@@ -949,19 +993,58 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
         next = { ...next, legal: Math.min(255, next.legal + POLICE_KILL_LEGAL) };
         text += '. Вы стали беглецом';
       }
+
+      /*
+       * Обломки. Сколько контейнеров выпало — из блюпринта корабля
+       * (docs/cargo-canisters.md), товар — из ассортимента системы.
+       * Контейнеров нет, если их нет по блюпринту или некуда положить:
+       * пустой трюм без скупов в оригинале означал бы разбитые канистры.
+       */
+      const count = canisterCount(c.enemyId, active.role);
       const dice = new Dice(next.rng);
-      if (next.ship.fuelScoops && dice.next() < 0.5) {
-        const index = Math.floor(dice.next() * 16);
-        const amount = 1 + Math.floor(dice.next() * 2);
-        const room = Math.min(amount, cargoRoom(next, index));
-        if (room > 0) {
-          const cargo = next.cargo.slice();
-          cargo[index] += room;
-          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? next.holdSpace - room : next.holdSpace };
-          text += `. Подобран груз: ${COMMODITIES[index].name}, ${room}`;
-        }
-      }
+      let leftovers: CargoCanister[] = [];
       next = { ...next, rng: dice.rng };
+
+      if (count > 0) {
+        const rolled = rollCanisters(count, next.market, next.rng);
+        next = { ...next, rng: rolled.rng };
+        leftovers = rolled.canisters;
+
+        if (!next.ship.fuelScoops) {
+          // Без топливосборщика контейнеры не подобрать — ровно как в
+          // оригинале, где канистра при касании разбивалась.
+          text += `. В обломках ${count} ${plural(count, 'контейнер', 'контейнера', 'контейнеров')}, но без топливосборщика их не взять`;
+          say(text);
+          return resume(next);
+        }
+
+        if (settings.autoScoop) {
+          // Автоподбор: берём всё, что влезает, остальное остаётся в космосе.
+          const got = autoScoop(next.cargo, next.holdSpace, leftovers);
+          next = { ...next, cargo: got.cargo, holdSpace: got.holdSpace };
+          if (got.taken > 0) {
+            text += `. Подобрано контейнеров: ${got.taken}`;
+          }
+          if (got.left > 0) text += `, ${got.left} не поместилось`;
+          say(text);
+          return resume(next);
+        }
+
+        // Ручной подбор: полёт встаёт на паузу до решения игрока.
+        say(text);
+        return {
+          ...resume(next),
+          salvage: {
+            canisters: leftovers,
+            taken: 0,
+            left: 0,
+            pausedAt: at,
+            pausedMs: 0,
+            enemyName: enemy.name,
+          },
+        };
+      }
+
       say(text);
       return resume(next);
     }
@@ -1053,8 +1136,14 @@ export function advance(
     s = { ...s, combat: { ...s.combat, pausedAt: now, pausedMs: s.combat.pausedMs + (now - s.combat.pausedAt) } };
   }
 
+  // Подбор из обломков тоже держит полёт: пока игрок решает, что взять,
+  // время пути не идёт — иначе обломки «уедут» вместе с прибытием.
+  if (s.salvage && now > s.salvage.pausedAt) {
+    s = { ...s, salvage: { ...s.salvage, pausedAt: now, pausedMs: s.salvage.pausedMs + (now - s.salvage.pausedAt) } };
+  }
+
   for (let guard = 0; guard < 500; guard++) {
-    if (s.combat || !s.flight) break;
+    if (s.combat || s.salvage || !s.flight) break;
     const f = s.flight;
     // Следующее событие полёта в реальном времени — по ТЕКУЩЕМУ темпу.
     // Так смена темпа действует на уже начатый полёт, но события посреди
@@ -1116,6 +1205,135 @@ export function combatAction(
   return { state: combat.outcome ? finishCombat(s, now, settings, events) : s, events };
 }
 
+/* ---------- Подбор груза из обломков ---------- */
+
+/**
+ * Отодвигает полёт на `realMs` реальных миллисекунд — «время на паузе не
+ * считается».
+ *
+ * Как это работает. Истина о пути — пара `dueAt` + `remainingBaseMs`:
+ * `dueAt` это момент, на который посчитан остаток. Досчёт берёт
+ * `realMs = now − dueAt` и вычитает из остатка `realMs · темп`. Значит,
+ * чтобы полёт не продвинулся за время паузы, достаточно сдвинуть `dueAt`
+ * вперёд на длину паузы: тот же `now` окажется «раньше» на эту величину,
+ * и вычтется меньше.
+ *
+ * `arriveAt` сдвигаем на ту же величину для согласованности — он
+ * производный и пересчитается из остатка при следующем досчёте.
+ *
+ * `pending` (встречи) трогать не надо: они хранятся в базовой шкале и
+ * отсчитываются от `dueAt`, поэтому сдвиг `dueAt` отодвигает и их —
+ * ровно так же, как отодвигает прибытие.
+ */
+function shiftFlightBy(flight: Flight, realMs: number): Flight {
+  return {
+    ...flight,
+    dueAt: flight.dueAt + realMs,
+    arriveAt: flight.arriveAt + realMs,
+  };
+}
+
+/**
+ * Продлевает полёт на время, которое он простоял на паузе из-за подбора.
+ *
+ * Та же логика, что в `finishCombat` после боя: время, пока игрок решал,
+ * не должно съедать путь. Без этого «подождал три минуты у обломков» =
+ * «прилетел на три минуты раньше» — то есть выбор был бы не бесплатным,
+ * а крадущим дорогу, и чем внимательнее игрок, тем хуже.
+ */
+function resumeAfterSalvage(state: GameState): GameState {
+  const sv = state.salvage;
+  const flight = state.flight;
+  if (!sv || !flight || sv.pausedMs <= 0) return state;
+  return { ...state, flight: shiftFlightBy(flight, sv.pausedMs) };
+}
+
+export type SalvageError = 'none' | 'no-room';
+
+/**
+ * Взять один контейнер из обломков по индексу.
+ *
+ * Если в трюме не хватает места, контейнер остаётся лежать: игрок может
+ * сначала выбросить что-нибудь ненужное и вернуться к нему. Именно ради
+ * этого выбор и ручной, а не автоматический, — в тесноте надо решать,
+ * что дороже.
+ */
+export function salvageTake(
+  state: GameState,
+  index: number,
+  at: number,
+): { state: GameState; error: SalvageError } {
+  const sv = state.salvage;
+  if (!sv || index < 0 || index >= sv.canisters.length) return { state, error: 'none' };
+  const canister = sv.canisters[index];
+  const got = scoopOne(state.cargo, state.holdSpace, canister);
+  if (!got) return { state, error: 'no-room' };
+  const rest = sv.canisters.filter((_, i) => i !== index);
+  const closed = rest.length === 0 ? resumeAfterSalvage(state) : state;
+  const next: GameState = {
+    ...closed,
+    cargo: got.cargo,
+    holdSpace: got.holdSpace,
+    salvage: rest.length > 0 ? { ...sv, canisters: rest, taken: sv.taken + 1, pausedAt: at } : null,
+    // Контейнер с контрабандой повышает правовой статус так же, как
+    // покупка на рынке: за груз отвечает командир, а не продавец.
+    legal: Math.min(255, state.legal + contrabandLevel(got.cargo) - contrabandLevel(state.cargo)),
+  };
+  return { state: next, error: 'none' };
+}
+
+/** Взять всё, что влезает, и закрыть подбор. */
+export function salvageTakeAll(state: GameState, at: number): { state: GameState; taken: number; left: number } {
+  const sv = state.salvage;
+  if (!sv) return { state, taken: 0, left: 0 };
+  const got = autoScoop(state.cargo, state.holdSpace, sv.canisters);
+  return {
+    taken: got.taken,
+    left: got.left,
+    state: {
+      ...resumeAfterSalvage(state),
+      cargo: got.cargo,
+      holdSpace: got.holdSpace,
+      legal: Math.min(255, state.legal + contrabandLevel(got.cargo) - contrabandLevel(state.cargo)),
+      salvage: null,
+    },
+  };
+}
+
+/** Закрыть подбор, ничего не взяв (или бросив остаток). */
+export function salvageClose(state: GameState): GameState {
+  if (!state.salvage) return state;
+  return { ...resumeAfterSalvage(state), salvage: null };
+}
+
+/**
+ * Выбросить товар из трюма, пока идёт подбор.
+ *
+ * В оригинале сброс груза — боевое действие (`dump`), которое иногда
+ * отпугивает пирата. Здесь это ещё и способ освободить место под более
+ * дорогой контейнер: трюм 20 тонн, а с Питона падает пять канистр.
+ */
+export function jettisonCargo(
+  state: GameState,
+  index: number,
+  amount = 1,
+): { state: GameState; dropped: number } {
+  if (index < 0 || index >= state.cargo.length) return { state, dropped: 0 };
+  const have = state.cargo[index];
+  const drop = Math.min(have, Math.max(0, Math.floor(amount)));
+  if (drop <= 0) return { state, dropped: 0 };
+  const cargo = state.cargo.slice();
+  cargo[index] -= drop;
+  return {
+    state: {
+      ...state,
+      cargo,
+      holdSpace: isTonneCargo(index) ? state.holdSpace + drop : state.holdSpace,
+    },
+    dropped: drop,
+  };
+}
+
 /** Передать бой автопилоту: доигрывает до конца. */
 export function combatAutoplay(
   state: GameState,
@@ -1160,6 +1378,8 @@ export function deserialize(json: string): GameState {
   // Без этого старый файл даст undefined там, где читается stats.kills.
   if (!state.stats) state.stats = { ...ZERO_STATS };
   if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
+  // Совместимость с сохранениями до §73: поля обломков тогда не было.
+  if (state.salvage === undefined) state.salvage = null;
   // Совместимость с сохранениями, сделанными до появления накопленного простоя.
   if (state.combat && typeof state.combat.pausedMs !== 'number') {
     state.combat = { ...state.combat, pausedMs: 0 };

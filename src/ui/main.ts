@@ -11,7 +11,7 @@ import {
 } from '../core/one-decision.ts';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
-import { COMMODITIES } from '../core/market.ts';
+import { COMMODITIES, isTonneCargo } from '../core/market.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
@@ -22,6 +22,10 @@ import {
   cargoTons,
   combatAction,
   combatAutoplay,
+  jettisonCargo,
+  salvageClose,
+  salvageTake,
+  salvageTakeAll,
   currentSystem,
   galacticJump,
   DEFAULT_SETTINGS,
@@ -30,6 +34,7 @@ import {
   MAX_FUEL,
   newGame,
   owns,
+  plural,
   SLAVES_INDEX,
   NARCOTICS_INDEX,
   FIREARMS_INDEX,
@@ -446,6 +451,54 @@ function combatScreen(): string {
       </div>
     </div>
     <div class="card"><h2>Ход боя</h2><ul class="log">${lines}</ul></div>`;
+}
+
+/**
+ * Экран подбора груза из обломков.
+ *
+ * Появляется сразу после победы, если автоподбор выключен. Полёт в это
+ * время стоит: подбор держит паузу так же, как бой, — иначе обломки
+ * «уехали» бы вместе с прибытием.
+ *
+ * Каждый контейнер — отдельная кнопка: видно, что именно лежит в
+ * обломках, и можно выбрать. Рядом список трюма с кнопками выброса:
+ * трюм 20 тонн, а с Питона падает пять канистр, и в тесноте надо
+ * решать, что дороже — выброшенное или подобранное.
+ */
+function salvageScreen(): string {
+  const sv = state.salvage!;
+  const cargo = COMMODITIES.map((c, i) =>
+    state.cargo[i] > 0
+      ? `<div class="row"><span>${c.name}: ${state.cargo[i]} ${UNITS[c.unit]}</span><span class="spacer"></span>
+          <button class="btn text" data-action="jettison" data-i="${i}">Выбросить 1</button></div>`
+      : '',
+  )
+    .filter(Boolean)
+    .join('');
+  const list = sv.canisters
+    .map((c, i) => {
+      const name = COMMODITIES[c.commodity].name;
+      const full = isTonneCargo(c.commodity) && state.holdSpace < c.amount;
+      return `<div class="row"><span>${name}${full ? ' <span class="muted">— нет места</span>' : ''}</span>
+        <span class="spacer"></span>
+        <button class="btn tonal" data-action="salvage-take" data-i="${i}" ${full ? 'disabled' : ''}>Взять</button></div>`;
+    })
+    .join('');
+  const total = sv.canisters.length;
+  return `<div class="card"><h2>Обломки: ${sv.enemyName}</h2>
+      <div class="sub">В обломках ${total} ${plural(total, 'контейнер', 'контейнера', 'контейнеров')}. Свободно в трюме: ${state.holdSpace} т</div>
+      ${list}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" data-action="salvage-all">Взять всё, что влезает</button>
+        <button class="btn text" data-action="salvage-close">Оставить</button>
+      </div>
+    </div>
+    <div class="card"><h2>Трюм</h2>${cargo || '<div class="muted">Трюм пуст</div>'}</div>
+    <div class="card"><h2>Журнал</h2><ul class="log">${log
+      .slice(-6)
+      .reverse()
+      .map((e) => `<li>${e.text}</li>`)
+      .join('')}</ul></div>`;
 }
 
 /**
@@ -1127,6 +1180,7 @@ function logScreen(): string {
       <div class="row" style="margin-top:10px"><label>При гибели</label><span class="spacer"></span>${select('deathMode', [['insurance', 'Страховка'], ['none', 'Без смерти']], settings.deathMode)}</div>
       <div class="row" style="margin-top:10px"><label>Чужой корабль исчезает через</label><span class="spacer"></span>${select('encounterTimeoutMs', timeouts, String(settings.encounterTimeoutMs))}</div>
       <div class="row" style="margin-top:10px"><label>Частота встреч</label><span class="spacer"></span>${select('encounterRate', rates, String(settings.encounterRate))}</div>
+      <div class="row" style="margin-top:10px"><label>Груз из обломков</label><span class="spacer"></span>${select('autoScoop', [['off', 'Выбирать вручную'], ['on', 'Подбирать автоматически']], settings.autoScoop ? 'on' : 'off')}</div>
       <div class="row" style="margin-top:10px"><label>Модуль стыковки</label><span class="spacer"></span>${select('dockingModule', [['on', 'Включён'], ['off', 'Выключен']], settings.dockingModule ? 'on' : 'off')}</div>
       <div class="sub" style="margin:6px 0 12px">${settings.dockingModule
         ? 'Прыжок — только из мини-игры стыковки. На карте «Отстыковка».'
@@ -1305,6 +1359,7 @@ function render(): void {
     log: logScreen,
   };
   const inCombat = state.combat !== null;
+  const inSalvage = state.salvage !== null;
 
   /*
    * Сохраняем прокрутку перед перерисовкой.
@@ -1327,18 +1382,22 @@ function render(): void {
    */
   const scrollTop = content.scrollTop;
   const active = document.activeElement as HTMLElement | null;
-  content.innerHTML = inCombat ? combatScreen() : screens[tab]();
-  document.getElementById('title')!.textContent = inCombat ? 'Бой' : TABS.find((t) => t.id === tab)!.label;
+  content.innerHTML = inCombat ? combatScreen() : inSalvage ? salvageScreen() : screens[tab]();
+  document.getElementById('title')!.textContent = inCombat
+    ? 'Бой'
+    : inSalvage
+      ? 'Обломки'
+      : TABS.find((t) => t.id === tab)!.label;
   document.getElementById('top-info')!.textContent = cr(state.cash);
   document.getElementById('nav')!.innerHTML = TABS.map(
     (t) =>
-      `<button class="${t.id === tab && !inCombat ? 'active' : ''}" data-action="tab" data-tab="${t.id}">
+      `<button class="${t.id === tab && !inCombat && !inSalvage ? 'active' : ''}" data-action="tab" data-tab="${t.id}">
         <span class="pill">${t.icon}</span>${t.label}</button>`,
   ).join('');
-  if (tab === 'map' && !inCombat) drawMap();
+  if (tab === 'map' && !inCombat && !inSalvage) drawMap();
   // Модель встречи живёт только пока экран её показывает: иначе кадры
   // крутятся на невидимом холсте и жгут батарею.
-  if (state.encounter && !inCombat) startEncounterModel();
+  if (state.encounter && !inCombat && !inSalvage) startEncounterModel();
   else stopEncounterModel();
   // Модель корабля теперь в ангаре и только на стоянке: в полёте
   // канваса нет, анимация не нужна.
@@ -1536,7 +1595,9 @@ function onAction(el: HTMLElement): void {
   const i = Number(el.dataset.i);
   switch (a) {
     case 'tab':
-      tab = el.dataset.tab as Tab;
+      // Пока идут обломки, уйти с экрана нельзя: подбор держит полёт на
+      // паузе, и «уехать» на другую вкладку значило бы бросить его молча.
+      if (!state.salvage) tab = el.dataset.tab as Tab;
       break;
     case 'go-map':
       tab = 'map';
@@ -1702,6 +1763,30 @@ function onAction(el: HTMLElement): void {
       handleEvents(r.events);
       break;
     }
+    case 'salvage-take': {
+      const r = salvageTake(state, Number(el.dataset.i), Date.now());
+      state = r.state;
+      if (r.error === 'no-room') addLog('В трюме нет места — нечем взять');
+      break;
+    }
+    case 'salvage-all': {
+      const r = salvageTakeAll(state, Date.now());
+      state = r.state;
+      if (r.taken > 0) addLog(`Подобрано контейнеров: ${r.taken}`);
+      if (r.left > 0) addLog(`Не поместилось контейнеров: ${r.left}`);
+      break;
+    }
+    case 'salvage-close':
+      state = salvageClose(state);
+      addLog('Обломки оставлены');
+      break;
+    case 'jettison': {
+      const i = Number(el.dataset.i);
+      const r = jettisonCargo(state, i, 1);
+      state = r.state;
+      if (r.dropped > 0) addLog(`Выброшено: ${COMMODITIES[i].name}, ${r.dropped} ${UNITS[COMMODITIES[i].unit]}`);
+      break;
+    }
     case 'notify-permission':
       void Notification.requestPermission().then(() => render());
       return;
@@ -1757,6 +1842,10 @@ function structuralChange(prev: GameState, next: GameState): boolean {
   return (
     (next.flight === null) !== (prev.flight === null) ||
     (next.combat === null) !== (prev.combat === null) ||
+    // Появление и исчезновение обломков меняет весь экран: без этой
+    // строки подбор не показался бы до следующего тика, а после
+    // последнего контейнера экран остался бы пустым.
+    (next.salvage === null) !== (prev.salvage === null) ||
     (next.encounter === null) !== (prev.encounter === null) ||
     next.system !== prev.system ||
     next.flight?.to !== prev.flight?.to
@@ -1788,9 +1877,9 @@ document.addEventListener('change', (ev) => {
   const el = ev.target as HTMLSelectElement;
   if (el.dataset.action !== 'setting') return;
   const key = el.dataset.key as keyof Settings;
-  if (key === 'dockingModule') {
-    // Булев флаг: в разметке 'on'/'off', в состоянии true/false.
-    settings = { ...settings, dockingModule: el.value === 'on' };
+  if (key === 'dockingModule' || key === 'autoScoop') {
+    // Булевы флаги: в разметке 'on'/'off', в состоянии true/false.
+    settings = { ...settings, [key]: el.value === 'on' };
     save();
     render();
     return;
