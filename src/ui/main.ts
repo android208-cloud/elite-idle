@@ -436,7 +436,11 @@ const MAP_MARGIN = 1.15;
 function localView(canvas: HTMLCanvasElement): ChartView {
   const width = canvas.clientWidth || 320;
   const pad = 10;
-  const height = Math.round(Math.min(width, 400));
+  // Квадрат по ширине: круг дальности влезает целиком и остаётся кругом.
+  // Раньше было `min(width, 400)` — на узком экране то же самое, но
+  // ограничение 400 срезало высоту на широких экранах и точки ложились
+  // теснее по вертикали, чем по горизонтали.
+  const height = Math.round(width);
   const here = chartPoint(systemsOf(state.galaxy)[state.system]);
   const radius = Math.max(3, (state.fuel / 4) * MAP_MARGIN);
   const k = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
@@ -568,12 +572,16 @@ function drawSystems(
     const isHere = sys.index === here.index;
     const isSel = selected === sys.index;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, isHere ? 4.5 : reachable ? 3 : 2.2, 0, Math.PI * 2);
+    // На местной карте точки крупнее: их немного, и по ним надо попадать
+    // пальцем. На общей — мельче, иначе 256 точек сольются в пятно.
+    const big = view.canvas.dataset.local === '1';
+    const radius = isHere ? (big ? 6 : 4.5) : reachable ? (big ? 4.5 : 3) : big ? 3.5 : 2.2;
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
     ctx.fill();
     if (isSel) {
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, view.canvas.dataset.local === '1' ? 12 : 9, 0, Math.PI * 2);
       ctx.strokeStyle = '#ffd37a';
       ctx.lineWidth = 2;
       ctx.stroke();
@@ -657,36 +665,77 @@ function drawMap(): void {
   }
 }
 
-/** Касание по любой из карт: ищем ближайшую видимую систему. */
-function onMapTap(ev: MouseEvent): void {
-  const canvas = ev.currentTarget as HTMLCanvasElement;
+/**
+ * Касание по любой из карт.
+ *
+ * Выбор — по ближайшей системе в радиусе, который зависит от масштаба
+ * карты, а не от фиксированного числа. На местной карте точки крупные
+ * и далеко друг от друга, на общей — плотно; один радиус на обе плох.
+ *
+ * Радиус НЕ больше половины расстояния до ближайшей соседней точки:
+ * иначе палец, целясь в одну систему, накрывает соседнюю, и выбирается
+ * не та. Именно так было с QUATOR и RA — 19 px между точками при
+ * радиусе 40.
+ */
+function onMapTap(ev: PointerEvent, canvas: HTMLCanvasElement): void {
   const rect = canvas.getBoundingClientRect();
   const isLocal = canvas.dataset.local === '1';
+
+  // jsdom и старые браузеры могут не иметь размеров — берём как есть.
+  // Переводим координаты касания в систему холста. Высота канваса
+  // равна его ширине, а CSS растягивает его по контейнеру, поэтому
+  // масштаб по обеим осям один и тот же — берём от ширины.
+  const cssW = rect.width || canvas.clientWidth;
+  const scale = cssW > 0 ? canvas.clientWidth / cssW : 1;
+  const px = (ev.clientX - rect.left) * scale;
+  const py = (ev.clientY - rect.top) * scale;
+
   const v = isLocal ? localView(canvas) : overviewView(canvas);
-  const px = ev.clientX - rect.left;
-  const py = ev.clientY - rect.top;
+  const systems = systemsOf(state.galaxy);
 
-  // На местной карте систем немного — радиус попадания щедрый.
-  // На общей их 256, поэтому радиус меньше, иначе легко попасть
-  // в соседнюю систему.
-  const tolerance = isLocal ? 40 : 12;
+  // Позиции всех видимых систем на экране — считаем один раз.
+  const points = systems
+    .filter((sys) => v.visible(sys))
+    .map((sys) => {
+      const p = v.screenOf(sys.x, sys.y);
+      return { index: sys.index, x: p.x, y: p.y };
+    });
+
+  if (!points.length) return;
+
+  // Ближайшая к пальцу.
   let best = -1;
-  let bestD = tolerance * tolerance;
-
-  systemsOf(state.galaxy).forEach((sys, i) => {
-    if (!v.visible(sys)) return;
-    const p = v.screenOf(sys.x, sys.y);
+  let bestD = Infinity;
+  for (const p of points) {
     const d = (p.x - px) ** 2 + (p.y - py) ** 2;
     if (d < bestD) {
       bestD = d;
-      best = i;
+      best = p.index;
     }
-  });
-
-  if (best >= 0) {
-    selected = best;
-    render();
   }
+  if (best < 0) return;
+
+  // Радиус по умолчанию: щедрый, чтобы легко попадать.
+  let tolerance = isLocal ? 34 : 14;
+
+  // …но не больше половины расстояния до ближайшей другой системы:
+  // иначе накроем соседнюю и выберем не ту.
+  const target = points.find((p) => p.index === best)!;
+  let nearestOther = Infinity;
+  for (const p of points) {
+    if (p.index === best) continue;
+    const d = Math.hypot(p.x - target.x, p.y - target.y);
+    if (d < nearestOther) nearestOther = d;
+  }
+  if (nearestOther < Infinity) tolerance = Math.min(tolerance, nearestOther / 2);
+
+  // Отдельный минимум: совсем мелкий радиус неудобен даже при плотных точках.
+  tolerance = Math.max(tolerance, 10);
+
+  if (bestD > tolerance * tolerance) return; // палец мимо всех систем
+
+  selected = best;
+  render();
 }
 
 /**
@@ -1022,7 +1071,20 @@ function render(): void {
     log: logScreen,
   };
   const inCombat = state.combat !== null;
+
+  /*
+   * Сохраняем прокрутку перед перерисовкой.
+   *
+   * `innerHTML = ...` уничтожает все узлы, и браузер сбрасывает
+   * scrollTop в 0. Для карты это особенно заметно: тапнул по системе,
+   * чтобы посмотреть сведения, — и тебя унесло наверх, приходится
+   * скроллить заново. Пользователь назвал это «скролл сбывается».
+   *
+   * Достаточно запомнить scrollTop контейнера и вернуть после.
+   */
+  const scrollTop = content.scrollTop;
   content.innerHTML = inCombat ? combatScreen() : screens[tab]();
+  content.scrollTop = scrollTop;
   document.getElementById('title')!.textContent = inCombat ? 'Бой' : TABS.find((t) => t.id === tab)!.label;
   document.getElementById('top-info')!.textContent = cr(state.cash);
   document.getElementById('nav')!.innerHTML = TABS.map(
@@ -1355,9 +1417,28 @@ document.addEventListener('change', (ev) => {
   render();
 });
 
-document.getElementById('content')!.addEventListener('click', (ev) => {
-  const id = (ev.target as HTMLElement).id;
-  if (id === 'map-overview' || id === 'map-local') onMapTap(ev as MouseEvent);
+/*
+ * Касание карт — через pointerdown, а не click.
+ *
+ * Почему: на телефоне `click` приходит после `touchend`, и если палец
+ * сдвинулся хоть немного (а он всегда сдвигается), браузер считает это
+ * прокруткой и click не приходит вовсе. Отсюда «не могу нажать на
+ * мини-карту»: жест выглядел как скролл, а не как тап.
+ *
+ * pointerdown срабатывает сразу при касании, до любых жестов прокрутки.
+ */
+document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
+  // ВАЖНО: берём ev.target, а не currentTarget.
+  //
+  // Обработчик висит на #content (делегирование), поэтому currentTarget
+  // всегда #content, а не холст. В onMapTap я читал currentTarget и
+  // получал контейнер: у него нет ни data-local, ни размеров холста,
+  // поэтому масштаб считался от нулевого rect, и клик «попадал» не туда.
+  // Отсюда и «не могу нажать на мини-карту».
+  const target = ev.target as HTMLElement;
+  if (target.id === 'map-overview' || target.id === 'map-local') {
+    onMapTap(ev as PointerEvent, target as HTMLCanvasElement);
+  }
 });
 
 window.addEventListener('resize', () => {

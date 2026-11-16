@@ -300,3 +300,69 @@ test('местная карта: достижимые системы видны 
     }
   }
 });
+
+/* ---------- Выбор системы на карте ---------- */
+
+/**
+ * Радиус попадания: не больше половины расстояния до ближайшей
+ * соседней точки, но не меньше 10 px.
+ *
+ * Без этого правила палец, целясь в одну систему, накрывает соседнюю:
+ * QUATOR и RA стоят в 19 px друг от друга, а радиус был 40.
+ */
+function tapTolerance(points: { x: number; y: number }[], target: number, base: number): number {
+  let nearest = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    if (i === target) continue;
+    const d = Math.hypot(points[i].x - points[target].x, points[i].y - points[target].y);
+    if (d < nearest) nearest = d;
+  }
+  const tol = nearest < Infinity ? Math.min(base, nearest / 2) : base;
+  return Math.max(tol, 10);
+}
+
+test('карта: клик ровно в точку выбирает именно её', () => {
+  // Реальные данные: LAVE и 11 соседей в окне при полном баке.
+  const systems = buildGalaxy(1);
+  const here = systems[7];
+  const W = 360;
+  const pad = 10;
+  const radius = Math.max(3, (70 / 4) * 1.15);
+  const k = Math.min((W - 2 * pad) / (2 * radius), (W - 2 * pad) / (2 * radius));
+
+  const visible = systems.filter(
+    (s) => Math.abs(s.x - here.x) <= radius && Math.abs(s.y / 2 - here.y / 2) <= radius,
+  );
+  const points = visible.map((s) => ({
+    name: s.name,
+    x: W / 2 + (s.x - here.x) * k,
+    y: W / 2 + (s.y / 2 - here.y / 2) * k,
+  }));
+
+  for (let i = 0; i < points.length; i++) {
+    // Ищем ближайшую к клику точку — ровно как в игре.
+    let best = -1;
+    let bestD = Infinity;
+    for (let j = 0; j < points.length; j++) {
+      const d = Math.hypot(points[j].x - points[i].x, points[j].y - points[i].y);
+      if (d < bestD) {
+        bestD = d;
+        best = j;
+      }
+    }
+    const tol = tapTolerance(points, best, 34);
+    assert.ok(bestD <= tol, `${points[i].name}: клик не попал (${bestD.toFixed(1)} > ${tol.toFixed(1)})`);
+    assert.equal(best, i, `клик в ${points[i].name} выбрал ${points[best].name}`);
+  }
+});
+
+test('карта: радиус попадания не даёт накрыть соседнюю систему', () => {
+  // QUATOR и RA — 19 px. Старый радиус 40 выбирал не ту.
+  const points = [
+    { x: 129, y: 28 }, // радиус
+    { x: 112, y: 20 }, // RA
+  ];
+  const tol = tapTolerance(points, 0, 34);
+  assert.ok(tol <= 9.5 + 0.5, `радиус ${tol.toFixed(1)} px накрывает соседнюю точку в 19 px`);
+  assert.ok(tol >= 10, 'радиус не должен быть меньше 10 px — иначе не попасть');
+});
