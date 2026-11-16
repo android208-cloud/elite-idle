@@ -199,3 +199,24 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
   color: #ff8a8a;
   border: 1px solid rgba(224, 92, 92, 0.35);
 }
+
+/* Кликабельная карточка: «Пункт назначения» ведёт на карту.
+   Курсор и подсветка при нажатии — чтобы было видно, что блок живой,
+   а не просто украшение. На телефоне hover нет, поэтому основное —
+   реакция на нажатие. */
+.card.linkable {
+  cursor: pointer;
+  transition: background .15s, transform .06s;
+}
+.card.linkable:active {
+  background: var(--surface-3);
+  transform: scale(0.995);
+}
+.card.linkable:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+/* Кнопка внутри кликабельной карточки — не часть ссылки. */
+.card.linkable .btn {
+  cursor: pointer;
+}

@@ -324,14 +324,51 @@ function shipScreen(): string {
  *  - корабль в полёте — показываем, куда и сколько осталось, потому
  *    что цель в этот момент уже неактуальна.
  */
+/**
+ * Кнопка «Отстыковаться» — вход в космос.
+ *
+ * Пользователь просил её здесь, на экране «Корабль»: это тот экран, где
+ * игрок решает, лететь или нет, и уходить за этим на карту неудобно.
+ * Кнопка ведёт себя так же, как на карте: открывает мини-игру стыковки,
+ * а прыжок и галактический переход живут уже внутри неё.
+ *
+ * Показывается, только когда модуль стыковки включён: с выключенным
+ * модулем космоса нет вовсе, и кнопка вела бы в пустоту.
+ */
+function undockButton(): string {
+  if (!settings.dockingModule) return '';
+  if (state.flight) return '';
+  return `<button class="btn" data-action="undock">Отстыковаться</button>`;
+}
+
+/**
+ * Пункт назначения на экране «Корабль».
+ *
+ * Пользователь просил сюда имя планеты, расстояние и время полёта — и
+ * чтобы нажатие на блок вело на карту. Карточка целиком кликабельна:
+ * это привычнее, чем искать мелкую ссылку, а на телефоне палец и так
+ * бьёт по всей площади.
+ *
+ * Три состояния:
+ *  - цель не выбрана — подсказка и приглашение открыть карту;
+ *  - цель выбрана — имя, характеристики, расстояние, время и топливо;
+ *  - корабль в полёте — куда и сколько осталось.
+ *
+ * Здесь же кнопка «Отстыковаться»: экран «Корабль» — место, где игрок
+ * решает, лететь ему или нет, и уходить за этим на карту неудобно.
+ */
 function destinationCard(): string {
   const systems = systemsOf(state.galaxy);
   const here = systems[state.system];
+  const undock = undockButton();
+  // Блок целиком ведёт на карту: data-action на карточке, а кнопка
+  // внутри гасит всплытие своим обработчиком.
+  const open = '<div class="card linkable" data-action="go-map" role="link" tabindex="0">';
 
   if (state.flight) {
     const f = state.flight;
     const left = Math.max(0, f.arriveAt - Date.now());
-    return `<div class="card"><h2>Пункт назначения</h2>
+    return `${open}<h2>Пункт назначения</h2>
       <div class="row"><span class="price">${systems[f.to].name}</span><span class="spacer"></span>
         <span class="muted">в пути</span></div>
       <div class="sub" style="margin-top:6px">Из ${systems[f.from].name} · осталось ${fmtDur(left)}</div>
@@ -339,8 +376,9 @@ function destinationCard(): string {
   }
 
   if (selected === null) {
-    return `<div class="card"><h2>Пункт назначения</h2>
-      <div class="muted">Не выбран. Откройте карту и нажмите на систему — её характеристики и время полёта появятся здесь.</div>
+    return `${open}<h2>Пункт назначения</h2>
+      <div class="muted">Не выбран. Нажмите сюда, чтобы открыть карту и выбрать систему.</div>
+      ${undock ? `<div class="row" style="margin-top:12px">${undock}</div>` : ''}
     </div>`;
   }
 
@@ -351,7 +389,7 @@ function destinationCard(): string {
   // обещает одно, а полёт занимает другое.
   const trip = jumpDuration(settings, d);
 
-  return `<div class="card${enough ? '' : ' warn'}"><h2>Пункт назначения</h2>
+  return `<div class="card linkable${enough ? '' : ' warn'}" data-action="go-map" role="link" tabindex="0"><h2>Пункт назначения</h2>
     <div class="row">
       <span class="price">${dest.name}</span>
       <span class="chip">Т${dest.techLevel + 1}</span>
@@ -366,6 +404,7 @@ function destinationCard(): string {
     ${enough
       ? `<div class="sub" style="margin-top:8px">Прыжок тратит ${ly(d)} топлива, после него останется ${ly(state.fuel - d)}</div>`
       : `<div class="muted" style="margin-top:8px;color:var(--warn)">Не хватает топлива: нужно ${ly(d)}, в баке ${ly(state.fuel)}. Заправьтесь в ангаре.</div>`}
+    ${undock ? `<div class="row" style="margin-top:12px">${undock}<span class="spacer"></span><span class="muted">нажмите, чтобы сменить цель</span></div>` : ''}
   </div>`;
 }
 
@@ -1499,6 +1538,9 @@ function onAction(el: HTMLElement): void {
     case 'tab':
       tab = el.dataset.tab as Tab;
       break;
+    case 'go-map':
+      tab = 'map';
+      break;
     case 'buy1':
     case 'buyMax': {
       const cashBefore = state.cash;
@@ -1731,6 +1773,13 @@ load();
 }
 
 document.addEventListener('click', (ev) => {
+  /*
+   * closest берёт БЛИЖАЙШИЙ элемент с data-action — а если внутри
+   * кликабельной карточки лежит кнопка, ближайшей будет она. Это и
+   * нужно: «Отстыковаться» внутри блока «Пункт назначения» не должна
+   * уводить на карту. Порядок обеспечивает сам closest, а не проверки
+   * в коде.
+   */
   const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action]');
   if (el && el.tagName !== 'SELECT') onAction(el);
 });
