@@ -12,6 +12,7 @@ import {
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
+import { drawShipModel } from './ship-model.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
   advance,
@@ -251,6 +252,10 @@ function shipScreen(): string {
     .filter(Boolean)
     .join('<br>');
   return `${flightCard()}
+    <div class="card ship-view">
+      <canvas id="ship-model" aria-label="Модель корабля Cobra Mk III"></canvas>
+      <div class="sub" style="text-align:center">Cobra Mk III</div>
+    </div>
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
       ${stat('Топливо', ly(state.fuel))}
@@ -638,7 +643,51 @@ function render(): void {
         <span class="pill">${t.icon}</span>${t.label}</button>`,
   ).join('');
   if (tab === 'map' && !inCombat) drawMap();
+  if (tab === 'ship' && !inCombat) startShipModel();
   updateFlight();
+}
+
+/* ---------- Модель корабля на главном экране ---------- */
+
+let shipModelFrame = 0;
+let shipModelAngle = 0;
+let shipModelLast = 0;
+
+/**
+ * Крутит модель корабля, пока открыт экран «Корабль».
+ *
+ * Угол считается от времени, а не прибавляется каждый кадр: так
+ * скорость вращения не зависит от частоты кадров, и на слабом
+ * телефоне корабль не начнёт вертеться медленнее.
+ */
+function drawShipFrame(now: number): void {
+  const canvas = document.getElementById('ship-model') as HTMLCanvasElement | null;
+  if (!canvas) return; // экран сменили — анимация закончилась
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 300;
+  const h = Math.round(w * 0.46);
+  canvas.style.height = `${h}px`;
+  if (canvas.width !== Math.round(w * dpr)) canvas.width = Math.round(w * dpr);
+  if (canvas.height !== Math.round(h * dpr)) canvas.height = Math.round(h * dpr);
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!shipModelLast) shipModelLast = now;
+  // 24 секунды на оборот: медленно, чтобы не отвлекало от чтения цифр.
+  shipModelAngle = (now / 24000) * Math.PI * 2;
+
+  drawShipModel(ctx, { width: w, height: h, yaw: shipModelAngle });
+  shipModelFrame = requestAnimationFrame(drawShipFrame);
+}
+
+function startShipModel(): void {
+  cancelAnimationFrame(shipModelFrame);
+  shipModelLast = 0;
+  shipModelFrame = requestAnimationFrame(drawShipFrame);
 }
 
 function updateFlight(): void {
@@ -661,20 +710,55 @@ function updateFlight(): void {
 
 /* ---------- Карта ---------- */
 
-function mapGeometry(canvas: HTMLCanvasElement) {
-  const w = canvas.clientWidth;
-  const h = Math.round(w / 2);
+/**
+ * Геометрия карты.
+ *
+ * Карта развёрнута на 90°: галактика шире, чем выше (координаты 0..255
+ * по X и 0..127 по Y), а телефон держат вертикально. Раньше карта была
+ * полосой высотой в половину ширины, и система ложились тесно по
+ * вертикали. Теперь оси местами: X галактики идёт вниз по экрану,
+ * Y — вправо. Так карта занимает высоту экрана, где места больше.
+ *
+ * `ASPECT` = 0.5 — отношение высоты галактики к ширине (127 против 255).
+ */
+/**
+ * Проекция галактики на экран.
+ *
+ * Карта повёрнута на 90° по просьбе пользователя: на телефоне экран
+ * вытянут вертикально, а галактика — горизонтальная полоса (255 на 127).
+ * Раньше карта была низкой полосой в половину ширины, и системы теснились.
+ *
+ * После поворота:
+ *   - ось X галактики (0..255) идёт ВНИЗ по экрану,
+ *   - ось Y галактики (0..127) идёт ВПРАВО.
+ *
+ * Оси названы в коде явно (`screenX`, `screenY`), а не `sx`/`sy`:
+ * в первой версии я перепутал их местами ровно потому, что по именам
+ * нельзя было понять, какая ось куда идёт, и холст выходил 360×695
+ * при точках, уезжающих на 681 пиксель.
+ *
+ * Масштаб один на обе оси (`k`), иначе круг радиуса прыжка станет
+ * эллипсом.
+ */
+function mapProjection(canvas: HTMLCanvasElement) {
+  const width = canvas.clientWidth;
   const pad = 14;
-  const sx = (x: number): number => pad + (x / 255) * (w - 2 * pad);
-  const sy = (y: number): number => pad + (y / 2 / 127.5) * (h - 2 * pad);
-  return { w, h, sx, sy };
+  const innerW = width - 2 * pad;
+  // Габариты после поворота: по горизонтали 127, по вертикали 255.
+  const k = innerW / 127;
+  const height = Math.round(255 * k + 2 * pad);
+  /** Галактическая X (0..255) → вертикаль экрана. */
+  const screenX = (gx: number): number => pad + gx * k;
+  /** Галактическая Y (0..127) → горизонталь экрана. */
+  const screenY = (gy: number): number => pad + gy * k;
+  return { width, height, k, screenX, screenY };
 }
 
 function drawMap(): void {
   const canvas = document.getElementById('map') as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
-  const { w, h, sx, sy } = mapGeometry(canvas);
+  const { width: w, height: h, k, screenX, screenY } = mapProjection(canvas);
   canvas.style.height = `${h}px`;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
@@ -685,11 +769,12 @@ function drawMap(): void {
   const systems = systemsOf(state.galaxy);
   const here = systems[state.system];
 
-  // радиус прыжка: dist = 4*sqrt(dx² + (dy/2)²) → в пикселях
+  // Радиус прыжка: distance() в галактике = 4 * sqrt(dx² + (dy/2)²).
+  // Масштаб по обеим осям один (k), поэтому радиус в пикселях — это
+  // просто k * координатное расстояние: круг остаётся кругом.
   const rangeLy = state.fuel / 4;
-  const pxPerX = sx(1) - sx(0);
   ctx.beginPath();
-  ctx.arc(sx(here.x), sy(here.y), rangeLy * pxPerX, 0, Math.PI * 2);
+  ctx.arc(screenX(here.x), screenY(here.y), rangeLy * k, 0, Math.PI * 2);
   ctx.strokeStyle = 'rgba(79,216,196,.45)';
   ctx.setLineDash([6, 6]);
   ctx.stroke();
@@ -698,7 +783,7 @@ function drawMap(): void {
   for (const s of systems) {
     const reachable = distance(here, s) <= state.fuel;
     ctx.beginPath();
-    ctx.arc(sx(s.x), sy(s.y), reachable ? 3 : 2, 0, Math.PI * 2);
+    ctx.arc(screenX(s.x), screenY(s.y), reachable ? 3 : 2, 0, Math.PI * 2);
     ctx.fillStyle = reachable ? '#dde4e2' : '#5c6b68';
     ctx.fill();
   }
@@ -706,18 +791,19 @@ function drawMap(): void {
   if (selected !== null) {
     const s = systems[selected];
     ctx.beginPath();
-    ctx.arc(sx(s.x), sy(s.y), 8, 0, Math.PI * 2);
+    ctx.arc(screenX(s.x), screenY(s.y), 8, 0, Math.PI * 2);
     ctx.strokeStyle = '#ffd37a';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.lineWidth = 1;
     ctx.fillStyle = '#ffd37a';
     ctx.font = '12px sans-serif';
-    ctx.fillText(s.name, Math.min(sx(s.x) + 10, w - 80), sy(s.y) - 10);
+    // Подпись ставим правее и выше точки, не давая уехать за холст.
+    ctx.fillText(s.name, Math.max(4, Math.min(screenY(s.x) - 60, w - 80)), screenX(s.x) + 18);
   }
 
   ctx.beginPath();
-  ctx.arc(sx(here.x), sy(here.y), 6, 0, Math.PI * 2);
+  ctx.arc(screenX(here.x), screenY(here.y), 6, 0, Math.PI * 2);
   ctx.fillStyle = '#4fd8c4';
   ctx.fill();
 }
@@ -725,13 +811,15 @@ function drawMap(): void {
 function onMapTap(ev: MouseEvent): void {
   const canvas = ev.currentTarget as HTMLCanvasElement;
   const rect = canvas.getBoundingClientRect();
-  const { sx, sy } = mapGeometry(canvas);
+  const { screenX, screenY } = mapProjection(canvas);
+  // Касание в экранных координатах, сравнение — тоже экранное:
+  // поэтому поворот карты не может «съехать» отдельно от касания.
   const px = ev.clientX - rect.left;
   const py = ev.clientY - rect.top;
   let best = -1;
   let bestD = 28 * 28;
   systemsOf(state.galaxy).forEach((s, i) => {
-    const d = (sx(s.x) - px) ** 2 + (sy(s.y) - py) ** 2;
+    const d = (screenX(s.x) - px) ** 2 + (screenY(s.y) - py) ** 2;
     if (d < bestD) {
       bestD = d;
       best = i;
