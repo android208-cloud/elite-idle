@@ -216,3 +216,87 @@ test('модель: дальние рёбра скрываются — корп�
   assert.ok(minVisible >= 8, `на части углов видно всего ${minVisible} рёбер — силуэт теряется`);
   assert.ok(minVisible <= 20, 'скрытие слишком слабое');
 });
+
+/* ---------- Две карты: общая и местная ---------- */
+
+const CHART_W = 255;
+const CHART_H = 127.5;
+
+/** Копия `overviewView` из main.ts. */
+function overview(width: number) {
+  const pad = 10;
+  const height = Math.round(((width - 2 * pad) * CHART_H) / CHART_W + 2 * pad);
+  const k = Math.min((width - 2 * pad) / CHART_W, (height - 2 * pad) / CHART_H);
+  return {
+    width,
+    height,
+    ratio: height / width,
+    screenOf: (gx: number, gy: number) => ({
+      x: width / 2 + (gx - CHART_W / 2) * k,
+      y: height / 2 + (gy / 2 - CHART_H / 2) * k,
+    }),
+  };
+}
+
+/** Копия `localView` из main.ts. */
+function local(width: number, fuel: number, here: { x: number; y: number }) {
+  const pad = 10;
+  const height = Math.min(width, 400);
+  const radius = Math.max(3, (fuel / 4) * 1.15);
+  const k = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
+  return {
+    width,
+    height,
+    radius,
+    screenOf: (gx: number, gy: number) => ({
+      x: width / 2 + (gx - here.x) * k,
+      y: height / 2 + (gy / 2 - here.y / 2) * k,
+    }),
+    visible: (s: { x: number; y: number }) =>
+      Math.abs(s.x - here.x) <= radius && Math.abs(s.y / 2 - here.y / 2) <= radius,
+  };
+}
+
+test('общая карта горизонтальная: высота около половины ширины', () => {
+  // Галактика в карт-пространстве — 255 на 127.5, ровно 2:1.
+  // Поворот на 90° был ошибкой: из-за него карта вытягивалась вниз
+  // и переставала помещаться на экран.
+  const v = overview(360);
+  assert.ok(v.ratio < 0.7, `пропорции ${v.ratio.toFixed(2)} — карта не горизонтальная`);
+  assert.ok(v.ratio > 0.45, 'карта слишком сплющена');
+});
+
+test('общая карта: вся галактика помещается в кадр', () => {
+  const systems = buildGalaxy(1);
+  const v = overview(360);
+  for (const s of systems) {
+    const p = v.screenOf(s.x, s.y);
+    assert.ok(p.x >= 0 && p.x <= v.width, `${s.name}: X=${p.x.toFixed(0)} вне кадра`);
+    assert.ok(p.y >= 0 && p.y <= v.height, `${s.name}: Y=${p.y.toFixed(0)} вне кадра`);
+  }
+});
+
+test('местная карта: круг дальности круглый', () => {
+  const v = local(360, 20, { x: 20, y: 173 });
+  const R = 20 / 4;
+  const cx = v.width / 2;
+  const cy = v.height / 2;
+  const pX = v.screenOf(20 + R, 173);
+  const pY = v.screenOf(20, 173 + R * 2);
+  const dX = Math.hypot(pX.x - cx, pX.y - cy);
+  const dY = Math.hypot(pY.x - cx, pY.y - cy);
+  assert.ok(Math.abs(dX - dY) < 0.5, `по X ${dX.toFixed(1)} px, по Y ${dY.toFixed(1)} px`);
+});
+
+test('местная карта: достижимые системы видны при любом топливе', () => {
+  const systems = buildGalaxy(1);
+  for (const here of systems) {
+    for (const fuel of [10, 20, 40, 70]) {
+      const v = local(360, fuel, here);
+      for (const s of systems) {
+        if (distance(here, s) > fuel) continue;
+        assert.ok(v.visible(s), `${here.name} топливо ${fuel}: ${s.name} не видна`);
+      }
+    }
+  }
+});

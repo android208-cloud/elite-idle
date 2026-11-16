@@ -95,3 +95,28 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
   width: 100%;
   height: auto;
 }
+
+/* Карты: холст на всю ширину карточки, подпись под ним */
+.map-card {
+  padding: 12px 12px 10px;
+}
+.map-card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--on-variant, #7b8b88);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.map-card canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: var(--surface-3, #0b1412);
+  touch-action: manipulation;
+}
+.map-card .sub {
+  margin-top: 8px;
+  font-size: 12px;
+}

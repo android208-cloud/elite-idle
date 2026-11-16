@@ -341,7 +341,351 @@ function mapScreen(): string {
         ${jumpControl(d, reason)}
       </div>${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
   }
-  return `<canvas id="map"></canvas><div class="card">${info}</div>`;
+  // Две карты одна под другой: общая (вся галактика, горизонтальная)
+  // и местная (окно вокруг корабля, крупно).
+  return `<div class="card map-card">
+      <h2>Галактика ${state.galaxy}</h2>
+      <canvas id="map-overview"></canvas>
+      <div class="sub">Рамка — область местной карты ниже.</div>
+    </div>
+    <div class="card map-card">
+      <h2>Окрестности</h2>
+      <canvas id="map-local" data-local="1"></canvas>
+      <div class="sub">Радиус — по текущему топливу. Нажмите на систему, чтобы выбрать.</div>
+    </div>
+    <div class="card">${info}</div>`;
+}
+
+/* ---------- Карты ---------- */
+
+/**
+ * Карт-пространство.
+ *
+ * В Elite расстояние считается как `4·hypot(dx, dy/2)`: по Y оно
+ * «дешевле» вдвое. Поэтому карта рисуется не в галактических
+ * координатах, а в «карт-пространстве» `(x, y/2)`. Там расстояние —
+ * обычное евклидово, круг дальности остаётся кругом, и пропорции
+ * совпадают с оригиналом: 255 на 127, то есть ровно 2:1.
+ *
+ * Из-за этого общая карта выходит ГОРИЗОНТАЛЬНОЙ сама собой — так в
+ * ZX Elite и было. Если рисовать в сырых координатах, всё становится
+ * квадратным и круг дальности превращается в эллипс.
+ */
+interface ChartPoint {
+  u: number;
+  v: number;
+}
+
+const chartPoint = (s: { x: number; y: number }): ChartPoint => ({ u: s.x, v: s.y / 2 });
+
+/** Габариты карт-пространства: 255 по горизонтали, 127.5 по вертикали. */
+const CHART_W = 255;
+const CHART_H = 127.5;
+
+interface ChartView {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  /** Пикселей на единицу карт-пространства. Один на обе оси. */
+  k: number;
+  /** Центр окна в карт-пространстве. */
+  cu: number;
+  cv: number;
+  /** Радиус видимого окна в единицах карт-пространства. */
+  radius: number;
+  /** Экранные координаты по галактическим. */
+  screenOf: (gx: number, gy: number) => { x: number; y: number };
+  visible: (s: { x: number; y: number }) => boolean;
+}
+
+/** Общая карта: вся галактика, вписана целиком. Горизонтальная. */
+function overviewView(canvas: HTMLCanvasElement): ChartView {
+  const width = canvas.clientWidth || 320;
+  const pad = 10;
+  // Пропорции галактики 255:127.5 — ровно 2:1, поэтому высота вполовину.
+  const height = Math.round(((width - 2 * pad) * CHART_H) / CHART_W + 2 * pad);
+  const k = Math.min((width - 2 * pad) / CHART_W, (height - 2 * pad) / CHART_H);
+  const cu = CHART_W / 2;
+  const cv = CHART_H / 2;
+  return {
+    canvas,
+    width,
+    height,
+    k,
+    cu,
+    cv,
+    radius: Math.max(CHART_W, CHART_H) / 2,
+    screenOf: (gx, gy) => ({
+      x: width / 2 + (gx - cu) * k,
+      y: height / 2 + (gy / 2 - cv) * k,
+    }),
+    visible: () => true,
+  };
+}
+
+/** Запас сверх радиуса топлива: крайние системы не липнут к рамке. */
+const MAP_MARGIN = 1.15;
+
+/**
+ * Местная карта: окно вокруг корабля, радиус — по топливу.
+ *
+ * Квадратная, потому что показывает круг. Масштаб один на обе оси
+ * (k), поэтому круг дальности не превращается в эллипс.
+ */
+function localView(canvas: HTMLCanvasElement): ChartView {
+  const width = canvas.clientWidth || 320;
+  const pad = 10;
+  const height = Math.round(Math.min(width, 400));
+  const here = chartPoint(systemsOf(state.galaxy)[state.system]);
+  const radius = Math.max(3, (state.fuel / 4) * MAP_MARGIN);
+  const k = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
+  return {
+    canvas,
+    width,
+    height,
+    k,
+    cu: here.u,
+    cv: here.v,
+    radius,
+    screenOf: (gx, gy) => ({
+      x: width / 2 + (gx - here.u) * k,
+      y: height / 2 + (gy / 2 - here.v) * k,
+    }),
+    visible: (s) => {
+      const p = chartPoint(s);
+      return Math.abs(p.u - here.u) <= radius && Math.abs(p.v - here.v) <= radius;
+    },
+  };
+}
+
+/** Готовитcanvas к рисованию с учётом плотности пикселей. */
+function prepareCanvas(view: ChartView): CanvasRenderingContext2D | null {
+  const { canvas, width, height } = view;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.height = `${height}px`;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  return ctx;
+}
+
+/**
+ * Расставляет подписи так, чтобы они не налезали друг на друга
+ * и не уезжали за край.
+ *
+ * Раньше подпись всегда ставилась справа-снизу от точки, и на местной
+ * карте она уезжала за правый край («ZAONCE» на скриншоте) и налезала
+ * на соседнюю («ZASOER / RELAES / ORRERE» в кучу).
+ *
+ * Пробуем несколько позиций вокруг точки по порядку и берём первую
+ * свободную. Порядок важен: сначала под точкой, потом над ней, потом
+ * справа и слева.
+ */
+function placeLabels(
+  ctx: CanvasRenderingContext2D,
+  items: { x: number; y: number; text: string; color: string }[],
+  width: number,
+  height: number,
+): void {
+  ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const boxes: { x1: number; y1: number; x2: number; y2: number }[] = [];
+
+  // Точки систем считаем занятыми: подпись не должна их накрывать.
+  for (const it of items) {
+    boxes.push({ x1: it.x - 5, y1: it.y - 5, x2: it.x + 5, y2: it.y + 5 });
+  }
+
+  for (const it of items) {
+    const tw = ctx.measureText(it.text).width;
+    const th = 11;
+    const spots: [number, number][] = [
+      [0, 15],
+      [0, -15],
+      [tw / 2 + 8, 0],
+      [-tw / 2 - 8, 0],
+      [tw / 2 + 6, 13],
+      [-tw / 2 - 6, 13],
+      [tw / 2 + 6, -13],
+      [-tw / 2 - 6, -13],
+    ];
+    for (const [dx, dy] of spots) {
+      const cx = it.x + dx;
+      const cy = it.y + dy;
+      const box = {
+        x1: cx - tw / 2 - 2,
+        y1: cy - th / 2 - 2,
+        x2: cx + tw / 2 + 2,
+        y2: cy + th / 2 + 2,
+      };
+      // Не даём уехать за холст.
+      if (box.x1 < 1 || box.y1 < 1 || box.x2 > width - 1 || box.y2 > height - 1) continue;
+      const clash = boxes.some(
+        (b) => !(box.x2 < b.x1 || box.x1 > b.x2 || box.y2 < b.y1 || box.y1 > b.y2),
+      );
+      if (clash) continue;
+      boxes.push(box);
+      ctx.fillStyle = it.color;
+      ctx.fillText(it.text, cx, cy);
+      break;
+    }
+  }
+}
+
+/** Рисует точки систем и подписи. */
+function drawSystems(
+  ctx: CanvasRenderingContext2D,
+  view: ChartView,
+  opts: { labels: boolean },
+): void {
+  const systems = systemsOf(state.galaxy);
+  const here = systems[state.system];
+
+  // Круг дальности на текущем топливе.
+  const fuelR = (state.fuel / 4) * view.k;
+  if (fuelR > 2) {
+    const c = view.screenOf(here.x, here.y);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, fuelR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(79,216,196,.35)';
+    ctx.setLineDash([5, 6]);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Точки.
+  for (const sys of systems) {
+    if (!view.visible(sys)) continue;
+    const p = view.screenOf(sys.x, sys.y);
+    const reachable = distance(here, sys) <= state.fuel;
+    const isHere = sys.index === here.index;
+    const isSel = selected === sys.index;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, isHere ? 4.5 : reachable ? 3 : 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
+    ctx.fill();
+    if (isSel) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ffd37a';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+
+  if (!opts.labels) return;
+
+  // Подписи. Порядок задаёт приоритет: если места нет, подпись текущей
+  // и выбранной системы важнее прочих.
+  const items = systems
+    .filter((sys) => view.visible(sys))
+    .map((sys) => ({ sys, p: view.screenOf(sys.x, sys.y) }))
+    .sort((a, b) => {
+      const rank = (x: typeof a): number =>
+        x.sys.index === here.index ? 0 : x.sys.index === selected ? 1 : 2;
+      return rank(a) - rank(b);
+    })
+    .map(({ sys, p }) => {
+      const reachable = distance(here, sys) <= state.fuel;
+      return {
+        x: p.x,
+        y: p.y,
+        text: sys.name,
+        color: sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88',
+      };
+    });
+
+  placeLabels(ctx, items, view.width, view.height);
+}
+
+/** Рисует обе карты. */
+function drawMap(): void {
+  const overview = document.getElementById('map-overview') as HTMLCanvasElement | null;
+  const local = document.getElementById('map-local') as HTMLCanvasElement | null;
+  if (!overview && !local) return;
+
+  const systems = systemsOf(state.galaxy);
+
+  if (overview) {
+    const v = overviewView(overview);
+    const ctx = prepareCanvas(v);
+    if (ctx) {
+      drawSystems(ctx, v, { labels: false });
+
+      // Рамка местной карты — чтобы было видно, что именно крупно внизу.
+      const lv = localView(local ?? overview);
+      const here = chartPoint(systems[state.system]);
+      const r = lv.radius;
+      const a = v.screenOf(here.u - r, (here.v - r) * 2);
+      const b = v.screenOf(here.u + r, (here.v + r) * 2);
+      ctx.strokeStyle = 'rgba(255,211,122,.5)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      ctx.setLineDash([]);
+
+      // На общей карте подписываем только текущую и выбранную:
+      // 256 подписей не поместятся.
+      ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const marks = [systems[state.system], ...(selected !== null ? [systems[selected]] : [])];
+      for (const sys of marks) {
+        const p = v.screenOf(sys.x, sys.y);
+        const txt = sys.name;
+        const w = ctx.measureText(txt).width;
+        const x = Math.max(w / 2 + 2, Math.min(p.x, v.width - w / 2 - 2));
+        const y = p.y > v.height - 16 ? p.y - 14 : p.y + 14;
+        ctx.fillStyle = sys.index === state.system ? '#4fd8c4' : '#ffd37a';
+        ctx.fillText(txt, x, Math.max(10, y));
+      }
+    }
+  }
+
+  if (local) {
+    const v = localView(local);
+    const ctx = prepareCanvas(v);
+    if (ctx) drawSystems(ctx, v, { labels: true });
+  }
+}
+
+/** Касание по любой из карт: ищем ближайшую видимую систему. */
+function onMapTap(ev: MouseEvent): void {
+  const canvas = ev.currentTarget as HTMLCanvasElement;
+  const rect = canvas.getBoundingClientRect();
+  const isLocal = canvas.dataset.local === '1';
+  const v = isLocal ? localView(canvas) : overviewView(canvas);
+  const px = ev.clientX - rect.left;
+  const py = ev.clientY - rect.top;
+
+  // На местной карте систем немного — радиус попадания щедрый.
+  // На общей их 256, поэтому радиус меньше, иначе легко попасть
+  // в соседнюю систему.
+  const tolerance = isLocal ? 40 : 12;
+  let best = -1;
+  let bestD = tolerance * tolerance;
+
+  systemsOf(state.galaxy).forEach((sys, i) => {
+    if (!v.visible(sys)) return;
+    const p = v.screenOf(sys.x, sys.y);
+    const d = (p.x - px) ** 2 + (p.y - py) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+
+  if (best >= 0) {
+    selected = best;
+    render();
+  }
 }
 
 function priceChip(i: number): string {
@@ -743,153 +1087,6 @@ function updateFlight(): void {
  * на телефоне карта вытянута вертикально.
  */
 
-/** Запас сверх радиуса топлива: крайние системы не липнут к рамке. */
-const MAP_MARGIN = 1.35;
-
-interface MapView {
-  width: number;
-  height: number;
-  /** Пикселей на координатную единицу по X. */
-  kx: number;
-  /** То же по Y — вдвое меньше, см. `distance()`. */
-  ky: number;
-  /** Радиус окна в координатных единицах. */
-  radius: number;
-  cx: number;
-  cy: number;
-  /** X галактики → вертикаль экрана (карта повёрнута на 90°). */
-  screenX: (gx: number) => number;
-  /** Y галактики → горизонталь экрана. */
-  screenY: (gy: number) => number;
-  /** Попадает ли система в окно. */
-  visible: (s: { x: number; y: number }) => boolean;
-}
-
-function mapView(canvas: HTMLCanvasElement): MapView {
-  const width = canvas.clientWidth;
-  // Полотно вытянуто вниз: после поворота вдоль него идёт X (0..255).
-  const height = Math.round(Math.min(width * 1.55, 620));
-  const pad = 16;
-
-  const here = systemsOf(state.galaxy)[state.system];
-  const radius = Math.max(4, (state.fuel / 4) * MAP_MARGIN);
-
-  // Дальность считается как hypot(dx, dy/2), то есть по Y «дешевле»
-  // вдвое. Чтобы круг дальности остался кругом, ky = kx/2.
-  // Ограничиваем по обеим осям, чтобы окно влезло целиком.
-  const kx = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
-  const ky = kx / 2;
-
-  const cx = width / 2;
-  const cy = height / 2;
-
-  const screenX = (gx: number): number => cx + (gx - here.x) * kx;
-  const screenY = (gy: number): number => cy + (gy - here.y) * ky;
-
-  return {
-    width,
-    height,
-    kx,
-    ky,
-    radius,
-    cx,
-    cy,
-    screenX,
-    screenY,
-    // Запас 15%: подписи и кольцо выбранной системы не должны обрезаться.
-    visible: (s) =>
-      Math.abs(s.x - here.x) <= radius * 1.15 && Math.abs(s.y - here.y) <= radius * 2 * 1.15,
-  };
-}
-
-function drawMap(): void {
-  const canvas = document.getElementById('map') as HTMLCanvasElement | null;
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const v = mapView(canvas);
-
-  canvas.style.height = `${v.height}px`;
-  canvas.width = Math.round(v.width * dpr);
-  canvas.height = Math.round(v.height * dpr);
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, v.width, v.height);
-
-  const systems = systemsOf(state.galaxy);
-  const here = systems[state.system];
-
-  // Круг дальности на текущем топливе. Он круглый именно потому,
-  // что ky = kx/2: иначе здесь был бы эллипс, врущий о дальности.
-  const fuelPx = (state.fuel / 4) * v.kx;
-  ctx.beginPath();
-  ctx.arc(v.cx, v.cy, fuelPx, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(79,216,196,.35)';
-  ctx.setLineDash([5, 7]);
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  for (const sys of systems) {
-    if (!v.visible(sys)) continue;
-    const reachable = distance(here, sys) <= state.fuel;
-    const isHere = sys.index === here.index;
-    ctx.beginPath();
-    ctx.arc(v.screenY(sys.y), v.screenX(sys.x), isHere ? 5 : reachable ? 3.4 : 2.6, 0, Math.PI * 2);
-    ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
-    ctx.fill();
-  }
-
-  // Подписи у всех видимых систем: их 3–11, места хватает. Без подписи
-  // выбирать «на глаз» — это и была та самая неточность.
-  ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  for (const sys of systems) {
-    if (!v.visible(sys)) continue;
-    const reachable = distance(here, sys) <= state.fuel;
-    ctx.fillStyle = sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88';
-    ctx.fillText(sys.name, v.screenY(sys.y), v.screenX(sys.x) + 18);
-  }
-
-  if (selected !== null && v.visible(systems[selected])) {
-    const sel = systems[selected];
-    ctx.beginPath();
-    ctx.arc(v.screenY(sel.y), v.screenX(sel.x), 11, 0, Math.PI * 2);
-    ctx.strokeStyle = '#ffd37a';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.lineWidth = 1;
-  }
-}
-
-function onMapTap(ev: MouseEvent): void {
-  const canvas = ev.currentTarget as HTMLCanvasElement;
-  const rect = canvas.getBoundingClientRect();
-  const v = mapView(canvas);
-  const px = ev.clientX - rect.left;
-  const py = ev.clientY - rect.top;
-
-  // Систем в окне немного (3–11), поэтому можно позволить щедрый
-  // радиус попадания. Раньше он был 28 px на 256 систем — отсюда
-  // промахи: соседняя точка оказывалась ближе пальца.
-  // Сравниваем по экранным координатам, поворот уже учтён в них.
-  let best = -1;
-  let bestD = 44 * 44;
-  systemsOf(state.galaxy).forEach((sys, i) => {
-    if (!v.visible(sys)) return;
-    const d = (v.screenY(sys.y) - px) ** 2 + (v.screenX(sys.x) - py) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  });
-  if (best >= 0) {
-    selected = best;
-    render();
-  }
-}
-
 /* ---------- Действия ---------- */
 
 function tradeLog(verb: string, i: number, amount: number, total: number): void {
@@ -1112,7 +1309,8 @@ document.addEventListener('change', (ev) => {
 });
 
 document.getElementById('content')!.addEventListener('click', (ev) => {
-  if ((ev.target as HTMLElement).id === 'map') onMapTap(ev as MouseEvent);
+  const id = (ev.target as HTMLElement).id;
+  if (id === 'map-overview' || id === 'map-local') onMapTap(ev as MouseEvent);
 });
 
 window.addEventListener('resize', () => {
