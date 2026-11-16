@@ -722,104 +722,163 @@ function updateFlight(): void {
  * `ASPECT` = 0.5 — отношение высоты галактики к ширине (127 против 255).
  */
 /**
- * Проекция галактики на экран.
+ * Локальная карта: окно вокруг корабля, привязанное к топливу.
  *
- * Карта повёрнута на 90° по просьбе пользователя: на телефоне экран
- * вытянут вертикально, а галактика — горизонтальная полоса (255 на 127).
- * Раньше карта была низкой полосой в половину ширины, и системы теснились.
+ * Почему переделано. В прошлой версии я «повернул» карту, но:
+ *  1. не проверил, что ось Y галактики тоже 0..255, а не 0..127 —
+ *     холст выходил уже галактики, 110 систем уезжали за край;
+ *  2. не учёл, что `distance()` в Elite — это `4·hypot(dx, dy/2)`.
+ *     По Y расстояние считается ВДВОЕ «дешевле». Значит на экране
+ *     масштаб по Y должен быть вдвое меньше, иначе круг дальности
+ *     превращается в эллипс, и карта врёт о том, куда можно прыгнуть.
  *
- * После поворота:
- *   - ось X галактики (0..255) идёт ВНИЗ по экрану,
- *   - ось Y галактики (0..127) идёт ВПРАВО.
+ * В оригинале карта ZX Elite сжимает Y вдвое именно по этой причине —
+ * я это видел раньше и сам же сломал при повороте.
  *
- * Оси названы в коде явно (`screenX`, `screenY`), а не `sx`/`sy`:
- * в первой версии я перепутал их местами ровно потому, что по именам
- * нельзя было понять, какая ось куда идёт, и холст выходил 360×695
- * при точках, уезжающих на 681 пиксель.
+ * Показываем не всю галактику, а окно вокруг корабля с радиусом по
+ * топливу: на телефоне 256 точек на экране — это каша, попасть
+ * пальцем невозможно. В окне 3–11 систем, они крупные и подписаны.
  *
- * Масштаб один на обе оси (`k`), иначе круг радиуса прыжка станет
- * эллипсом.
+ * Поворот: X галактики идёт вниз по экрану, Y — вправо, поэтому
+ * на телефоне карта вытянута вертикально.
  */
-function mapProjection(canvas: HTMLCanvasElement) {
+
+/** Запас сверх радиуса топлива: крайние системы не липнут к рамке. */
+const MAP_MARGIN = 1.35;
+
+interface MapView {
+  width: number;
+  height: number;
+  /** Пикселей на координатную единицу по X. */
+  kx: number;
+  /** То же по Y — вдвое меньше, см. `distance()`. */
+  ky: number;
+  /** Радиус окна в координатных единицах. */
+  radius: number;
+  cx: number;
+  cy: number;
+  /** X галактики → вертикаль экрана (карта повёрнута на 90°). */
+  screenX: (gx: number) => number;
+  /** Y галактики → горизонталь экрана. */
+  screenY: (gy: number) => number;
+  /** Попадает ли система в окно. */
+  visible: (s: { x: number; y: number }) => boolean;
+}
+
+function mapView(canvas: HTMLCanvasElement): MapView {
   const width = canvas.clientWidth;
-  const pad = 14;
-  const innerW = width - 2 * pad;
-  // Габариты после поворота: по горизонтали 127, по вертикали 255.
-  const k = innerW / 127;
-  const height = Math.round(255 * k + 2 * pad);
-  /** Галактическая X (0..255) → вертикаль экрана. */
-  const screenX = (gx: number): number => pad + gx * k;
-  /** Галактическая Y (0..127) → горизонталь экрана. */
-  const screenY = (gy: number): number => pad + gy * k;
-  return { width, height, k, screenX, screenY };
+  // Полотно вытянуто вниз: после поворота вдоль него идёт X (0..255).
+  const height = Math.round(Math.min(width * 1.55, 620));
+  const pad = 16;
+
+  const here = systemsOf(state.galaxy)[state.system];
+  const radius = Math.max(4, (state.fuel / 4) * MAP_MARGIN);
+
+  // Дальность считается как hypot(dx, dy/2), то есть по Y «дешевле»
+  // вдвое. Чтобы круг дальности остался кругом, ky = kx/2.
+  // Ограничиваем по обеим осям, чтобы окно влезло целиком.
+  const kx = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
+  const ky = kx / 2;
+
+  const cx = width / 2;
+  const cy = height / 2;
+
+  const screenX = (gx: number): number => cx + (gx - here.x) * kx;
+  const screenY = (gy: number): number => cy + (gy - here.y) * ky;
+
+  return {
+    width,
+    height,
+    kx,
+    ky,
+    radius,
+    cx,
+    cy,
+    screenX,
+    screenY,
+    // Запас 15%: подписи и кольцо выбранной системы не должны обрезаться.
+    visible: (s) =>
+      Math.abs(s.x - here.x) <= radius * 1.15 && Math.abs(s.y - here.y) <= radius * 2 * 1.15,
+  };
 }
 
 function drawMap(): void {
   const canvas = document.getElementById('map') as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
-  const { width: w, height: h, k, screenX, screenY } = mapProjection(canvas);
-  canvas.style.height = `${h}px`;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  const ctx = canvas.getContext('2d')!;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
+  const v = mapView(canvas);
+
+  canvas.style.height = `${v.height}px`;
+  canvas.width = Math.round(v.width * dpr);
+  canvas.height = Math.round(v.height * dpr);
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, v.width, v.height);
 
   const systems = systemsOf(state.galaxy);
   const here = systems[state.system];
 
-  // Радиус прыжка: distance() в галактике = 4 * sqrt(dx² + (dy/2)²).
-  // Масштаб по обеим осям один (k), поэтому радиус в пикселях — это
-  // просто k * координатное расстояние: круг остаётся кругом.
-  const rangeLy = state.fuel / 4;
+  // Круг дальности на текущем топливе. Он круглый именно потому,
+  // что ky = kx/2: иначе здесь был бы эллипс, врущий о дальности.
+  const fuelPx = (state.fuel / 4) * v.kx;
   ctx.beginPath();
-  ctx.arc(screenX(here.x), screenY(here.y), rangeLy * k, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(79,216,196,.45)';
-  ctx.setLineDash([6, 6]);
+  ctx.arc(v.cx, v.cy, fuelPx, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(79,216,196,.35)';
+  ctx.setLineDash([5, 7]);
+  ctx.lineWidth = 1;
   ctx.stroke();
   ctx.setLineDash([]);
 
-  for (const s of systems) {
-    const reachable = distance(here, s) <= state.fuel;
+  for (const sys of systems) {
+    if (!v.visible(sys)) continue;
+    const reachable = distance(here, sys) <= state.fuel;
+    const isHere = sys.index === here.index;
     ctx.beginPath();
-    ctx.arc(screenX(s.x), screenY(s.y), reachable ? 3 : 2, 0, Math.PI * 2);
-    ctx.fillStyle = reachable ? '#dde4e2' : '#5c6b68';
+    ctx.arc(v.screenY(sys.y), v.screenX(sys.x), isHere ? 5 : reachable ? 3.4 : 2.6, 0, Math.PI * 2);
+    ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
     ctx.fill();
   }
 
-  if (selected !== null) {
-    const s = systems[selected];
+  // Подписи у всех видимых систем: их 3–11, места хватает. Без подписи
+  // выбирать «на глаз» — это и была та самая неточность.
+  ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (const sys of systems) {
+    if (!v.visible(sys)) continue;
+    const reachable = distance(here, sys) <= state.fuel;
+    ctx.fillStyle = sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88';
+    ctx.fillText(sys.name, v.screenY(sys.y), v.screenX(sys.x) + 18);
+  }
+
+  if (selected !== null && v.visible(systems[selected])) {
+    const sel = systems[selected];
     ctx.beginPath();
-    ctx.arc(screenX(s.x), screenY(s.y), 8, 0, Math.PI * 2);
+    ctx.arc(v.screenY(sel.y), v.screenX(sel.x), 11, 0, Math.PI * 2);
     ctx.strokeStyle = '#ffd37a';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#ffd37a';
-    ctx.font = '12px sans-serif';
-    // Подпись ставим правее и выше точки, не давая уехать за холст.
-    ctx.fillText(s.name, Math.max(4, Math.min(screenY(s.x) - 60, w - 80)), screenX(s.x) + 18);
   }
-
-  ctx.beginPath();
-  ctx.arc(screenX(here.x), screenY(here.y), 6, 0, Math.PI * 2);
-  ctx.fillStyle = '#4fd8c4';
-  ctx.fill();
 }
 
 function onMapTap(ev: MouseEvent): void {
   const canvas = ev.currentTarget as HTMLCanvasElement;
   const rect = canvas.getBoundingClientRect();
-  const { screenX, screenY } = mapProjection(canvas);
-  // Касание в экранных координатах, сравнение — тоже экранное:
-  // поэтому поворот карты не может «съехать» отдельно от касания.
+  const v = mapView(canvas);
   const px = ev.clientX - rect.left;
   const py = ev.clientY - rect.top;
+
+  // Систем в окне немного (3–11), поэтому можно позволить щедрый
+  // радиус попадания. Раньше он был 28 px на 256 систем — отсюда
+  // промахи: соседняя точка оказывалась ближе пальца.
+  // Сравниваем по экранным координатам, поворот уже учтён в них.
   let best = -1;
-  let bestD = 28 * 28;
-  systemsOf(state.galaxy).forEach((s, i) => {
-    const d = (screenX(s.x) - px) ** 2 + (screenY(s.y) - py) ** 2;
+  let bestD = 44 * 44;
+  systemsOf(state.galaxy).forEach((sys, i) => {
+    if (!v.visible(sys)) return;
+    const d = (v.screenY(sys.y) - px) ** 2 + (v.screenX(sys.x) - py) ** 2;
     if (d < bestD) {
       bestD = d;
       best = i;

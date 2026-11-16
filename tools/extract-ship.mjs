@@ -27,6 +27,7 @@ function grab(label, count) {
 
 const vbytes = grab('ShipCobraMkIIIPirateVertices', 168);
 const ebytes = grab('ShipCobraMkIIIPirateEdges', 152);
+const fbytes = grab('ShipCobraMkIIIPirateFaces', 52);
 
 /**
  * Вершина — 6 байт: |x|, |y|, |z|, затем байт знаков и видимости.
@@ -75,6 +76,46 @@ const key = (v) => v.join(',');
 const dup = V.length - new Set(V.map(key)).size;
 console.log('дубликатов:', dup);
 
+/**
+ * Грани. 4 байта: |nx|, |ny|, |nz|, затем байт знаков нормали
+ * (биты 7/6/5) — та же схема, что у вершин. Нормаль нужна, чтобы
+ * понять, какая грань смотрит на зрителя, и закрасить её.
+ */
+const F = [];
+for (let i = 0; i < fbytes.length; i += 4) {
+  const mag = [fbytes[i], fbytes[i + 1], fbytes[i + 2]];
+  const fl = fbytes[i + 3];
+  F.push([
+    fl & 0x80 ? -mag[0] : mag[0],
+    fl & 0x40 ? -mag[1] : mag[1],
+    fl & 0x20 ? -mag[2] : mag[2],
+  ]);
+}
+console.log('граней:', F.length);
+
+/**
+ * Какие грани сходятся в каждой вершине.
+ *
+ * Вершина хранит номера граней в байтах 4 и 5, по два в каждом (нибблы).
+ * Это и есть связь «грань ↔ её углы»: отдельной таблицы нет.
+ */
+const vertexFaces = [];
+for (let i = 0; i < vbytes.length; i += 6) {
+  const a = vbytes[i + 4];
+  const b = vbytes[i + 5];
+  const faces = [a & 0x0f, a >> 4, b & 0x0f, b >> 4].filter((f) => f !== 0x0f);
+  vertexFaces.push(faces);
+}
+console.log('вершина 0 сходится в гранях:', vertexFaces[0].join(', '));
+
+// Проверка: каждая грань должна иметь хотя бы 3 вершины
+const perFace = Array.from({ length: F.length }, () => []);
+vertexFaces.forEach((faces, vi) => faces.forEach((f) => { if (perFace[f]) perFace[f].push(vi); }));
+const faceSizes = perFace.map((v) => v.length);
+console.log('вершин на грань: мин', Math.min(...faceSizes), 'макс', Math.max(...faceSizes));
+const degenerate = faceSizes.filter((n) => n < 3).length;
+console.log('граней с <3 вершинами:', degenerate);
+
 // --- вывод для вставки в src/ui/ship-model.ts ---------------------------
 if (process.argv.includes('--emit')) {
   const rows = [];
@@ -87,4 +128,10 @@ if (process.argv.includes('--emit')) {
   }
   console.log('\n--- VERTICES ---\n' + rows.join('\n'));
   console.log('--- EDGES ---\n' + erows.join('\n'));
+  // Грани: нормаль + вершины (порядок обхода берём по возрастанию индекса)
+  const frows = F.map((n, fi) => {
+    const vs = perFace[fi];
+    return `  { normal: [${n.join(', ')}], verts: [${vs.join(', ')}] },`;
+  });
+  console.log('--- FACES ---\n' + frows.join('\n'));
 }

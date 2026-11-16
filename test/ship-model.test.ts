@@ -8,55 +8,93 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { buildGalaxy, distance } from '../src/core/galaxy.ts';
 
-/* ---------- Карта после поворота на 90° ---------- */
+/* ---------- Локальная карта после поворота на 90° ---------- */
 
-/** Копия проекции из `main.ts` — проверяем математику, а не DOM. */
-function projection(width: number) {
-  const pad = 14;
-  const innerW = width - 2 * pad;
-  const k = innerW / 127;
-  const height = Math.round(255 * k + 2 * pad);
+/**
+ * Копия `mapView` из `main.ts`. Проверяем математику, а не DOM:
+ * обещанное «круг дальности остаётся кругом» ломается молча.
+ */
+function mapView(width: number, fuel: number, here: { x: number; y: number }) {
+  const height = Math.round(Math.min(width * 1.55, 620));
+  const pad = 16;
+  const MARGIN = 1.35;
+  const radius = Math.max(4, (fuel / 4) * MARGIN);
+  const kx = Math.min((width - 2 * pad) / (2 * radius), (height - 2 * pad) / (2 * radius));
+  const ky = kx / 2; // distance() считает dy/2 — по Y вдвое «дешевле»
   return {
     width,
     height,
-    k,
-    screenX: (gx: number) => pad + gx * k,
-    screenY: (gy: number) => pad + gy * k,
+    kx,
+    ky,
+    radius,
+    screenX: (gx: number) => width / 2 + (gx - here.x) * kx,
+    screenY: (gy: number) => height / 2 + (gy - here.y) * ky,
+    visible: (s: { x: number; y: number }) =>
+      Math.abs(s.x - here.x) <= radius * 1.15 && Math.abs(s.y - here.y) <= radius * 2 * 1.15,
   };
 }
 
-test('карта: все углы галактики попадают на холст', () => {
-  for (const w of [320, 360, 414, 768]) {
-    const p = projection(w);
-    for (const [gx, gy] of [[0, 0], [255, 0], [0, 127], [255, 127]]) {
-      const x = p.screenX(gx);
-      const y = p.screenY(gy);
-      assert.ok(x >= 0 && x <= p.height, `ширина ${w}: X=${x.toFixed(0)} вне 0..${p.height}`);
-      assert.ok(y >= 0 && y <= p.width, `ширина ${w}: Y=${y.toFixed(0)} вне 0..${p.width}`);
+test('карта: круг дальности круглый, а не эллипс', () => {
+  // distance() = 4·hypot(dx, dy/2). Если масштаб по Y не вдвое меньше,
+  // круг превращается в эллипс и карта врёт о дальности прыжка.
+  const v = mapView(360, 70, { x: 100, y: 100 });
+  const R = 70 / 4;
+  const cx = v.width / 2;
+  const cy = v.height / 2;
+  const alongX = Math.hypot(v.screenX(100 + R) - cx, v.screenY(100) - cy);
+  const alongY = Math.hypot(v.screenX(100) - cx, v.screenY(100 + R * 2) - cy);
+  assert.ok(Math.abs(alongX - alongY) < 0.5, `по X ${alongX.toFixed(1)} px, по Y ${alongY.toFixed(1)} px`);
+});
+
+test('карта: все достижимые системы попадают в окно', () => {
+  // Реальные данные галактики 1: раньше 110 систем из 256 уезжали за край.
+  const systems = buildGalaxy(1);
+  for (const here of systems) {
+    for (const fuel of [20, 40, 70]) {
+      const v = mapView(360, fuel, here);
+      for (const s of systems) {
+        if (distance(here, s) > fuel) continue;
+        assert.ok(
+          v.visible(s),
+          `${here.name} топливо ${fuel}: достижимая ${s.name} не видна`,
+        );
+      }
     }
   }
 });
 
-test('карта: после поворота она выше, чем шире', () => {
-  // Галактика 255×127, повёрнутая на 90°, даёт вытянутый вниз холст.
-  const p = projection(360);
-  assert.ok(p.height > p.width, `высота ${p.height} должна быть больше ширины ${p.width}`);
-  assert.ok(p.height / p.width > 1.5, 'карта должна заметно вытянуться');
-});
+test('карта: окно небольшое — выбирать пальцем реально', () => {
+  // Вся галактика (256 систем) на экране телефона — каша, попасть
+  // невозможно. В окне вокруг корабля их единицы-десятки.
+  // Замер по реальной галактике 1: медиана 20, максимум 32 при полном
+  // баке. 32 точки на 360 px — примерно одна на 64 px, это нормально
+  // для пальца (радиус попадания 44 px ещё и с запасом).
+  const systems = buildGalaxy(1);
+  let worst = 0;
+  let median = 0;
+  const counts: number[] = [];
+  for (const here of systems) {
+    const v = mapView(360, 70, here);
+    counts.push(systems.filter((s) => v.visible(s)).length);
+  }
+  counts.sort((a, b) => a - b);
+  worst = counts[counts.length - 1];
+  median = counts[Math.floor(counts.length / 2)];
 
-test('карта: масштаб по обеим осям одинаков — круг прыжка не станет эллипсом', () => {
-  const p = projection(360);
-  // Расстояние между соседними координатами должно быть кратно k по обеим осям.
-  assert.equal(p.screenX(1) - p.screenX(0), p.screenY(1) - p.screenY(0));
+  assert.ok(worst <= 40, `в окне до ${worst} систем — слишком много`);
+  assert.ok(median <= 25, `медиана ${median} систем — тесновато`);
+  assert.ok(worst >= 3, 'в окне должно быть хотя бы несколько систем');
 });
 
 test('карта: X галактики идёт вниз, Y — вправо', () => {
-  const p = projection(360);
-  assert.ok(p.screenX(100) > p.screenX(0), 'рост X должен вести вниз');
-  assert.ok(p.screenY(100) > p.screenY(0), 'рост Y должен вести вправо');
-  // И это разные оси: X не должен менять горизонталь.
-  assert.equal(p.screenY(0), p.screenY(0));
+  const v = mapView(360, 70, { x: 128, y: 128 });
+  // Рост X должен увеличивать экранную вертикаль, но не горизонталь.
+  assert.ok(v.screenX(200) > v.screenX(128), 'рост X должен вести вниз');
+  assert.equal(v.screenY(128), v.screenY(128));
+  // Рост Y — наоборот.
+  assert.ok(v.screenY(200) > v.screenY(128), 'рост Y должен вести вправо');
 });
 
 /* ---------- Модель корабля ---------- */
@@ -147,4 +185,34 @@ test('модель читается: силуэт выше нуля по обе�
   const ys = p.map((q) => q.y);
   assert.ok(Math.max(...xs) - Math.min(...xs) > 100);
   assert.ok(Math.max(...ys) - Math.min(...ys) > 30);
+});
+
+test('модель: дальние рёбра скрываются — корпус не просвечивает', () => {
+  // Раньше рисовались все 38 рёбер одновременно, и корабль выглядел
+  // проволочным клубком. Теперь дальние (обе вершины за серединой)
+  // не рисуются.
+  const w = 360;
+  const h = Math.round(w * 0.46);
+  const dist = 620;
+  const scale = Math.min(w, h) * 0.0072;
+  const pitch = 0.28;
+
+  let minVisible = 99;
+  let maxVisible = 0;
+  for (let deg = 0; deg < 360; deg += 3) {
+    const yaw = (deg * Math.PI) / 180;
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const depth = V.map(([vx, vy, vz]) => {
+      const z1 = -vx * sy + vz * cy;
+      return vy * sp + z1 * cp;
+    });
+    const mid = (Math.min(...depth) + Math.max(...depth)) / 2;
+    const visible = E.filter(([a, b]) => depth[a] < mid || depth[b] < mid).length;
+    minVisible = Math.min(minVisible, visible);
+    maxVisible = Math.max(maxVisible, visible);
+  }
+  assert.ok(maxVisible < E.length, 'на всех углах видно все рёбра — скрытия нет');
+  assert.ok(minVisible >= 8, `на части углов видно всего ${minVisible} рёбер — силуэт теряется`);
+  assert.ok(minVisible <= 20, 'скрытие слишком слабое');
 });

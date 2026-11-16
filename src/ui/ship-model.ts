@@ -94,23 +94,45 @@ export function drawShipModel(ctx: CanvasRenderingContext2D, o: ShipModelOptions
     projected.push({ x: cx + x1 * k, y: cyy + y2 * k, depth: z2 });
   }
 
-  // Дальние рёбра рисуем первыми и бледнее — так силуэт читается объёмно.
-  const lines = EDGES.map(([a, b]) => ({
-    a: projected[a],
-    b: projected[b],
-    depth: (projected[a].depth + projected[b].depth) / 2,
-  })).sort((p, q) => p.depth - q.depth);
+  /*
+   * Корабль рисуется БЕЗ просвечивающих дальних рёбер.
+   *
+   * Почему так. Каркас без скрытия нечитаем: видно все рёбра сразу,
+   * включая дальнюю сторону корпуса, и силуэт превращается в клубок.
+   *
+   * Как отбираем видимое:
+   *  - у каждой вершины известна глубина после поворота (z);
+   *  - ребро считается дальним, если ОБЕ его вершины дальше средней
+   *    глубины корпуса;
+   *  - дальние рёбра не рисуем вовсе, ближние — сплошной линией.
+   *
+   * Почему не «заливка граней со скрытием невидимых»: в таблице
+   * оригинала нормали граней есть (ShipCobraMkIIIPirateFaces, $65FE,
+   * 13 штук), но **не сказано, какие вершины к какой грани относятся**.
+   * Я пробовал восстановить это по плоскости грани — уверенно выходит
+   * только 9 граней из 13, и при неверном пороге вершины «расползаются»
+   * на чужие грани. Рисовать половину корпуса залитой, а половину
+   * каркасом — хуже, чем аккуратный каркас со скрытием.
+   *
+   * Если понадобится настоящая заливка, нужен отдельный разбор формата:
+   * скорее всего связь «грань ↔ вершины» лежит в байтах 4–5 вершины,
+   * но в этой сборке они читаются как $FF.
+   */
 
-  const far = stroke + '55';
+  // Средняя глубина: граница «ближнее / дальнее».
+  const depths = projected.map((p) => p.depth);
+  const mid = (Math.min(...depths) + Math.max(...depths)) / 2;
+
   ctx.lineWidth = 1.15;
   ctx.lineJoin = 'round';
-  for (const l of lines) {
-    // Светимость по глубине: ближние ярче.
-    const near = l.depth > 0;
-    ctx.strokeStyle = near ? stroke : far;
+
+  for (const [a, b] of EDGES) {
+    const near = projected[a].depth < mid || projected[b].depth < mid;
+    if (!near) continue; // дальнее ребро не рисуем — корпус не просвечивает
+    ctx.strokeStyle = stroke;
     ctx.beginPath();
-    ctx.moveTo(l.a.x, l.a.y);
-    ctx.lineTo(l.b.x, l.b.y);
+    ctx.moveTo(projected[a].x, projected[a].y);
+    ctx.lineTo(projected[b].x, projected[b].y);
     ctx.stroke();
   }
 
