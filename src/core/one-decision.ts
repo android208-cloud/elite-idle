@@ -21,6 +21,7 @@
 
 import { LASER_POWER, LASER_RATE, MAX_ENERGY, MAX_SHIELDS } from './combat.ts';
 import { enemyById, type EnemyType, type LaserType } from './ships.ts';
+import { ALIEN_ITEMS_INDEX } from './market.ts';
 
 /** Что игрок может сделать при встрече. */
 export type Decision = 'attack' | 'flee' | 'skip';
@@ -133,6 +134,51 @@ export interface Decisions {
   fleeReason?: string;
 }
 
+/** Груз игрока и всё, что капсула уничтожает. */
+export interface ShipForPod {
+  cargo: readonly number[];
+  /** Свободное место трюма до побега (нужно для восстановления). */
+  holdSpace: number;
+}
+
+export interface PodResult {
+  /** Груз после катапультирования: всё, кроме предметов пришельцев. */
+  cargo: readonly number[];
+  /** Трюм после катапультирования — снова пустой. */
+  holdSpace: number;
+}
+
+/**
+ * Что происходит с грузом при катапультировании.
+ *
+ * Точно по `UpdateEscapePod` ($A7A3–$A7C7, game.asm):
+ *
+ *     LD HL,MarketFluctuation   ; 17 байт: флуктуация рынка + CargoHold+0..15
+ *     LD B,$11                  ; обнулить 17 байт
+ * L_A7AF: LD (HL),A : INC HL : DJNZ L_A7AF
+ *
+ * То есть затираются индексы **0..15**, а **индекс 16 — предметы
+ * пришельцев — остаётся**. Плюс сбрасывается флуктуация рынка (у нас
+ * рынок пересоздаётся при стыковке), обнуляется правовой статус
+ * ($A7A4), теряются беженцы (`AND $DF`, $A7B3), трюм становится пустым
+ * ($A7BA–$A7C7).
+ *
+ * Пассажиров в нашей модели пока нет — они появятся с миссиями.
+ */
+export function cargoAfterPod(cargo: readonly number[]): readonly number[] {
+  return cargo.map((tons, i) => (i === ALIEN_ITEMS_INDEX ? tons : 0));
+}
+
+/** Применяет потерю груза при побеге. */
+export function applyPodLoss(ship: ShipForPod): PodResult {
+  return {
+    cargo: cargoAfterPod(ship.cargo),
+    // Трюм пуст (кроме пришельцев, которые остаются), но вместимость
+    // прежняя: она — свойство корабля, а не груза.
+    holdSpace: ship.holdSpace,
+  };
+}
+
 /**
  * Какие решения доступны.
  *
@@ -169,6 +215,8 @@ export interface DecisionResult {
   bounty: number;
   /** Потрачена ли капсула. */
   podUsed: boolean;
+  /** Побег обнуляет правовой статус целиком ($A7A4). */
+  legalCleared?: boolean;
 }
 
 /**
@@ -201,8 +249,12 @@ export function applyDecision(
       if (!decisions.flee) return null;
       return {
         outcome: 'fled',
-        text: `Побег на капсуле от ${enemy.name}`,
+        text: `Побег на капсуле от ${enemy.name}: груз потерян, правовой статус обнулён`,
+        // $A7A4: побег очищает правовой статус до нуля.
+        // Для этого `legalDelta` недостаточно — нужен абсолютный ноль,
+        // поэтому у результата есть флаг `legalCleared`.
         legalDelta: 0,
+        legalCleared: true,
         bounty: 0,
         podUsed: true,
       };

@@ -2,6 +2,7 @@ import './styles.css';
 import { IframeDockingModule } from './docking-module.ts';
 import {
   applyDecision,
+  applyPodLoss,
   availableDecisions,
   autoResolve,
   bestLaserOf,
@@ -773,13 +774,21 @@ function onAction(el: HTMLElement): void {
         addLog('Это решение сейчас недоступно');
         break;
       }
-      state = {
-        ...state,
-        cash: state.cash + r.bounty,
-        ship: r.podUsed ? { ...state.ship, escapePod: false } : state.ship,
-        encounter: null,
-        combat: null,
-      };
+      let next: GameState = { ...state, cash: state.cash + r.bounty, encounter: null, combat: null };
+      if (r.podUsed) {
+        // §37 / UpdateEscapePod: капсула тратится, груз теряется
+        // (кроме предметов пришельцев), правовой статус обнуляется.
+        const pod = applyPodLoss({ cargo: state.cargo, holdSpace: state.holdSpace });
+        next = {
+          ...next,
+          cargo: [...pod.cargo],
+          holdSpace: pod.holdSpace,
+          legal: 0,
+          ship: { ...state.ship, escapePod: false },
+        };
+      }
+      if (r.legalCleared) next = { ...next, legal: 0 };
+      state = next;
       addLog(r.text + (r.bounty > 0 ? ` (+${cr(r.bounty)})` : ''));
       render();
       break;
