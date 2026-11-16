@@ -1,4 +1,5 @@
 import './styles.css';
+import { IframeDockingModule } from './docking-module.ts';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
@@ -431,31 +432,88 @@ export interface DockingModule {
   open(): DockingResult | null;
 }
 
-/** Реестр модулей. Пока пуст: мини-игра подключается отдельно. */
-const DOCKING_MODULES = new Map<string, DockingModule>();
+/**
+ * Реализация по умолчанию — мини-игра пользователя в iframe.
+ *
+ * Файл лежит в `public/`, поэтому копируется в сборку как есть и может
+ * быть заменён без пересборки игры: достаточно положить другой HTML
+ * с тем же протоколом.
+ */
+const DEFAULT_DOCKING = new IframeDockingModule({
+  src: './user-docking3-tune.html',
+  name: 'user-docking3',
+  label: 'Ваша мини-игра',
+});
 
-/** Текущий выбранный модуль (null — стыковка недоступна). */
-let activeDocking: DockingModule | null = null;
+/** Активный модуль. Меняется, если подключат другую реализацию. */
+let activeDocking: IframeDockingModule | null = DEFAULT_DOCKING;
 
-export function registerDockingModule(mod: DockingModule): void {
-  DOCKING_MODULES.set(mod.name, mod);
-  if (!activeDocking) activeDocking = mod;
-}
+let dockingOpen = false;
 
 /**
- * Открывает активный модуль. Возвращает false, если модуля нет, —
- * тогда карта сообщит об этом игроку.
+ * Открывает экран стыковки и применяет результат.
+ *
+ * Возвращает false, только если модуль недоступен. Сама стыковка
+ * асинхронна: экран живёт в iframe, ответ приходит сообщением.
  */
 function openDocking(): boolean {
-  if (!activeDocking) return false;
-  const result = activeDocking.open();
-  if (!result) return false;
-  if (result.docked) {
-    addLog(`Стыковка: успешно (${activeDocking.label})`);
-  } else {
-    addLog(`Стыковка: провал, повреждение ${result.damage} (${activeDocking.label})`);
-  }
-  render();
+  const mod = activeDocking;
+  if (!mod) return false;
+  if (dockingOpen) return false;
+  dockingOpen = true;
+
+  const systems = systemsOf(state.galaxy);
+  const target = selected !== null && selected !== state.system ? selected : null;
+
+  void mod
+    .open({
+      systemName: systems[state.system].name,
+      hasComputer: state.ship.dockingComputer,
+      // Прыжок живёт в космосе, а космос у нас только здесь.
+      canJump: true,
+      jumpTarget: target,
+      jumpTargetName: target !== null ? systems[target].name : null,
+    })
+    .then((outcome) => {
+      dockingOpen = false;
+      if (!outcome) {
+        addLog('Стыковка: экран закрыт без решения');
+        render();
+        return;
+      }
+      if (outcome.jumpedAway) {
+        // Игрок улетел, бросив заход. Цель — выбранная на карте,
+        // иначе прыгать некуда.
+        if (target === null) {
+          addLog('Прыжок отменён: на карте не выбрана система');
+          render();
+          return;
+        }
+        const r = startJump(state, target, Date.now(), settings);
+        if (r.error) {
+          addLog(JUMP_ERRORS[r.error]);
+        } else {
+          const legalBefore = state.legal;
+          state = r.state;
+          addLog(`Отправление: ${systems[state.system].name} → ${systems[target].name}`);
+          if (state.legal > legalBefore) {
+            addLog(`Контрабанда в трюме: правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`);
+          }
+          tab = 'ship';
+        }
+        render();
+        return;
+      }
+      if (outcome.docked) {
+        addLog(`Стыковка: успешно (${mod.label})`);
+      } else {
+        addLog(
+          `Стыковка: провал, повреждение ${outcome.damage} (${mod.label})`,
+        );
+      }
+      render();
+    });
+
   return true;
 }
 

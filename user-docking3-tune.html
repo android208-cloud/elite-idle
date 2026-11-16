@@ -201,6 +201,10 @@
             <h1 id="status-title">CORIOLIS STATION</h1>
             <p id="status-desc">Сначала уравняйте СКОРОСТЬ вращения (СИНХР ≈ 0°/с) — тогда маркеры перестанут разъезжаться. Потом совместите угол на прицеле и входите.<br><br>
             Короткие импульсы ↺/↻. Если СИНХР зелёный — синхронизация захвачена и сама не уедет.</p>
+            <div id="host-actions" style="display:none; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:10px">
+                <button id="docking-computer-btn" style="display:none">СТЫКОВОЧНЫЙ КОМПЬЮТЕР</button>
+                <button id="jump-away-btn">ПРЫЖОК</button>
+            </div>
             <button id="start-btn">ИНИЦИАЛИЗАЦИЯ</button>
         </div>
     </div>
@@ -234,6 +238,72 @@
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const overlay = document.getElementById('overlay');
+
+    /* ══════════════════════════════════════════════════════════════
+       ПРОТОКОЛ ОБМЕНА С ИГРОЙ (iframe)
+       Экран может работать и сам по себе: если родителя нет,
+       кнопки хоста просто не показываются.
+       ══════════════════════════════════════════════════════════════ */
+    const DOCKING_CHANNEL = 'elite-idle-docking';
+    const HOST = (window.parent !== window) ? window.parent : null;
+    let hostConfig = null;
+    let resultSent = false;
+
+    function sendToHost(msg) {
+        if (!HOST) return;
+        HOST.postMessage({ channel: DOCKING_CHANNEL, ...msg }, '*');
+    }
+
+    function sendResult(outcome) {
+        if (resultSent) return;
+        resultSent = true;
+        sendToHost({ type: 'docking:result', ...outcome });
+    }
+
+    window.addEventListener('message', (ev) => {
+        const m = ev.data;
+        if (!m || m.channel !== DOCKING_CHANNEL) return;
+        if (m.type === 'docking:init') {
+            hostConfig = m.config;
+            const bar = document.getElementById('host-actions');
+            if (bar) bar.style.display = 'flex';
+            const comp = document.getElementById('docking-computer-btn');
+            if (comp) comp.style.display = hostConfig.hasComputer ? 'inline-block' : 'none';
+            const jump = document.getElementById('jump-away-btn');
+            if (jump) {
+                jump.style.display = hostConfig.canJump ? 'inline-block' : 'none';
+                jump.textContent = hostConfig.jumpTargetName
+                    ? `ПРЫЖОК → ${hostConfig.jumpTargetName.toUpperCase()}`
+                    : 'ПРЫЖОК (ЦЕЛЬ НЕ ВЫБРАНА)';
+            }
+            if (hostConfig.systemName) {
+                const st = document.getElementById('status-title');
+                if (st && !gameActive) st.innerText = hostConfig.systemName.toUpperCase();
+            }
+        }
+    });
+
+    // сообщаем игре, что экран готов
+    sendToHost({ type: 'docking:ready' });
+
+    // ── стыковочный компьютер: нажатие — сразу пристыкован ──
+    document.getElementById('docking-computer-btn').addEventListener('click', () => {
+        playBeep(880, 0.3, 'square');
+        sendResult({ docked: true, damage: 0 });
+    });
+
+    // ── прыжок: улетаем, бросив заход ──
+    document.getElementById('jump-away-btn').addEventListener('click', () => {
+        if (!hostConfig || hostConfig.jumpTarget === null) {
+            const st = document.getElementById('status-desc');
+            if (st) st.innerText = 'Цель прыжка не выбрана. Выберите систему на карте.';
+            return;
+        }
+        playBeep(520, 0.25, 'square');
+        sendToHost({ type: 'docking:jump', to: hostConfig.jumpTarget });
+        resultSent = true;
+    });
+
     const startBtn = document.getElementById('start-btn');
     const statusTitle = document.getElementById('status-title');
     const statusDesc = document.getElementById('status-desc');
@@ -382,6 +452,7 @@
                     (Math.random() * (TUNE.stSpinMax - TUNE.stSpinMin) + TUNE.stSpinMin) / 3
         };
         gameActive = true;
+        resultSent = false;
         overlay.style.display = 'none';
     }
 
@@ -532,6 +603,7 @@
                 statusTitle.style.color = "var(--hud-green)";
                 statusDesc.innerHTML = `Стыковка в норме, командир.<br><br>Смещение: ${distErr.toFixed(1)} м<br>Угол: ${angleErr.toFixed(1)}°`;
                 startBtn.innerText = "НОВАЯ МИССИЯ";
+                sendResult({ docked: true, damage: 0 });
             } else {
                 playBeep(150, 0.8, 'sawtooth');
                 statusTitle.innerText = "АВАРИЯ ШЛЮЗА";
@@ -543,6 +615,14 @@
                 if (!speedOK) reasons.push("Слишком высокая скорость сближения");
                 statusDesc.innerHTML = `Причины аварии:<br><span style="color:var(--hud-amber)">- ${reasons.join('<br>- ')}</span>`;
                 startBtn.innerText = "ПОВТОРИТЬ";
+                // Повреждение считаем по тем же причинам, что и в оригинале:
+                // 12 базовых + 2 за каждую единицу превышения скорости.
+                const overSpeed = Math.max(0, hitSpeed - 0.6);
+                const overPos = Math.max(0, (distErr - 15) / 15);
+                sendResult({
+                    docked: false,
+                    damage: Math.min(60, Math.round(12 + 20 * overSpeed + 20 * overPos)),
+                });
             }
             overlay.style.display = 'flex';
         }
