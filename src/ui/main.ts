@@ -353,10 +353,8 @@ function galacticCard(): string {
     : `Установите галактический гипердвигатель на станции с достаточным технологическим уровнем (№12 на верфи).`;
   return `<div class="card warn"><h2>Галактический гиперпрыжок</h2>
       <div class="sub">${explain}</div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn" data-action="galactic-jump" ${drive && !state.flight ? '' : 'disabled'}>
-          Перейти в галактику ${next}
-        </button>
+      <div class="sub" style="margin-top:8px;color:var(--dim)">
+        Прыжок выполняется только в космосе: карта → «Отстыковка» → «ГАЛАКТИКА».
       </div></div>`;
 }
 
@@ -473,11 +471,35 @@ function openDocking(): boolean {
       canJump: true,
       jumpTarget: target,
       jumpTargetName: target !== null ? systems[target].name : null,
+      hasGalacticDrive: state.ship.galacticHyperdrive,
+      nextGalaxy: (state.galaxy % 8) + 1,
     })
     .then((outcome) => {
       dockingOpen = false;
       if (!outcome) {
         addLog('Стыковка: экран закрыт без решения');
+        render();
+        return;
+      }
+      if (outcome.jumpedAway && outcome.jumpKind === 'galactic') {
+        // Галактический прыжок: цель не нужна — она задана жёстко
+        // (точка 96,96), а двигатель одноразовый.
+        const from = state.galaxy;
+        const rg = galacticJump(state);
+        if (rg.error) {
+          addLog(
+            rg.error === 'no-drive'
+              ? 'Галактический гипердвигатель не установлен'
+              : 'Нельзя прыгнуть сейчас',
+          );
+        } else {
+          state = rg.state;
+          selected = null;
+          addLog(
+            `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
+          );
+          tab = 'map';
+        }
         render();
         return;
       }
@@ -721,21 +743,6 @@ function onAction(el: HTMLElement): void {
       const r = combatAction(state, el.dataset.a as CombatAction, Date.now(), settings);
       state = r.state;
       handleEvents(r.events);
-      break;
-    }
-    case 'galactic-jump': {
-      const from = state.galaxy;
-      const r = galacticJump(state);
-      if (r.error) {
-        addLog(r.error === 'no-drive' ? 'Галактический гипердвигатель не установлен' : 'Нельзя прыгнуть сейчас');
-      } else {
-        state = r.state;
-        selected = null;
-        addLog(
-          `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
-        );
-        tab = 'map';
-      }
       break;
     }
     case 'combat-auto': {

@@ -38,7 +38,13 @@ test('готовность экрана разбирается', () => {
 
 test('успешная стыковка: повреждения нет', () => {
   const m = parseFromFrame(wrap({ type: 'docking:result', docked: true, damage: 0 }));
-  assert.deepEqual(m, { type: 'docking:result', docked: true, damage: 0, jumpedAway: undefined });
+  assert.deepEqual(m, {
+    type: 'docking:result',
+    docked: true,
+    damage: 0,
+    jumpedAway: undefined,
+    jumpKind: undefined,
+  });
 });
 
 test('провал: повреждение передаётся числом', () => {
@@ -73,6 +79,8 @@ test('конфигурация покрывает все сценарии экр
     canJump: true,
     jumpTarget: 12,
     jumpTargetName: 'Diso',
+    hasGalacticDrive: false,
+    nextGalaxy: 3,
   };
   assert.equal(cfg.hasComputer, false, 'без компьютера кнопка скрыта');
   assert.equal(cfg.canJump, true, 'прыжок доступен — космос только здесь');

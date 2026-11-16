@@ -204,6 +204,7 @@
             <div id="host-actions" style="display:none; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:10px">
                 <button id="docking-computer-btn" style="display:none">СТЫКОВОЧНЫЙ КОМПЬЮТЕР</button>
                 <button id="jump-away-btn">ПРЫЖОК</button>
+                <button id="galactic-jump-btn" style="display:none">ГАЛАКТИКА</button>
             </div>
             <button id="start-btn">ИНИЦИАЛИЗАЦИЯ</button>
         </div>
@@ -269,6 +270,11 @@
             if (bar) bar.style.display = 'flex';
             const comp = document.getElementById('docking-computer-btn');
             if (comp) comp.style.display = hostConfig.hasComputer ? 'inline-block' : 'none';
+            const gal = document.getElementById('galactic-jump-btn');
+            if (gal) {
+                gal.style.display = hostConfig.hasGalacticDrive ? 'inline-block' : 'none';
+                gal.textContent = `ГАЛАКТИКА → ${hostConfig.nextGalaxy}`;
+            }
             const jump = document.getElementById('jump-away-btn');
             if (jump) {
                 jump.style.display = hostConfig.canJump ? 'inline-block' : 'none';
@@ -290,6 +296,20 @@
     document.getElementById('docking-computer-btn').addEventListener('click', () => {
         playBeep(880, 0.3, 'square');
         sendResult({ docked: true, damage: 0 });
+    });
+
+    // ── галактический прыжок: необратим, двигатель одноразовый ──
+    document.getElementById('galactic-jump-btn').addEventListener('click', () => {
+        if (!hostConfig || !hostConfig.hasGalacticDrive) return;
+        const ok = window.confirm(
+            `Перейти в галактику ${hostConfig.nextGalaxy}?\n\n` +
+            'Двигатель одноразовый — он сгорит. Правовой статус обнулится. ' +
+            'Вернуться в эту галактику можно только новым двигателем.'
+        );
+        if (!ok) return;
+        playBeep(440, 0.3, 'square');
+        sendToHost({ type: 'docking:galactic-jump' });
+        resultSent = true;
     });
 
     // ── прыжок: улетаем, бросив заход ──

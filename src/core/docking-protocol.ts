@@ -14,6 +14,7 @@
  *   экран → игра    { type: 'docking:ready' }
  *   экран → игра    { type: 'docking:result', docked, damage, jumpedAway? }
  *   экран → игра    { type: 'docking:jump',   to }   (игрок улетел)
+ *   экран → игра    { type: 'docking:galactic-jump' } (ушёл в другую галактику)
  *   игра  → экран   { type: 'docking:close' }
  */
 
@@ -29,6 +30,10 @@ export interface DockingConfig {
   jumpTarget: number | null;
   /** Имя выбранной системы для подсказки. */
   jumpTargetName: string | null;
+  /** Установлен ли галактический гипердвигатель (одноразовый). */
+  hasGalacticDrive: boolean;
+  /** Номер галактики, в которую приведёт прыжок (для подписи кнопки). */
+  nextGalaxy: number;
 }
 
 /** Результат, который экран возвращает игре. */
@@ -36,6 +41,8 @@ export interface DockingOutcome {
   docked: boolean;
   damage: number;
   jumpedAway?: boolean;
+  /** Как именно улетел игрок: обычный прыжок или галактический. */
+  jumpKind?: 'normal' | 'galactic';
 }
 
 export const DOCKING_CHANNEL = 'elite-idle-docking';
@@ -49,7 +56,8 @@ export type ToFrame =
 export type FromFrame =
   | { type: 'docking:ready' }
   | ({ type: 'docking:result' } & DockingOutcome)
-  | { type: 'docking:jump'; to: number };
+  | { type: 'docking:jump'; to: number }
+  | { type: 'docking:galactic-jump' };
 
 /** Проверка формы сообщения от экрана. Возвращает null, если это не наше. */
 export function parseFromFrame(data: unknown): FromFrame | null {
@@ -65,11 +73,14 @@ export function parseFromFrame(data: unknown): FromFrame | null {
         docked: Boolean(m.docked),
         damage: Number(m.damage) || 0,
         jumpedAway: m.jumpedAway ? true : undefined,
+        jumpKind: m.jumpKind === 'galactic' ? 'galactic' : m.jumpKind === 'normal' ? 'normal' : undefined,
       };
     case 'docking:jump': {
       const to = Number(m.to);
       return Number.isInteger(to) && to >= 0 ? { type: 'docking:jump', to } : null;
     }
+    case 'docking:galactic-jump':
+      return { type: 'docking:galactic-jump' };
     default:
       return null;
   }

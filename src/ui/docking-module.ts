@@ -25,6 +25,8 @@ import {
   type ToFrame,
 } from '../core/docking-protocol.ts';
 
+export type { DockingOutcome };
+
 export interface IframeDockingOptions {
   /** URL экрана стыковки относительно корня сборки. */
   src: string;
@@ -98,10 +100,13 @@ export class IframeDockingModule {
           screen.resolve({ docked: msg.docked, damage: msg.damage, jumpedAway: msg.jumpedAway });
           return;
         }
-        // 'docking:jump' обрабатывается вызывающим кодом игры,
-        // поэтому здесь он тоже превращается в результат.
+        // Уход из системы: и обычный прыжок, и галактический —
+        // это «игрок бросил заход». Тип прыжка различает вызывающий код.
         if (msg.type === 'docking:jump') {
-          screen.resolve({ docked: false, damage: 0, jumpedAway: true });
+          screen.resolve({ docked: false, damage: 0, jumpedAway: true, jumpKind: 'normal' });
+        }
+        if (msg.type === 'docking:galactic-jump') {
+          screen.resolve({ docked: false, damage: 0, jumpedAway: true, jumpKind: 'galactic' });
         }
       };
 
