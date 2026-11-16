@@ -57,6 +57,15 @@ export interface Settings {
   encounterTimeoutMs: number;
   /** Множитель частоты встреч: 0 отключает встречи */
   encounterRate: number;
+  /**
+   * Модуль стыковки включён.
+   *
+   * Когда включён — прыжок доступен только из мини-игры стыковки
+   * (космос у нас есть только там), а на карте вместо «Прыжок»
+   * показывается «Отстыковка». Когда выключен — прыжок на карте,
+   * как в простом варианте.
+   */
+  dockingModule: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -66,6 +75,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   deathMode: 'insurance',
   encounterTimeoutMs: 5 * 60 * 1000,
   encounterRate: 1,
+  dockingModule: true,
 };
 
 export interface Flight {

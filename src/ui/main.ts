@@ -234,9 +234,26 @@ function combatScreen(): string {
     <div class="card"><h2>Ход боя</h2><ul class="log">${lines}</ul></div>`;
 }
 
+/**
+ * Кнопка на карте под выбранной системой.
+ *
+ * С включённым модулем стыковки прыжок из карты недоступен: космос у нас
+ * есть только в мини-игре, там и находится действие «покинуть систему».
+ * Вместо него карта предлагает «Отстыковку» — вход в мини-игру.
+ */
+function jumpControl(distanceLy: number, reason: string): string {
+  if (settings.dockingModule) {
+    // Прыжок недоступен из карты: цель только запоминается.
+    return `<button class="btn" data-action="undock">Отстыковка</button>`;
+  }
+  return `<button class="btn" data-action="jump" data-to="${selected}" ${reason ? 'disabled' : ''}>Прыжок</button>`;
+}
+
 function mapScreen(): string {
   const systems = systemsOf(state.galaxy);
-  let info = '<div class="muted">Нажмите на систему, чтобы выбрать цель прыжка.</div>';
+  let info = settings.dockingModule
+    ? '<div class="muted">Выберите систему как цель. Прыжок — в мини-игре стыковки.</div>'
+    : '<div class="muted">Нажмите на систему, чтобы выбрать цель прыжка.</div>';
   if (selected !== null) {
     const s = systems[selected];
     const d = distance(systems[state.system], s);
@@ -247,7 +264,7 @@ function mapScreen(): string {
     info = `<h2>${s.name}</h2><div class="sub">${systemInfo(selected)}</div>
       <div class="row" style="margin-top:12px">
         <span class="price">${ly(d)}</span><span class="spacer"></span>
-        <button class="btn" data-action="jump" data-to="${selected}" ${reason ? 'disabled' : ''}>Прыжок</button>
+        ${jumpControl(d, reason)}
       </div>${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
   }
   return `<canvas id="map"></canvas><div class="card">${info}</div>`;
@@ -372,8 +389,74 @@ function logScreen(): string {
       <div class="row" style="margin-top:10px"><label>При гибели</label><span class="spacer"></span>${select('deathMode', [['insurance', 'Страховка'], ['none', 'Без смерти']], settings.deathMode)}</div>
       <div class="row" style="margin-top:10px"><label>Чужой корабль исчезает через</label><span class="spacer"></span>${select('encounterTimeoutMs', timeouts, String(settings.encounterTimeoutMs))}</div>
       <div class="row" style="margin-top:10px"><label>Частота встреч</label><span class="spacer"></span>${select('encounterRate', rates, String(settings.encounterRate))}</div>
+      <div class="row" style="margin-top:10px"><label>Модуль стыковки</label><span class="spacer"></span>${select('dockingModule', [['on', 'Включён'], ['off', 'Выключен']], settings.dockingModule ? 'on' : 'off')}</div>
+      <div class="sub" style="margin:6px 0 12px">${settings.dockingModule
+        ? 'Прыжок — только из мини-игры стыковки. На карте «Отстыковка».'
+        : 'Прыжок — прямо с карты, без мини-игры.'}</div>
       <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div></div>
     <div class="card"><h2>Журнал</h2><ul class="log">${items || '<li>Пока пусто</li>'}</ul></div>`;
+}
+
+
+/* ---------- Модуль стыковки ---------- */
+
+/**
+ * Контракт заменяемого модуля стыковки.
+ *
+ * Любая реализация — наша мини-игра, прототип пользователя (user-docking3),
+ * вариант A или B — подключается как объект с этими полями. Игра не знает,
+ * что внутри: она открывает экран и получает результат.
+ *
+ * Это и есть «модульность» без правок ядра: `state.ts` не участвует,
+ * меняется только объект в DOCKING_MODULES.
+ */
+export interface DockingResult {
+  /** Пристыковались? */
+  docked: boolean;
+  /** Повреждение корпуса при провале, 0..60 */
+  damage: number;
+  /** Игрок улетел, бросив заход (для прыжка из мини-игры) */
+  jumpedAway?: boolean;
+}
+
+export interface DockingModule {
+  /** Имя для настроек и журнала */
+  readonly name: string;
+  /** Короткая подпись для списка */
+  readonly label: string;
+  /**
+   * Открыть экран стыковки. Возвращает результат или null,
+   * если модуль не смог открыться.
+   */
+  open(): DockingResult | null;
+}
+
+/** Реестр модулей. Пока пуст: мини-игра подключается отдельно. */
+const DOCKING_MODULES = new Map<string, DockingModule>();
+
+/** Текущий выбранный модуль (null — стыковка недоступна). */
+let activeDocking: DockingModule | null = null;
+
+export function registerDockingModule(mod: DockingModule): void {
+  DOCKING_MODULES.set(mod.name, mod);
+  if (!activeDocking) activeDocking = mod;
+}
+
+/**
+ * Открывает активный модуль. Возвращает false, если модуля нет, —
+ * тогда карта сообщит об этом игроку.
+ */
+function openDocking(): boolean {
+  if (!activeDocking) return false;
+  const result = activeDocking.open();
+  if (!result) return false;
+  if (result.docked) {
+    addLog(`Стыковка: успешно (${activeDocking.label})`);
+  } else {
+    addLog(`Стыковка: провал, повреждение ${result.damage} (${activeDocking.label})`);
+  }
+  render();
+  return true;
 }
 
 /* ---------- Отрисовка ---------- */
@@ -550,6 +633,13 @@ function onAction(el: HTMLElement): void {
       }
       break;
     }
+    case 'undock': {
+      // Вход в мини-игру стыковки. Сам модуль подключается отдельно;
+      // здесь только точка входа, чтобы карта была рабочей уже сейчас.
+      const opened = openDocking();
+      if (!opened) addLog('Модуль стыковки не подключён');
+      break;
+    }
     case 'jump': {
       const to = Number(el.dataset.to);
       const r = startJump(state, to, Date.now(), settings);
@@ -675,6 +765,13 @@ document.addEventListener('change', (ev) => {
   const el = ev.target as HTMLSelectElement;
   if (el.dataset.action !== 'setting') return;
   const key = el.dataset.key as keyof Settings;
+  if (key === 'dockingModule') {
+    // Булев флаг: в разметке 'on'/'off', в состоянии true/false.
+    settings = { ...settings, dockingModule: el.value === 'on' };
+    save();
+    render();
+    return;
+  }
   const numeric = ['speed', 'encounterTimeoutMs', 'encounterRate'].includes(key);
   settings = { ...settings, [key]: numeric ? Number(el.value) : el.value };
   save();
