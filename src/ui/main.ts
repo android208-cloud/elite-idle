@@ -351,7 +351,8 @@ function mapScreen(): string {
     <div class="card map-card">
       <h2>Окрестности</h2>
       <canvas id="map-local" data-local="1"></canvas>
-      <div class="sub">Радиус — по текущему топливу. Нажмите на систему, чтобы выбрать.</div>
+      <div class="sub" id="local-hint">Радиус — по текущему топливу. Нажмите на систему или выберите из списка.</div>
+      ${localSystemList()}
     </div>
     <div class="card">${info}</div>`;
 }
@@ -686,6 +687,49 @@ function onMapTap(ev: MouseEvent): void {
     selected = best;
     render();
   }
+}
+
+/**
+ * Список систем в окрестностях кнопками.
+ *
+ * Зачем, если есть карта: QUATOR и RA — физически соседние звёзды,
+ * 8 св. лет, на карте их точки в 19 px друг от друга. Палец накрывает
+ * обе сразу, и попасть в нужную невозможно, как ни увеличивай
+ * точность — это предел разрешения экрана, а не ошибка кода.
+ *
+ * Кнопки дают однозначный выбор: тап по названию не может «промахнуться».
+ * Карта остаётся для того, чтобы видеть расположение.
+ */
+function localSystemList(): string {
+  const systems = systemsOf(state.galaxy);
+  const here = systems[state.system];
+  const canvas = document.getElementById('map-local') as HTMLCanvasElement | null;
+  const width = canvas?.clientWidth || 320;
+  // Тот же радиус, что у карты, — чтобы список и карта показывали одно.
+  const radius = Math.max(3, (state.fuel / 4) * MAP_MARGIN);
+
+  const near = systems
+    .filter((s) => {
+      const dx = Math.abs(s.x - here.x);
+      const dy = Math.abs(s.y / 2 - here.y / 2);
+      return dx <= radius && dy <= radius;
+    })
+    .map((s) => ({ s, d: distance(here, s) }))
+    .filter((x) => x.s.index !== here.index)
+    .sort((a, b) => a.d - b.d);
+
+  if (!near.length) return '<div class="muted" style="margin-top:10px">Соседей в радиусе нет — заправьтесь на станции.</div>';
+
+  const rows = near
+    .map(({ s, d }) => {
+      const reachable = d <= state.fuel;
+      const isSel = s.index === selected;
+      return `<button class="btn small ${isSel ? 'active' : ''}" data-action="select-system" data-i="${s.index}"
+        ${reachable ? '' : 'disabled'} title="${reachable ? '' : 'Не хватает топлива'}">
+        ${s.name} <span class="muted">· ${ly(d)}</span></button>`;
+    })
+    .join('');
+  return `<div class="system-list">${rows}</div>`;
 }
 
 function priceChip(i: number): string {
@@ -1135,6 +1179,9 @@ function onAction(el: HTMLElement): void {
       }
       break;
     }
+    case 'select-system':
+      selected = i;
+      break;
     case 'decide': {
       const decision = el.dataset.decision as Decision;
       const enc = state.encounter;
