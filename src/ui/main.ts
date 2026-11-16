@@ -773,9 +773,12 @@ function localSystemList(): string {
     .map(({ s, d }) => {
       const reachable = d <= state.fuel;
       const isSel = s.index === selected;
+      // Техуровень показываем как в оригинале: в данных он 0..15,
+      // в игре и в описании системы выводится +1 (DISO = 6, а не 5).
+      const tech = s.techLevel + 1;
       return `<button class="btn small ${isSel ? 'active' : ''}" data-action="select-system" data-i="${s.index}"
-        ${reachable ? '' : 'disabled'} title="${reachable ? '' : 'Не хватает топлива'}">
-        ${s.name} <span class="muted">· ${ly(d)}</span></button>`;
+        ${reachable ? '' : 'disabled'} title="${reachable ? `${s.name} · тех. уровень ${tech}` : 'Не хватает топлива'}">
+        ${s.name} <span class="muted">· ${ly(d)}</span> <span class="tech">Т${tech}</span></button>`;
     })
     .join('');
   return `<div class="system-list">${rows}</div>`;

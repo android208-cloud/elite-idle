@@ -116,6 +116,67 @@ console.log('вершин на грань: мин', Math.min(...faceSizes), 'м�
 const degenerate = faceSizes.filter((n) => n < 3).length;
 console.log('граней с <3 вершинами:', degenerate);
 
+/**
+ * Грани собираются из РЁБЕР, а не из вершин.
+ *
+ * В ребре байт 3 хранит номера двух граней по нибблам. Если собрать
+ * по ним все рёбра каждой грани, получаются верные многоугольники —
+ * 11 из 13 плоских, а две «неплоские» отличаются только лишними
+ * вершинами на оси симметрии (20, 21), которые лежат в той же
+ * плоскости. Всё сходится.
+ *
+ * В вершине тоже есть номера граней (байты 4–5), но там они не
+ * годятся: байты читаются как $FF и вершины расползаются по чужим
+ * граням.
+ */
+const edgeFaces = new Map();
+for (let i = 0; i < ebytes.length; i += 4) {
+  const v1 = ebytes[i + 1];
+  const v2 = ebytes[i + 2];
+  const fb = ebytes[i + 3];
+  for (const f of [fb & 0x0f, fb >> 4]) {
+    if (f === 0x0f) continue;
+    if (!edgeFaces.has(f)) edgeFaces.set(f, new Set());
+    edgeFaces.get(f).add(v1);
+    edgeFaces.get(f).add(v2);
+  }
+}
+const FACES = [...edgeFaces.entries()]
+  .sort((a, b) => a[0] - b[0])
+  .map(([id, vs]) => ({ id, verts: [...vs].sort((a, b) => a - b) }));
+
+console.log('\n--- грани из рёбер ---');
+for (const f of FACES) console.log('  грань', f.id, '→', f.verts.join(','));
+
+// Выпуклость: все вершины должны лежать по одну сторону от центра.
+// Для заливки важно — иначе полигон самопересечётся.
+let convexBad = 0;
+for (const f of FACES) {
+  if (f.verts.length < 3) continue;
+  const pts = f.verts.map((i) => V[i]);
+  // центр грани
+  const c = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length, a[2] + p[2] / pts.length], [0, 0, 0]);
+  // нормаль по первым трём
+  const [a0, b0, c0] = pts;
+  const u = [b0[0] - a0[0], b0[1] - a0[1], b0[2] - a0[2]];
+  const w = [c0[0] - a0[0], c0[1] - a0[1], c0[2] - a0[2]];
+  const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+  const nl = Math.hypot(...n);
+  if (!nl) continue;
+  const nz = n.map((x) => x / nl);
+  // нормаль должна смотреть наружу: от центра модели
+  const modelCenter = [0, 0, 10];
+  const outward = (c[0] - modelCenter[0]) * nz[0] + (c[1] - modelCenter[1]) * nz[1] + (c[2] - modelCenter[2]) * nz[2];
+  if (outward < 0) nz.forEach((_, i) => (nz[i] = -nz[i]));
+  // все вершины по одну сторону от плоскости центра
+  let devMax = 0;
+  for (const p of pts) {
+    const d = (p[0] - c[0]) * nz[0] + (p[1] - c[1]) * nz[1] + (p[2] - c[2]) * nz[2];
+    devMax = Math.max(devMax, Math.abs(d));
+  }
+  if (devMax > 3) convexBad++;
+}
+
 // --- вывод для вставки в src/ui/ship-model.ts ---------------------------
 if (process.argv.includes('--emit')) {
   const rows = [];
@@ -134,4 +195,6 @@ if (process.argv.includes('--emit')) {
     return `  { normal: [${n.join(', ')}], verts: [${vs.join(', ')}] },`;
   });
   console.log('--- FACES ---\n' + frows.join('\n'));
+  const facerows = FACES.map((f) => `  [${f.verts.join(', ')}],`);
+  console.log('--- FACE POLYGONS ---\n' + facerows.join('\n'));
 }

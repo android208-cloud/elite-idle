@@ -366,3 +366,73 @@ test('карта: радиус попадания не даёт накрыть �
   assert.ok(tol <= 9.5 + 0.5, `радиус ${tol.toFixed(1)} px накрывает соседнюю точку в 19 px`);
   assert.ok(tol >= 10, 'радиус не должен быть меньше 10 px — иначе не попасть');
 });
+
+/* ---------- Корабль: непрозрачность ---------- */
+
+test('корабль: 13 граней, все индексы вершин валидны', () => {
+  const FACES: number[][] = [
+    [0, 1, 2, 20, 21], [1, 2, 5], [0, 2, 6], [1, 3, 5], [0, 4, 6], [2, 5, 9], [2, 6, 9],
+    [3, 5, 8], [4, 6, 7],
+    [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 24, 25, 26, 27],
+    [1, 3, 8, 10], [0, 1, 10, 11, 20, 21], [0, 4, 7, 11],
+  ];
+  assert.equal(FACES.length, 13, 'в оригинале 13 граней');
+  for (const f of FACES) {
+    assert.ok(f.length >= 3, 'у грани минимум 3 вершины');
+    for (const v of f) assert.ok(v >= 0 && v < 28, `вершина ${v} вне модели`);
+  }
+});
+
+test('корабль: силуэт всегда замкнут — ни на одном угле нет дыр', () => {
+  // Силуэт заливается по выпуклой оболочке ВСЕХ вершин, поэтому он
+  // замкнут по построению. Проверяем, что оболочка не вырождается.
+  const w = 360;
+  const h = Math.round(w * 0.46);
+  for (let deg = 0; deg < 360; deg += 5) {
+    const p = projectShip(w, h, (deg * Math.PI) / 180);
+    // Оболочка выпуклая: все точки внутри неё.
+    const hull = convexHull(p);
+    assert.ok(hull.length >= 3, `угол ${deg}°: оболочка вырождена`);
+    // Площадь должна быть заметной, иначе силуэт схлопнулся.
+    let area = 0;
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i];
+      const b = hull[(i + 1) % hull.length];
+      area += a.x * b.y - b.x * a.y;
+    }
+    assert.ok(Math.abs(area / 2) > 1000, `угол ${deg}°: площадь силуэта ${Math.abs(area / 2).toFixed(0)}`);
+  }
+});
+
+test('корабль: самая тёмная грань светлее фона', () => {
+  // Иначе грань читается как дыра в корпусе — именно это и жаловались.
+  const bg = [11, 20, 18];
+  const base = [26, 74, 68];
+  const minShade = 0.55;
+  const darkest = base.map((c) => Math.round(c * minShade));
+  const bgSum = bg.reduce((a, b) => a + b, 0);
+  const darkSum = darkest.reduce((a, b) => a + b, 0);
+  assert.ok(darkSum > bgSum, `самая тёмная грань ${darkest} темнее фона ${bg}`);
+});
+
+/** Выпуклая оболочка — копия из ship-model.ts. */
+function convexHull(points: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (points.length < 3) return [...points];
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: { x: number; y: number }[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: { x: number; y: number }[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}

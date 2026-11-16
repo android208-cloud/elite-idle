@@ -148,3 +148,21 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
   opacity: 0.65;
   font-size: 12px;
 }
+
+/* Техуровень в списке систем: маленький значок, чтобы не спорил
+   с названием и расстоянием, но был виден сразу */
+.system-list .btn .tech {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(79, 216, 196, 0.14);
+  color: #4fd8c4;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.system-list .btn:disabled .tech {
+  background: rgba(255, 255, 255, 0.06);
+  color: #7b8b88;
+}
