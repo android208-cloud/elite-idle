@@ -132,30 +132,32 @@ test('прибытие раньше N минут: корабль остаётс�
   assert.ok(done.events.some((e) => e.type === 'arrived'));
 });
 
-test('нападение в ручном режиме ставит полёт на паузу и ждёт игрока', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
-  const g = flying(settings);
+test('§38.1: не решил вовремя — слабый враждебный даёт победу', () => {
+  // Раундов больше нет: истёк срок — исход наступил сам.
+  const g = flying();
   const s: GameState = {
     ...g,
+    ship: { ...g.ship, laser: 'pulse' },
     encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  const r = advance(s, NOW + 100 * MIN, settings);
-  assert.ok(r.state.combat, 'бой ждёт решения игрока');
-  assert.ok(r.state.flight, 'полёт не завершён');
-  assert.ok(r.events.some((e) => e.type === 'combat-start' && e.manual));
-  assert.ok(!r.events.some((e) => e.type === 'arrived'));
+  const r = advance(s, NOW + 100 * MIN);
+  assert.equal(r.state.combat, null, 'боя как процесса нет');
+  assert.equal(r.state.encounter, null);
+  assert.ok(r.events.some((e) => e.type === 'auto-victory'));
+  assert.ok(r.state.cash > g.cash, 'награда начислена');
 });
 
-test('нападение в автоматическом режиме разрешается без участия игрока', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'auto' as const };
-  const g = flying(settings);
+test('§38.1: не решил вовремя — сильный пропускается', () => {
+  const g = flying();
   const s: GameState = {
     ...g,
-    encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
+    ship: { ...g.ship, laser: 'pulse' },
+    encounter: { role: 'pirate', enemyId: 'python', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  const r = advance(s, NOW + 100 * MIN, settings);
+  const r = advance(s, NOW + 100 * MIN);
   assert.equal(r.state.combat, null);
-  assert.ok(r.events.some((e) => e.type === 'combat-end' || e.type === 'death'));
+  assert.ok(r.events.some((e) => e.type === 'auto-skip'));
+  assert.equal(r.state.cash, g.cash, 'награды нет');
 });
 
 test('пауза боя сдвигает прибытие на время ожидания игрока', () => {
@@ -202,18 +204,19 @@ test('досчёт перед ходом фиксирует простой, но
   assert.equal(acted.flight!.arriveAt, arrive);
 });
 
-test('ручной бой: действие игрока не ломает состояние и в итоге завершается', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
-  const g = flying(settings);
-  let s: GameState = {
+test('§38.1: решение принимается один раз, раундов нет', () => {
+  // Прежняя модель с раундами снята решением пользователя (§38.1).
+  // Встреча разрешается одним исходом, `combat` остаётся null.
+  const g = flying();
+  const s: GameState = {
     ...g,
+    ship: { ...g.ship, laser: 'military' },
     encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  s = advance(s, NOW + 2 * MIN, settings).state;
-  assert.ok(s.combat);
-  let guard = 0;
-  while (s.combat && guard++ < 200) s = combatAction(s, 'laser', NOW + 3 * MIN, settings).state;
-  assert.equal(s.combat, null);
+  const r = advance(s, NOW + 2 * MIN);
+  assert.equal(r.state.combat, null, 'боя как процесса нет');
+  assert.equal(r.state.encounter, null, 'встреча разрешена');
+  assert.ok(r.events.length > 0, 'исход зафиксирован в событиях');
 });
 
 /* ---------- Смерть ---------- */

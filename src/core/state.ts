@@ -16,6 +16,7 @@ import {
   type MarketEntry,
 } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
+import { autoResolve, availableDecisions, bestLaserOf, enemyOf } from './one-decision.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
   ENEMIES,
@@ -176,7 +177,12 @@ export type GameEventType =
   | 'combat-end'
   | 'canister'
   | 'contraband'
-  | 'death';
+  | 'death'
+  | 'won'
+  | 'skipped'
+  | 'fled'
+  | 'auto-victory'
+  | 'auto-skip';
 
 export interface GameEvent {
   type: GameEventType;
@@ -735,6 +741,38 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
   return { ...state, rng: dice.rng, flight: rest, encounter };
 }
 
+/**
+ * Разрешает встречу автобоем, когда игрок не успел решить (§40).
+ *
+ * Безопасный режим: слабый враждебный → победа, иначе → пропуск.
+ * Смерти игрока быть не может, капсула не тратится.
+ */
+function autoDecision(
+  state: GameState,
+  at: number,
+  _settings: Settings,
+  events: GameEvent[],
+): GameState {
+  const enc = state.encounter!;
+  const enemy = enemyOf(enc.enemyId);
+  const hostile = enc.outcome === 'attack';
+  const lasers = {
+    pulse: state.ship.laser === 'pulse',
+    beam: state.ship.laser === 'beam',
+    military: state.ship.laser === 'military',
+    mining: state.ship.laser === 'mining',
+  };
+  const can = availableDecisions(enemy, bestLaserOf(lasers), state.ship.escapePod, hostile);
+  const r = autoResolve(enemy, can, hostile);
+  events.push({ type: r.outcome, at, text: r.text });
+  return {
+    ...state,
+    cash: state.cash + r.bounty,
+    encounter: null,
+    combat: null,
+  };
+}
+
 /** Начинает бой и, в автоматическом режиме, сразу доигрывает его. */
 function beginCombat(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
   const enc = state.encounter!;
@@ -942,7 +980,10 @@ export function advance(
         events.push({ type: 'vanished', at: tEnc, text: 'Корабль покинул радиус действия' });
         s = { ...s, encounter: null };
       } else {
-        s = beginCombat(s, tEnc, settings, events);
+        // §38.1: раундов нет. Игрок не решил за отведённое время —
+        // слабый враждебный даёт победу, сильный или нейтральный пропуск.
+        // Смерти нет, капсула не тратится (§40).
+        s = autoDecision(s, tEnc, settings, events);
       }
     } else if (!s.encounter && tSpawn < tArrive) {
       s = spawnEncounter(s, tSpawn, settings, events);

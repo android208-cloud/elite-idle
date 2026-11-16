@@ -1,5 +1,13 @@
 import './styles.css';
 import { IframeDockingModule } from './docking-module.ts';
+import {
+  applyDecision,
+  availableDecisions,
+  autoResolve,
+  bestLaserOf,
+  enemyOf,
+  type Decision,
+} from '../core/one-decision.ts';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
@@ -154,13 +162,47 @@ function flightCard(): string {
       <div class="sub">${systemInfo(state.system)}</div></div>`;
   }
   const systems = systemsOf(state.galaxy);
-  const enc = state.encounter
-    ? `<div class="card warn"><h2>В радиусе действия: ${ROLE_NAMES[state.encounter.role]} (${enemyById(state.encounter.enemyId).name})</h2>
-        <div class="sub">Развязка через <span id="enc-eta"></span></div></div>`
-    : '';
+  const enc = state.encounter ? encounterCard() : '';
   return `<div class="card"><h2>В пути: ${systems[f.from].name} → ${systems[f.to].name}</h2>
     <div class="progress"><div id="flight-bar" style="width:0%"></div></div>
     <div class="sub">Прибытие через <span id="flight-eta"></span></div></div>${enc}`;
+}
+
+/**
+ * Уведомление о встрече с тремя кнопками (§38.1, §40).
+ *
+ * Раундов нет: одно решение — и исход. Кнопки показываются только
+ * доступные, с причиной отказа в подсказке. Таймер виден, чтобы игрок
+ * понимал, сколько у него времени до автобоя.
+ */
+function encounterCard(): string {
+  const e = state.encounter!;
+  const enemy = enemyOf(e.enemyId);
+  const hostile = e.outcome === 'attack';
+  const lasers = {
+    pulse: state.ship.laser === 'pulse',
+    beam: state.ship.laser === 'beam',
+    military: state.ship.laser === 'military',
+    mining: state.ship.laser === 'mining',
+  };
+  const best = bestLaserOf(lasers);
+  const can = availableDecisions(enemy, best, state.ship.escapePod, hostile);
+
+  const btn = (decision: Decision, label: string, enabled: boolean, reason?: string): string =>
+    `<button class="btn" data-action="decide" data-decision="${decision}" ${enabled ? '' : 'disabled'}
+      title="${reason ?? ''}">${label}</button>`;
+
+  const share = hostile && can.attack ? '' : '';
+  return `<div class="card warn"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
+    <div class="sub">${hostile ? 'Враждебен' : 'Не враждебен'} · Решение через <span id="enc-eta"></span></div>
+    <div class="row" style="margin-top:12px">
+      ${btn('attack', 'Напасть', can.attack, can.attackReason)}
+      ${btn('flee', 'Бежать', can.flee, can.fleeReason)}
+      ${btn('skip', 'Пропустить', can.skip)}
+    </div>
+    ${can.attackReason && !can.attack ? `<div class="muted" style="margin-top:6px">${can.attackReason}</div>` : ''}
+    ${can.fleeReason && !can.flee ? `<div class="muted" style="margin-top:4px">${can.fleeReason}</div>` : ''}
+  </div>${share}`;
 }
 
 function equipmentSummary(): string {
@@ -711,6 +753,35 @@ function onAction(el: HTMLElement): void {
         state = r.state;
         addLog(`Установлено: ${EQUIPMENT.find((e) => e.id === id)!.name}`);
       }
+      break;
+    }
+    case 'decide': {
+      const decision = el.dataset.decision as Decision;
+      const enc = state.encounter;
+      if (!enc) break;
+      const enemy = enemyOf(enc.enemyId);
+      const hostile = enc.outcome === 'attack';
+      const lasers = {
+        pulse: state.ship.laser === 'pulse',
+        beam: state.ship.laser === 'beam',
+        military: state.ship.laser === 'military',
+        mining: state.ship.laser === 'mining',
+      };
+      const can = availableDecisions(enemy, bestLaserOf(lasers), state.ship.escapePod, hostile);
+      const r = applyDecision(enemy, decision, can, hostile);
+      if (!r) {
+        addLog('Это решение сейчас недоступно');
+        break;
+      }
+      state = {
+        ...state,
+        cash: state.cash + r.bounty,
+        ship: r.podUsed ? { ...state.ship, escapePod: false } : state.ship,
+        encounter: null,
+        combat: null,
+      };
+      addLog(r.text + (r.bounty > 0 ? ` (+${cr(r.bounty)})` : ''));
+      render();
       break;
     }
     case 'undock': {

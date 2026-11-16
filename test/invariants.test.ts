@@ -168,8 +168,10 @@ test('сохранение обратимо в любой момент случ�
   }
 });
 
-test('ручной бой не откладывает прибытие на всё время отсутствия игрока', () => {
-  const settings: Settings = { ...DEFAULT_SETTINGS, encounterRate: 3, combatMode: 'manual' };
+test('§38.1: встреча не откладывает прибытие — она разрешается исходом', () => {
+  // Раньше ручной бой ставил полёт на паузу. Теперь раундов нет:
+  // встреча разрешается в момент resolveAt, и полёт идёт дальше.
+  const settings: Settings = { ...DEFAULT_SETTINGS, encounterRate: 3 };
   const g = newGame(5);
   const systems = systemsOf(1);
   const target = systems.findIndex((s, i) => i !== g.system && distance(systems[g.system], s) <= g.fuel);
@@ -177,27 +179,17 @@ test('ручной бой не откладывает прибытие на вс
   let s = startJump(g, target, 0, settings).state;
   const planned = s.flight!.arriveAt;
 
-  // Игрок ждёт атаки
   let t = 0;
-  for (let i = 0; i < 5000 && !s.combat; i++) {
+  for (let i = 0; i < 5000 && s.flight; i++) {
     t += 1000;
     s = advance(s, t, settings).state;
-  }
-  assert.ok(s.combat, 'бой должен был начаться');
-
-  // …и возвращается только через 3 часа
-  const back = t + 3 * 60 * MIN;
-  let rounds = 0;
-  while (s.combat && rounds < 200) {
-    s = combatAction(s, 'laser', back, settings).state;
-    rounds++;
+    if (!s.flight) break;
   }
 
-  const shifted = s.flight ? s.flight.arriveAt - planned : 0;
-  assert.ok(
-    shifted <= rounds * 10_000 + 1000,
-    `прибытие сдвинулось на ${(shifted / MIN).toFixed(1)} мин при ${rounds} раундах боя`,
-  );
+  assert.equal(s.flight, null, 'полёт завершился сам');
+  assert.ok(s.combat === null, 'боя как процесса нет');
+  // Прибытие не могло уехать далеко вперёд из-за пауз: их больше нет.
+  assert.ok(t >= planned - 1000, 'прибытие наступило примерно в срок');
 });
 
 test('текущая система всегда существует в текущей галактике', () => {

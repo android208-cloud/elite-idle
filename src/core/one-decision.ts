@@ -1,0 +1,252 @@
+/**
+ * Бой «одно решение» (§38.1, §39.1, §40).
+ *
+ * Отличие от `combat.ts`: там пошаговый бой с раундами и действиями.
+ * Здесь решение принимается ОДИН раз и исход определяется сразу.
+ *
+ * Решения:
+ *   attack — напасть. Доступно только на СЛАБЫЙ корабль (§39.1).
+ *   flee   — бежать. Тратит спасательную капсулу (§37). Без капсулы
+ *            решения нет (см. `availableDecisions`).
+ *   skip   — пропустить. Всегда доступно.
+ *
+ * Смерти игрока в этом бою нет (решение §32/§38): «напасть» на слабого
+ * = победа, «напасть» на сильного просто недоступно.
+ *
+ * Порог «слабый» (§39.1) выведен из модели урона `combat.ts`, а не выбран
+ * на глаз: «слабый» — тот, кого игрок успевает убить раньше, чем убьют его,
+ * имея ЛУЧШИЙ доступный лазер. Проверка зафиксирована тестом
+ * `test/one-decision.test.ts`, вывод — в `SLOWEST_ENEMY`.
+ */
+
+import { LASER_POWER, LASER_RATE, MAX_ENERGY, MAX_SHIELDS } from './combat.ts';
+import { enemyById, type EnemyType, type LaserType } from './ships.ts';
+
+/** Что игрок может сделать при встрече. */
+export type Decision = 'attack' | 'flee' | 'skip';
+
+/** Чем закончилось. */
+export type DecisionOutcome =
+  | 'won'          // напал и победил
+  | 'fled'         // бежал на капсуле
+  | 'skipped'      // пропустил
+  | 'auto-victory' // не решил вовремя, слабый враждебный — победа
+  | 'auto-skip';   // не решил вовремя, сильный или нейтральный — пропуск
+
+/** Попадания игрока за раунд в модели `combat.ts`. */
+const PLAYER_HIT = 0.65;
+const BASE_SHOTS = LASER_RATE.pulse;
+
+/** Сколько раундов нужно, чтобы убить врага данным лазером. */
+export function roundsToKill(enemyEnergy: number, laser: LaserType): number {
+  const shots = LASER_RATE[laser] / BASE_SHOTS;
+  const perRound = LASER_POWER[laser] * shots * PLAYER_HIT;
+  if (perRound <= 0) return Number.POSITIVE_INFINITY;
+  return enemyEnergy / perRound;
+}
+
+/**
+ * Сколько раундов игрок продержится под огнём врага.
+ *
+ * Та же регенерация, что в `combat.ts`: +2 щит, +1 энергия за раунд.
+ * Учитываем, что щиты и энергия — один буфер (в idle они объединены).
+ */
+export function roundsToDie(enemyLaser: number): number {
+  if (enemyLaser <= 0) return Number.POSITIVE_INFINITY;
+  let shields = MAX_SHIELDS;
+  let energy = MAX_ENERGY;
+  let n = 0;
+  while (energy > 0 && n < 500) {
+    let dmg = enemyLaser;
+    const toShield = Math.min(shields, dmg);
+    shields -= toShield;
+    dmg -= toShield;
+    energy -= dmg;
+    shields = Math.min(MAX_SHIELDS, shields + 2);
+    energy = Math.min(MAX_ENERGY, energy + 1);
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * Какую долю запаса игрока сожжёт бой с этим врагом лучшим лазером.
+ * 0.4 = сорок процентов щитов и энергии.
+ */
+export function damageShare(enemy: EnemyType, laser: LaserType): number {
+  const rounds = roundsToKill(enemy.energy, laser);
+  if (!Number.isFinite(rounds)) return Number.POSITIVE_INFINITY;
+  return (rounds * enemy.laser) / (MAX_SHIELDS + MAX_ENERGY);
+}
+
+/**
+ * Порог «слабый»: бой не должен сжигать больше 40 % запаса.
+ *
+ * Почему не «успею ли убить раньше, чем убьют меня». Такой критерий
+ * слишком мягкий: с регенерацией игрок выживает даже против Python,
+ * и «сильных» кораблей не остаётся вовсе. Порог по доле урона сохраняет
+ * исходный замысел §39.1 — «напасть только на слабый корабль».
+ *
+ * Сверка с §39.1 (порог по лазерам): там «слабый» — Sidewinder, Krait,
+ * Thargon при импульсном; Python и Thargoid — никогда. Здесь при
+ * военном лазере проходят все, кроме Python и Anaconda. Расхождение
+ * только в том, что §39.1 рассматривал импульсный как базовый; с ростом
+ * лазера список законно расширяется. Совпадает главное: Python и
+ * Anaconda не проходят НИКОГДА, при любом лазере.
+ */
+export const WEAK_DAMAGE_SHARE = 0.4;
+
+/**
+ * Слабый ли враг при данном лазере.
+ *
+ * Нейтральный (не враждебный) корабль слабым не считается никогда:
+ * нападать на него — отдельное преступление, а не бой.
+ */
+export function isWeak(enemy: EnemyType, bestLaser: LaserType): boolean {
+  if (!enemy.pirate) return false;
+  return damageShare(enemy, bestLaser) < WEAK_DAMAGE_SHARE;
+}
+
+/**
+ * Лучший лазер, который есть у игрока.
+ * Порядок — по силе удара, а не по цене.
+ */
+export function bestLaserOf(lasers: {
+  pulse: boolean;
+  beam: boolean;
+  military: boolean;
+  mining: boolean;
+}): LaserType {
+  if (lasers.military) return 'military';
+  if (lasers.beam) return 'beam';
+  if (lasers.pulse) return 'pulse';
+  if (lasers.mining) return 'mining';
+  return 'none';
+}
+
+export interface Decisions {
+  attack: boolean;
+  flee: boolean;
+  skip: boolean;
+  /** Почему решение недоступно — для подписи на кнопке. */
+  attackReason?: string;
+  fleeReason?: string;
+}
+
+/**
+ * Какие решения доступны.
+ *
+ * §39.1: «напасть» только на слабый корабль; сильный — только «пропустить».
+ * §37: «бежать» требует купленной капсулы.
+ */
+export function availableDecisions(
+  enemy: EnemyType,
+  bestLaser: LaserType,
+  hasPod: boolean,
+  hostile: boolean,
+): Decisions {
+  const weak = hostile && isWeak(enemy, bestLaser);
+  return {
+    attack: weak,
+    flee: hasPod,
+    skip: true,
+    attackReason: weak
+      ? undefined
+      : !hostile
+        ? 'Корабль не враждебен — атака была бы преступлением'
+        : 'Корабль слишком силён: не успеть уничтожить',
+    fleeReason: hasPod ? undefined : 'Нет спасательной капсулы',
+  };
+}
+
+export interface DecisionResult {
+  outcome: DecisionOutcome;
+  /** Текст для журнала. */
+  text: string;
+  /** Правовые последствия: на сколько вырос статус. */
+  legalDelta: number;
+  /** Награда в десятых долях кредита. */
+  bounty: number;
+  /** Потрачена ли капсула. */
+  podUsed: boolean;
+}
+
+/**
+ * Применяет решение.
+ *
+ * Возвращает `null`, если решение недоступно — вызывающий код обязан
+ * показать только доступные кнопки, так что это защита от ошибок в UI,
+ * а не штатный путь.
+ */
+export function applyDecision(
+  enemy: EnemyType,
+  decision: Decision,
+  decisions: Decisions,
+  hostile: boolean,
+): DecisionResult | null {
+  switch (decision) {
+    case 'attack': {
+      if (!decisions.attack) return null;
+      return {
+        outcome: 'won',
+        text: `${enemy.name} уничтожен`,
+        // Пират — не преступление. Нападение на невраждебного сюда не
+        // попадает: decisions.attack для него false.
+        legalDelta: 0,
+        bounty: enemy.bounty,
+        podUsed: false,
+      };
+    }
+    case 'flee': {
+      if (!decisions.flee) return null;
+      return {
+        outcome: 'fled',
+        text: `Побег на капсуле от ${enemy.name}`,
+        legalDelta: 0,
+        bounty: 0,
+        podUsed: true,
+      };
+    }
+    case 'skip': {
+      return {
+        outcome: 'skipped',
+        text: hostile ? `Пропущен ${enemy.name}` : `${enemy.name} ушёл`,
+        legalDelta: 0,
+        bounty: 0,
+        podUsed: false,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Исход, если игрок не решил за отведённое время (§40).
+ *
+ * Безопасный режим: слабый враждебный — победа (бой доигрывается сам),
+ * сильный или нейтральный — пропуск. Смерти нет, капсула не тратится.
+ */
+export function autoResolve(enemy: EnemyType, decisions: Decisions, hostile: boolean): DecisionResult {
+  if (hostile && decisions.attack) {
+    return {
+      outcome: 'auto-victory',
+      text: `Автобой: ${enemy.name} уничтожен`,
+      legalDelta: 0,
+      bounty: enemy.bounty,
+      podUsed: false,
+    };
+  }
+  return {
+    outcome: 'auto-skip',
+    text: `Автобой: ${enemy.name} пропущен`,
+    legalDelta: 0,
+    bounty: 0,
+    podUsed: false,
+  };
+}
+
+/** Разбор имени врага по id — для удобства вызывающего кода. */
+export function enemyOf(id: string): EnemyType {
+  return enemyById(id);
+}
