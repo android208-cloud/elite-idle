@@ -497,13 +497,31 @@ function localView(canvas: HTMLCanvasElement): ChartView {
 function prepareCanvas(view: ChartView): CanvasRenderingContext2D | null {
   const { canvas, width, height } = view;
   const dpr = window.devicePixelRatio || 1;
-  canvas.style.height = `${height}px`;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
+  // Высота холста в CSS — от раскладки, а НЕ от view.height.
+  //
+  // Раньше здесь стояло `canvas.style.height = height + 'px'`, где height
+  // для общей карты считается из clientWidth. При каждом тапе render()
+  // строит разметку заново, clientWidth в момент отрисовки мог быть ещё
+  // нулевым/старым — и высота карточки прыгала. Контейнер прокрутки от
+  // этого «дёргался», и экран уезжал. Ширина у холста задана CSS (100%),
+  // поэтому высоту карте ставит сама карта через aspect-ratio, а не код.
+  const cssW = width;
+  const cssH = height;
+  // Высоту задаёт только код, ширина — CSS (100%). Иначе `height: auto`
+  // в стилях спорит с инлайновой высотой и карточка прыгает по высоте
+  // между перерисовками.
+  canvas.style.height = `${cssH}px`;
+  const bw = Math.round(cssW * dpr);
+  const bh = Math.round(cssH * dpr);
+  // Размер атрибутов задаём только когда он реально меняется: присвоение
+  // тех же чисел само по себе очищает холст, но лишний раз трогать
+  // геометрию при каждой перерисовке незачем.
+  if (canvas.width !== bw) canvas.width = bw;
+  if (canvas.height !== bh) canvas.height = bh;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  ctx.clearRect(0, 0, cssW, cssH);
   return ctx;
 }
 
@@ -1187,9 +1205,18 @@ function render(): void {
    *
    * Достаточно запомнить scrollTop контейнера и вернуть после.
    */
+  /*
+   * Прокрутка и фокус.
+   *
+   * Сохраняем не только scrollTop: при пересборке innerHTML браузер
+   * сбрасывает фокус на body, а если фокусируемый элемент был ниже
+   * края экрана — прокручивает к нему. На карте фокусируемых элементов
+   * нет, но кнопки «Напасть/Прыжок» рядом, и клик по ним тоже вызывал
+   * рывок. Восстановим и активный элемент.
+   */
   const scrollTop = content.scrollTop;
+  const active = document.activeElement as HTMLElement | null;
   content.innerHTML = inCombat ? combatScreen() : screens[tab]();
-  content.scrollTop = scrollTop;
   document.getElementById('title')!.textContent = inCombat ? 'Бой' : TABS.find((t) => t.id === tab)!.label;
   document.getElementById('top-info')!.textContent = cr(state.cash);
   document.getElementById('nav')!.innerHTML = TABS.map(
@@ -1204,6 +1231,28 @@ function render(): void {
   if (tab === 'hangar' && !inCombat && !state.flight) startShipModel();
   else cancelAnimationFrame(shipModelFrame);
   updateFlight();
+
+  /*
+   * Прокрутку возвращаем ПОСЛЕ отрисовки холстов.
+   *
+   * Здесь была причина «экран сам скроллится при выборе планеты».
+   * Порядок был: запомнить scrollTop → innerHTML → вернуть scrollTop →
+   * drawMap(). В момент возврата холсты ещё дефолтные (300×150 вместо
+   * 360×360), контент короче примерно на 210 px, и браузер обрезает
+   * scrollTop по тогдашнему максимуму. Игрок был на 300 — оказывался
+   * на 120. Карта дорисовывалась уже после, высота возвращалась, а
+   * прокрутка оставалась обрезанной.
+   *
+   * В jsdom это не воспроизводится: там scrollTop — просто поле,
+   * которое ничего не обрезает. Поэтому и не поймалось тестами.
+   */
+  // Фокус возвращаем до прокрутки: сфокусированный элемент у края
+  // экрана сам подтягивает прокрутку, и порядок здесь важен.
+  if (active && active.dataset?.action && active !== document.body) {
+    const again = content.querySelector<HTMLElement>(`[data-action="${active.dataset.action}"]`);
+    if (again && document.activeElement !== again) again.blur();
+  }
+  content.scrollTop = scrollTop;
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -1621,6 +1670,21 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
   // Отсюда и «не могу нажать на мини-карту».
   const target = ev.target as HTMLElement;
   if (target.id === 'map-overview' || target.id === 'map-local') {
+    /*
+     * preventDefault тут ОБЯЗАТЕЛЕН, и вот почему.
+     *
+     * render() целиком пересобирает innerHTML, то есть холст, по
+     * которому пришло касание, к моменту следующего события уже
+     * уничтожен. Браузеру больше не к чему привязать жест — и он
+     * трактует остаток касания как прокрутку контейнера, уводя экран.
+     * Пользователь описал это как «экран сам скроллится при выборе
+     * планеты».
+     *
+     * Отменяем жест сразу: карта — элемент выбора, а не ленты прокрутки.
+     * Прокрутка самой страницы работает как прежде: за пределами карты
+     * касания идут обычным путём.
+     */
+    ev.preventDefault();
     onMapTap(ev as PointerEvent, target as HTMLCanvasElement);
   }
 });

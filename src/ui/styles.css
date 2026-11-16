@@ -67,7 +67,20 @@ main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 .price { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .muted { color: var(--on-variant); font-size: 13px; }
 
-canvas { width: 100%; border-radius: var(--radius); background: var(--surface); display: block; touch-action: manipulation; }
+/*
+ * touch-action: none, а не manipulation.
+ *
+ * `manipulation` отключает двойной тап-зум, но НЕ отменяет панораму.
+ * Холст карты на всю ширину: палец при тапе почти всегда сдвигается на
+ * несколько пикселей, браузер считает это началом прокрутки — и экран
+ * уезжает ровно в тот момент, когда игрок выбирает планету. Пользователь
+ * описал это как «экран сам скроллится».
+ *
+ * Прокрутка контейнера при этом остаётся: палец на самой карте её не
+ * двигает (карта — элемент выбора, а не лента), а за пределами карточки
+ * всё работает как обычно.
+ */
+canvas { width: 100%; border-radius: var(--radius); background: var(--surface); display: block; touch-action: none; }
 
 .log { list-style: none; margin: 0; padding: 0; }
 .log li { padding: 8px 0; border-bottom: 1px solid var(--outline); font-size: 14px; }
@@ -123,7 +136,7 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
   height: auto;
   border-radius: 8px;
   background: var(--surface-3, #0b1412);
-  touch-action: manipulation;
+  touch-action: none;
 }
 .map-card .sub {
   margin-top: 8px;
