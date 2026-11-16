@@ -308,23 +308,23 @@
     //  DEFAULTS — ваши исходные значения, «Сброс» возвращает их.
     // ═══════════════════════════════════════════════════════════════
     const DEFAULTS = {
-        stSpinMin: 0.015,   // мин. скорость вращения станции (сырые ед/кадр)
-        stSpinMax: 0.035,   // макс. (у вас делится на 3 → 0.005..0.0117)
-        rotPower:  0.00028, // импульс крена ↺↻
-        thrustPower: 0.08,  // импульс тяги X/Y
-        zPower:    0.018,   // импульс сближения Z
-        dragXY:    0.985,   // гашение тяги X/Y за кадр
-        dragZ:     0.99,    // гашение сближения за кадр
-        dragRot:   1.0,     // гашение вращения (1 = нет, как у вас)
-        syncLock:  0.00012, // окно магнитного захвата
-        syncOk:    0.00025, // порог «синхронизировано»
-        syncPull:  1.0,     // 1 = магнит форсирует выравнивание (как у вас)
+        stSpinMin: 0.00602,   // мин. скорость вращения станции (сырые ед/кадр)
+        stSpinMax: 0.014,     // макс. (делится на 3 → 0.0020..0.0047 = 6.9..16 °/с)
+        rotPower:  0.000084,  // импульс крена ↺↻
+        thrustPower: 0.0532,  // импульс тяги X/Y
+        zPower:    0.064,     // импульс сближения Z
+        dragXY:    0.85,      // гашение тяги X/Y за кадр (резкое)
+        dragZ:     0.85145,   // гашение сближения за кадр
+        dragRot:   1.0,       // гашения вращения нет
+        syncLock:  0.00012,   // окно магнитного захвата
+        syncOk:    0.00025,   // порог «синхронизировано»
+        syncPull:  1.0,       // 1 = магнит форсирует выравнивание
     };
     const TUNE = Object.assign({}, DEFAULTS);
 
     // восстановить сохранённое
     try {
-        const saved = JSON.parse(localStorage.getItem('docking3.tune') || 'null');
+        const saved = JSON.parse(localStorage.getItem('docking3.tune.v2') || 'null');
         if (saved) Object.assign(TUNE, saved);
     } catch (e) { /* первый запуск */ }
 
@@ -778,11 +778,11 @@
                 // хранится как пара min/max; ползунок двигает обе
                 get: () => (TUNE.stSpinMin + TUNE.stSpinMax) / 2,
                 set: (frac) => {
-                    const max = 0.005 + frac * 0.075;          // 0.005..0.080
-                    TUNE.stSpinMin = Math.max(0.001, max * 0.43);
+                    const max = 0.003 + frac * 0.057;          // 0.003..0.060
+                    TUNE.stSpinMin = Math.max(0.0008, max * 0.43);
                     TUNE.stSpinMax = max;
                 },
-                fromValue: (v) => (v - 0.005) / 0.075,
+                fromValue: (v) => (v - 0.003) / 0.057,
                 show: () => {
                     const degMin = TUNE.stSpinMin / 3 * 60 * RAD;
                     const degMax = TUNE.stSpinMax / 3 * 60 * RAD;
@@ -791,12 +791,12 @@
                     $('v-turn').textContent = turnMin.toFixed(1) + '–' + turnMax.toFixed(1) + ' с';
                 }
             },
-            rotPower:   { scale: [0.00005, 0.0012], fmt: v => (v*1e4).toFixed(1) + 'e-4' },
+            rotPower:   { scale: [0.00002, 0.0012], fmt: v => (v*1e5).toFixed(1) + 'e-5' },
             thrustPower:{ scale: [0.01, 0.55],      fmt: v => v.toFixed(3) },
             zPower:     { scale: [0.005, 0.30],     fmt: v => v.toFixed(3) },
             dragRot:    { scale: [0.90, 1.0],       fmt: v => v >= 0.999 ? 'нет' : v.toFixed(3), invert: true },
-            dragXY:     { scale: [0.85, 0.995],     fmt: v => v.toFixed(3) },
-            dragZ:      { scale: [0.85, 0.995],     fmt: v => v.toFixed(3) },
+            dragXY:     { scale: [0.78, 0.995],     fmt: v => v.toFixed(3) },
+            dragZ:      { scale: [0.78, 0.995],     fmt: v => v.toFixed(3) },
             syncLock:   { scale: [0.00002, 0.0008], fmt: v => (v*1e5).toFixed(1) + 'e-5' },
             syncOk:     { scale: [0.00005, 0.002],  fmt: v => (v*1e5).toFixed(1) + 'e-5' },
             syncPull:   { scale: [0.02, 1.0],       fmt: v => v >= 0.999 ? 'мгновенно' : v.toFixed(2) },
@@ -852,7 +852,7 @@
         }
 
         function save() {
-            try { localStorage.setItem('docking3.tune', JSON.stringify(TUNE)); } catch (e) {}
+            try { localStorage.setItem('docking3.tune.v2', JSON.stringify(TUNE)); } catch (e) {}
         }
 
         for (const key of Object.keys(SPEC)) {
