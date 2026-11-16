@@ -140,13 +140,25 @@ const UNITS = ['т', 'кг', 'г'];
 const cr = (n: number): string => `${(n / 10).toFixed(1)} CR`;
 const ly = (n: number): string => `${(n / 10).toFixed(1)} св. г.`;
 
+/**
+ * Длительность человеческим языком.
+ *
+ * Раньше при часе и больше печаталось `1:00:00`, а до часа — `15:00`.
+ * Это читается двусмысленно: `1:00` можно принять и за час, и за минуту
+ * с секундами. Теперь у каждой единицы своя подпись: «1 ч 00 мин»,
+ * «16 мин 24 с», «42 с». Для таймера в полёте важна точность до секунды,
+ * для плана прыжка — читаемость.
+ */
 function fmtDur(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   const pad = (n: number): string => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  // «1 ч 00 мин» — это «ровно час», и печатать нули незачем.
+  if (h > 0) return m > 0 ? `${h} ч ${pad(m)} мин` : `${h} ч`;
+  if (m > 0) return s > 0 ? `${m} мин ${pad(s)} с` : `${m} мин`;
+  return `${s} с`;
 }
 
 const fmtTime = (at: number): string =>
@@ -284,7 +296,7 @@ function shipScreen(): string {
   const items = COMMODITIES.map((c, i) => (state.cargo[i] > 0 ? `${c.name}: ${state.cargo[i]} ${UNITS[c.unit]}` : ''))
     .filter(Boolean)
     .join('<br>');
-  return `${flightCard()}
+  return `${flightCard()}${destinationCard()}
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
       ${stat('Топливо', ly(state.fuel))}
@@ -295,6 +307,66 @@ function shipScreen(): string {
     </div>
     <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
     <div class="card"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
+}
+
+/**
+ * Пункт назначения на экране «Корабль».
+ *
+ * Пользователь просил сюда имя планеты, расстояние и время полёта.
+ * Данные уже есть: цель выбирается на карте и лежит в `selected`.
+ * Раньше, чтобы их увидеть, нужно было вернуться на карту — а на
+ * экране «Корабль» игрок как раз и решает, лететь ему или нет.
+ *
+ * Три состояния:
+ *  - цель не выбрана — подсказка, где её выбрать;
+ *  - цель выбрана — имя, расстояние, время и предупреждение, если
+ *    топлива не хватает;
+ *  - корабль в полёте — показываем, куда и сколько осталось, потому
+ *    что цель в этот момент уже неактуальна.
+ */
+function destinationCard(): string {
+  const systems = systemsOf(state.galaxy);
+  const here = systems[state.system];
+
+  if (state.flight) {
+    const f = state.flight;
+    const left = Math.max(0, f.arriveAt - Date.now());
+    return `<div class="card"><h2>Пункт назначения</h2>
+      <div class="row"><span class="price">${systems[f.to].name}</span><span class="spacer"></span>
+        <span class="muted">в пути</span></div>
+      <div class="sub" style="margin-top:6px">Из ${systems[f.from].name} · осталось ${fmtDur(left)}</div>
+    </div>`;
+  }
+
+  if (selected === null) {
+    return `<div class="card"><h2>Пункт назначения</h2>
+      <div class="muted">Не выбран. Откройте карту и нажмите на систему — её характеристики и время полёта появятся здесь.</div>
+    </div>`;
+  }
+
+  const dest = systems[selected];
+  const d = distance(here, dest);
+  const enough = d <= state.fuel;
+  // Время считаем той же функцией, что и сам прыжок, иначе подпись
+  // обещает одно, а полёт занимает другое.
+  const trip = jumpDuration(settings, d);
+
+  return `<div class="card${enough ? '' : ' warn'}"><h2>Пункт назначения</h2>
+    <div class="row">
+      <span class="price">${dest.name}</span>
+      <span class="chip">Т${dest.techLevel + 1}</span>
+      <span class="spacer"></span>
+      <span class="price">${ly(d)}</span>
+    </div>
+    <div class="sub" style="margin-top:6px">${shortEconomy(dest.economy)} · ${GOVERNMENTS[dest.government]}</div>
+    <div class="row" style="margin-top:12px">
+      ${stat('Время полёта', fmtDur(trip))}
+      ${stat('Топливо', `${ly(d)} из ${ly(state.fuel)}`)}
+    </div>
+    ${enough
+      ? `<div class="sub" style="margin-top:8px">Прыжок тратит ${ly(d)} топлива, после него останется ${ly(state.fuel - d)}</div>`
+      : `<div class="muted" style="margin-top:8px;color:var(--warn)">Не хватает топлива: нужно ${ly(d)}, в баке ${ly(state.fuel)}. Заправьтесь в ангаре.</div>`}
+  </div>`;
 }
 
 function bar(value: number, max: number, cls = ''): string {
@@ -1225,7 +1297,10 @@ function render(): void {
         <span class="pill">${t.icon}</span>${t.label}</button>`,
   ).join('');
   if (tab === 'map' && !inCombat) drawMap();
-  if (state.encounter && !inCombat) drawEncounterModel();
+  // Модель встречи живёт только пока экран её показывает: иначе кадры
+  // крутятся на невидимом холсте и жгут батарею.
+  if (state.encounter && !inCombat) startEncounterModel();
+  else stopEncounterModel();
   // Модель корабля теперь в ангаре и только на стоянке: в полёте
   // канваса нет, анимация не нужна.
   if (tab === 'hangar' && !inCombat && !state.flight) startShipModel();
@@ -1299,9 +1374,22 @@ function drawShipFrame(now: number): void {
  * несколько секунд, вращение тут отвлекало бы. Угол в три четверти,
  * чтобы силуэт читался: нос, борт и то, насколько корабль большой.
  */
-function drawEncounterModel(): void {
+/** Кадр анимации модели встреченного корабля. */
+let encFrame = 0;
+
+/**
+ * Модель встреченного корабля — вращается.
+ *
+ * Сначала она рисовалась один раз под фиксированным углом: на экране
+ * решения (несколько секунд) вращение казалось лишним. Пользователь
+ * попросил вращение — и он прав: по одной проекции не понять форму,
+ * особенно у плоских кораблей вроде Mamba. Оборот медленнее, чем у
+ * модели в ангаре: здесь на экране есть кнопки, и мельтешение мешает
+ * читать.
+ */
+function drawEncounterFrame(now: number): void {
   const canvas = document.querySelector('canvas.enc-model') as HTMLCanvasElement | null;
-  if (!canvas) return;
+  if (!canvas) return; // экран сменился — анимация сама остановится
   const bp = FLEET[canvas.dataset.ship ?? ''];
   const ctx = canvas.getContext('2d');
   if (!bp || !ctx) return;
@@ -1310,11 +1398,31 @@ function drawEncounterModel(): void {
   const w = canvas.clientWidth || 260;
   const h = Math.round(w * 0.42);
   canvas.style.height = `${h}px`;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  if (canvas.width !== bw) canvas.width = bw;
+  if (canvas.height !== bh) canvas.height = bh;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  drawShipModel(ctx, { width: w, height: h, yaw: 0.7, ship: bp as ShipBlueprint });
+
+  // 30 секунд на оборот: медленно, но форма читается за пару секунд.
+  drawShipModel(ctx, {
+    width: w,
+    height: h,
+    yaw: 0.7 + (now / 30000) * Math.PI * 2,
+    ship: bp as ShipBlueprint,
+  });
+
+  encFrame = requestAnimationFrame(drawEncounterFrame);
+}
+
+function startEncounterModel(): void {
+  cancelAnimationFrame(encFrame);
+  encFrame = requestAnimationFrame(drawEncounterFrame);
+}
+
+function stopEncounterModel(): void {
+  cancelAnimationFrame(encFrame);
 }
 
 function startShipModel(): void {

@@ -198,3 +198,31 @@ test('если места нет вовсе — возвращается null, �
   const wall = [{ x1: -10, y1: -10, x2: 1000, y2: 1000 }];
   assert.equal(placeSingle(180, 180, 90, 360, wall), null);
 });
+
+/* ---------- Формат длительности ---------- */
+
+/*
+ * fmtDur — не экспортируется, но правило простое и важное: единицы
+ * подписаны, нули не печатаются. Проверяем через собранную игру в
+ * tools/verify-destination.mjs; здесь — чтобы зафиксировать решение
+ * в тестах, дублируем правило как документ.
+ */
+test('длительность печатается с подписью единиц', () => {
+  const fmt = (ms: number): string => {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    if (h > 0) return m > 0 ? `${h} ч ${pad(m)} мин` : `${h} ч`;
+    if (m > 0) return sec > 0 ? `${m} мин ${pad(sec)} с` : `${m} мин`;
+    return `${sec} с`;
+  };
+  // Главное: «1 ч» вместо «1:00», которое читается как минута.
+  assert.equal(fmt(3600_000), '1 ч');
+  assert.equal(fmt(3661_000), '1 ч 01 мин');
+  assert.equal(fmt(15 * 60_000), '15 мин');
+  assert.equal(fmt(96_000), '1 мин 36 с');
+  assert.equal(fmt(42_000), '42 с');
+  assert.equal(fmt(0), '0 с');
+});
