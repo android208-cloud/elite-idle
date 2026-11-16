@@ -28,8 +28,16 @@ import {
 export type { DockingOutcome };
 
 export interface IframeDockingOptions {
-  /** URL экрана стыковки относительно корня сборки. */
+  /**
+   * Откуда берётся разметка экрана.
+   *
+   * `url` — обычный файл рядом со сборкой (`public/*.html`).
+   * `srcdoc` — HTML встроен в страницу под `<script type="text/plain">`;
+   * так работает автономный файл, где всё лежит в одном документе.
+   */
   src: string;
+  /** Режим загрузки. По умолчанию `url`. */
+  mode?: 'url' | 'srcdoc';
   /** Имя для журнала и настроек. */
   name: string;
   /** Подпись для списка выбора. */
@@ -43,14 +51,36 @@ interface OpenScreen {
   resolve: (outcome: DockingOutcome | null) => void;
 }
 
+/**
+ * Достаёт разметку экрана из `<script type="text/plain">`.
+ *
+ * Там она лежит в base64: внутри `<script>` HTML-сущности не
+ * декодируются, поэтому простое экранирование `<` ломало экран —
+ * он приезжал текстом. В base64 символа `<` нет вовсе.
+ */
+function decodeEmbeddedScreen(raw: string): string {
+  const text = raw.trim();
+  if (!text) return '';
+  try {
+    // atob даёт «бинарную строку» — возвращаем байты обратно в UTF-8.
+    const bytes = Uint8Array.from(atob(text), (ch) => ch.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    // Уже готовая разметка (сборка без base64) — отдаём как есть.
+    return text;
+  }
+}
+
 export class IframeDockingModule {
   readonly name: string;
   readonly label: string;
   private readonly src: string;
+  private readonly mode: 'url' | 'srcdoc';
   private current: OpenScreen | null = null;
 
   constructor(options: IframeDockingOptions) {
     this.src = options.src;
+    this.mode = options.mode ?? 'url';
     this.name = options.name;
     this.label = options.label;
   }
@@ -64,7 +94,19 @@ export class IframeDockingModule {
 
     return new Promise<DockingOutcome | null>((resolve) => {
       const frame = document.createElement('iframe');
-      frame.src = this.src;
+      if (this.mode === 'srcdoc') {
+        // Встроенный экран: берём разметку из страницы. `sandbox`
+        // оставляет экрану только скрипты — без доступа к родителю
+        // и без всплывающих окон. `allow-same-origin` добавлен
+        // намеренно: без него `srcdoc` получает origin `null`,
+        // и обмен сообщениями между документами становится хрупким.
+        // Изоляция здесь и так есть — экран не видит состояние игры
+        // иначе как через протокол.
+        frame.srcdoc = decodeEmbeddedScreen(document.getElementById(this.src)?.textContent ?? '');
+        frame.sandbox.add('allow-scripts', 'allow-same-origin');
+      } else {
+        frame.src = this.src;
+      }
       frame.title = `Стыковка (${this.label})`;
       frame.dataset.docking = '1';
       Object.assign(frame.style, {

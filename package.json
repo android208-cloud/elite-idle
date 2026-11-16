@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "standalone": "npm run build && node tools/make-standalone.mjs",
+    "verify:standalone": "node tools/verify-standalone.mjs && node tools/verify-docking.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

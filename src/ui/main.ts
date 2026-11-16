@@ -61,13 +61,38 @@ let selected: number | null = null;
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
 
+/**
+ * Есть ли рабочее хранилище.
+ *
+ * На `file://` браузеры выдают «opaque origin», и обращение к
+ * `localStorage` не просто возвращает null, а **бросает** SecurityError.
+ * Поэтому проверяем один раз и молча работаем без сохранений: игра
+ * должна запускаться и без диска. Это же поведение в приватном режиме
+ * некоторых браузеров.
+ */
+const storageAvailable = (() => {
+  try {
+    const probe = '__elite_probe__';
+    localStorage.setItem(probe, '1');
+    localStorage.removeItem(probe);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 function save(): void {
-  localStorage.setItem(SAVE_KEY, JSON.stringify({ state: serialize(state), log, settings }));
+  if (!storageAvailable) return;
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ state: serialize(state), log, settings }));
+  } catch {
+    // место кончилось или диск недоступен — играть это не мешает
+  }
 }
 
 function load(): void {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = storageAvailable ? localStorage.getItem(SAVE_KEY) : null;
     if (raw) {
       const data = JSON.parse(raw) as { state: string; log: LogEntry[]; settings: Settings };
       state = deserialize(data.state);
@@ -480,8 +505,18 @@ export interface DockingModule {
  * быть заменён без пересборки игры: достаточно положить другой HTML
  * с тем же протоколом.
  */
+const STANDALONE_SCREEN_ID = 'docking-screen-html';
+
+/**
+ * Экран для автономной сборки: разметка уже лежит в странице под
+ * `<script type="text/plain" id="docking-screen-html">`. Если такого
+ * тега нет — это обычная сборка, и экран грузится файлом.
+ */
+const EMBEDDED = typeof document !== 'undefined' && !!document.getElementById(STANDALONE_SCREEN_ID);
+
 const DEFAULT_DOCKING = new IframeDockingModule({
-  src: './user-docking3-tune.html',
+  src: EMBEDDED ? STANDALONE_SCREEN_ID : './user-docking3-tune.html',
+  mode: EMBEDDED ? 'srcdoc' : 'url',
   name: 'user-docking3',
   label: 'Ваша мини-игра',
 });
