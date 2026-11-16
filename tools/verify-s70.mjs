@@ -65,8 +65,17 @@ check('журнал: неудачные сделки', logHtml.includes('Неу�
 tab('market');
 await new Promise((r) => setTimeout(r, 200));
 const illegalCards = window.document.querySelectorAll('.card.illegal').length;
-const illegalChips = window.document.querySelectorAll('.chip.illegal').length;
-check('рынок: контрабанда помечена', illegalCards > 0 || illegalChips > 0, `карточек ${illegalCards}, чипов ${illegalChips}`);
+const marketHtml = window.document.getElementById('content').innerHTML;
+const hasWord = /контрабанд/i.test(marketHtml);
+check('рынок: контрабанда помечена красным', illegalCards > 0, `карточек с классом illegal ${illegalCards}`);
+check('рынок: слова «контрабанда» нет', !hasWord, hasWord ? 'слово ещё печатается' : 'только цвет, как просили');
+
+// 2. Темп игры до ×200
+tab('log');
+await new Promise((r) => setTimeout(r, 200));
+const speedSelect = window.document.querySelector('select[data-key="speed"]');
+const speedOpts = [...(speedSelect?.options ?? [])].map((o) => o.value);
+check('темп: есть ×200', speedOpts.includes('200'), 'варианты: ×' + speedOpts.join(', ×'));
 
 // 2. Модель корабля в ангаре, а не на экране «Корабль»
 tab('ship');

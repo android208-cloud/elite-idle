@@ -137,6 +137,51 @@ test('подписи не налезают друг на друга и не уе
   }
 });
 
+test('раскладка не зависит от того, какая система выбрана', () => {
+  // Была регрессия: порядок раскладки задавал вызывающий код
+  // (текущая → выбранная → прочие), и при выборе подписи переезжали.
+  // Палец, только что попавший в название, оказывался над другой
+  // системой. Теперь порядок задаёт расстояние до центра — он от
+  // выбора не меняется.
+  const items = [
+    item(180, 180, 'LAVE', 'агро богатая · Т5'),
+    item(180, 120, 'REORTE', 'агро бедная · Т6'),
+    item(120, 200, 'DISO', 'агро средняя · Т8'),
+    item(150, 260, 'LEESTI', 'пром. бедная · Т11'),
+    item(60, 150, 'USZAA', 'пром. средняя · Т8'),
+    item(200, 90, 'QUATOR', 'пром. преим. · Т7'),
+  ];
+  const sizes = items.map((it) => ({ tw: it.text.length * 6, sw: it.sub ? it.sub.length * 5.2 : 0 }));
+  const a = layoutLabels(items, sizes, 360, 360);
+  // Меняем порядок входа — как если бы выбранной стала другая система.
+  const shuffled = [...items].reverse();
+  const b = layoutLabels(shuffled, shuffled.map((it) => ({ tw: it.text.length * 6, sw: it.sub ? it.sub.length * 5.2 : 0 })), 360, 360);
+  const posOf = (l: { placed: { item: LabelItem; cx: number; cy: number }[] }) =>
+    new Map(l.placed.map((p) => [p.item.text, `${Math.round(p.cx)},${Math.round(p.cy)}`]));
+  const pa = posOf(a);
+  const pb = posOf(b);
+  for (const [name, pos] of pa) {
+    if (!pb.has(name)) continue;
+    assert.equal(pb.get(name), pos, `${name} переехала при смене выбора`);
+  }
+});
+
+test('касание по подписи считается по её реальной строке', () => {
+  // Двухстрочная подпись занимает 22 px, однострочная — 10.
+  // Точные границы нужны потому, что соседние подписи стоят в
+  // нескольких пикселях и приблизительный прямоугольник уводит тап.
+  const items = [item(100, 100, 'RA'), item(140, 100, 'QUATOR')];
+  const sizes = [
+    { tw: 12, sw: 0 },
+    { tw: 36, sw: 0 },
+  ];
+  const { placed } = layoutLabels(items, sizes, 360, 200);
+  for (const p of placed) {
+    const h = p.box.y2 - p.box.y1;
+    assert.equal(h, 10, `высота области ${h} вместо 10 для однострочной`);
+  }
+});
+
 test('однострочная подпись находит место там, где двухстрочная не влезла', () => {
   const taken = [{ x1: 100, y1: 100, x2: 260, y2: 130 }];
   const spot = placeSingle(180, 115, 80, 360, taken);

@@ -382,8 +382,7 @@ function mapScreen(): string {
     <div class="card map-card">
       <h2>Окрестности</h2>
       <canvas id="map-local" data-local="1"></canvas>
-      <div class="sub" id="local-hint">Радиус — по текущему топливу. Нажмите на систему или выберите из списка.</div>
-      ${localSystemList()}
+      <div class="sub" id="local-hint">Радиус — по текущему топливу. Нажмите на точку, чтобы выбрать цель.</div>
     </div>
     <div class="card">${info}</div>`;
 }
@@ -522,9 +521,10 @@ function prepareCanvas(view: ChartView): CanvasRenderingContext2D | null {
  */
 function placeLabels(
   ctx: CanvasRenderingContext2D,
-  items: LabelItem[],
+  items: (LabelItem & { index?: number })[],
   width: number,
   height: number,
+  canvas?: HTMLCanvasElement,
 ): void {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -540,6 +540,14 @@ function placeLabels(
 
   const { placed, occupied } = layoutLabels(items, sizes, width, height);
   const placedSet = new Set(placed.map((p) => p.item));
+
+  // Попадания по подписям — для касания. В cards попадают и
+  // однострочные резервные подписи: они тоже должны выбирать систему.
+  const cards: { box: { x1: number; y1: number; x2: number; y2: number }; index: number }[] = [];
+  for (const p of placed) {
+    const idx = (p.item as LabelItem & { index?: number }).index;
+    if (idx !== undefined) cards.push({ box: p.box, index: idx });
+  }
 
   for (const pl of placed) {
     const it = pl.item;
@@ -571,10 +579,26 @@ function placeLabels(
     if (!spot) continue; // совсем нет места — лучше пусто, чем каша
     ctx.fillStyle = it.subColor ?? it.color;
     ctx.fillText(short, spot.cx, spot.cy);
+    const idx = (it as LabelItem & { index?: number }).index;
+    if (idx !== undefined) cards.push({ box: spot.box, index: idx });
   }
+
+  if (canvas) labelHit.set(canvas, cards);
 }
 
 /** Рисует точки систем и подписи. */
+/**
+ * Куда на холсте легли подписи систем.
+ *
+ * Заполняется при отрисовке и используется при касании: попадание по
+ * подписи = выбор системы. Нужно потому, что список под картой убран,
+ * а две точки могут стоять в 19 px друг от друга — палец их не
+ * разделит, а подпись лежит рядом и однозначна.
+ *
+ * Ключ — холст: на карте их два (общая и местная), и раскладки разные.
+ */
+const labelHit: WeakMap<HTMLCanvasElement, { box: { x1: number; y1: number; x2: number; y2: number }; index: number }[]> = new WeakMap();
+
 function drawSystems(
   ctx: CanvasRenderingContext2D,
   view: ChartView,
@@ -645,12 +669,13 @@ function drawSystems(
         y: p.y,
         text: sys.name,
         sub: `${shortEconomy(sys.economy)} · Т${sys.techLevel + 1}`,
+        index: sys.index,
         color: sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88',
         subColor: sys.index === here.index ? 'rgba(79,216,196,.72)' : 'rgba(221,228,226,.55)',
       };
     });
 
-  placeLabels(ctx, items, view.width, view.height);
+  placeLabels(ctx, items as (LabelItem & { index: number })[], view.width, view.height, view.canvas);
 }
 
 /** Рисует обе карты. */
@@ -742,6 +767,25 @@ function onMapTap(ev: PointerEvent, canvas: HTMLCanvasElement): void {
 
   if (!points.length) return;
 
+  /*
+   * Сначала — попадание по ПОДПИСИ.
+   *
+   * Список систем под картой убран (пользователь просил «снизу убрать»),
+   * а он заодно решал проблему точности: QUATOR и RA стоят в 19 px друг
+   * от друга, и палец накрывает обе точки. Подпись лежит рядом с точкой
+   * и однозначна, поэтому касание по ней считается выбором системы.
+   * Порядок важен: подпись проверяется раньше «ближайшей точки», иначе
+   * тап по названию соседа всё равно выбрал бы точку под пальцем.
+   */
+  const hits = labelHit.get(canvas) ?? [];
+  for (const h of hits) {
+    if (px >= h.box.x1 && px <= h.box.x2 && py >= h.box.y1 && py <= h.box.y2) {
+      selected = h.index;
+      render();
+      return;
+    }
+  }
+
   // Ближайшая к пальцу.
   let best = -1;
   let bestD = Infinity;
@@ -788,43 +832,6 @@ function onMapTap(ev: PointerEvent, canvas: HTMLCanvasElement): void {
  * Кнопки дают однозначный выбор: тап по названию не может «промахнуться».
  * Карта остаётся для того, чтобы видеть расположение.
  */
-function localSystemList(): string {
-  const systems = systemsOf(state.galaxy);
-  const here = systems[state.system];
-  const canvas = document.getElementById('map-local') as HTMLCanvasElement | null;
-  const width = canvas?.clientWidth || 320;
-  // Тот же радиус, что у карты, — чтобы список и карта показывали одно.
-  const radius = Math.max(3, (state.fuel / 4) * MAP_MARGIN);
-
-  const near = systems
-    .filter((s) => {
-      const dx = Math.abs(s.x - here.x);
-      const dy = Math.abs(s.y / 2 - here.y / 2);
-      return dx <= radius && dy <= radius;
-    })
-    .map((s) => ({ s, d: distance(here, s) }))
-    .filter((x) => x.s.index !== here.index)
-    .sort((a, b) => a.d - b.d);
-
-  if (!near.length) return '<div class="muted" style="margin-top:10px">Соседей в радиусе нет — заправьтесь на станции.</div>';
-
-  const rows = near
-    .map(({ s, d }) => {
-      const reachable = d <= state.fuel;
-      const isSel = s.index === selected;
-      // Техуровень и экономику печатаем на самой карте, рядом с точкой
-      // (см. drawSystems). Здесь остаётся только имя и дистанция — то,
-      // по чему выбирают цель. Список нужен не для справки, а чтобы
-      // попасть пальцем в систему, которую на карте не отделить от соседа.
-      const tech = s.techLevel + 1;
-      return `<button class="btn small ${isSel ? 'active' : ''}" data-action="select-system" data-i="${s.index}"
-        ${reachable ? '' : 'disabled'} title="${reachable ? `${s.name} · Т${tech} · ${shortEconomy(s.economy)}` : 'Не хватает топлива'}">
-        ${s.name} <span class="muted">· ${ly(d)}</span></button>`;
-    })
-    .join('');
-  return `<div class="system-list">${rows}</div>`;
-}
-
 function priceChip(i: number): string {
   const base = COMMODITIES[i].basePrice * 4;
   const ratio = state.market[i].price / base;
@@ -844,7 +851,7 @@ function marketScreen(): string {
     // статус, и игрок должен видеть это до покупки, а не после.
     const illegal = [SLAVES_INDEX, NARCOTICS_INDEX, FIREARMS_INDEX].includes(i);
     return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
-        <div><div class="name">${c.name} ${priceChip(i)}${illegal ? ' <span class="chip illegal">контрабанда</span>' : ''}</div>
+        <div><div class="name">${c.name} ${priceChip(i)}</div>
           <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${state.cargo[i]} ${UNITS[c.unit]}</div></div>
         <div class="price">${cr(m.price)}</div></div>
       <div class="row" style="margin-top:10px">
@@ -970,7 +977,7 @@ function statsCard(): string {
 
 function logScreen(): string {
   const items = log.map((e) => `<li><time>${fmtTime(e.at)}</time>${e.text}</li>`).join('');
-  const speeds = [0.5, 1, 2, 5, 10, 20, 100].map((s): [string, string] => [String(s), `×${s}`]);
+  const speeds = [0.5, 1, 2, 5, 10, 20, 100, 200].map((s): [string, string] => [String(s), `×${s}`]);
   const timeouts = [1, 2, 5, 10, 30].map((m): [string, string] => [String(m * 60000), `${m} мин`]);
   const rates = [
     ['0', 'Нет встреч'],
