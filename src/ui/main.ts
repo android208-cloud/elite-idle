@@ -12,7 +12,8 @@ import {
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES } from '../core/market.ts';
-import { drawShipModel } from './ship-model.ts';
+import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
+import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
   advance,
@@ -29,6 +30,9 @@ import {
   MAX_FUEL,
   newGame,
   owns,
+  SLAVES_INDEX,
+  NARCOTICS_INDEX,
+  FIREARMS_INDEX,
   refuel,
   ROLE_NAMES,
   sell,
@@ -177,6 +181,28 @@ function stat(label: string, value: string): string {
   return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>`;
 }
 
+/**
+ * Короткое обозначение экономики для карты.
+ *
+ * Полное «Преимущественно промышленная» на карте не помещается и
+ * налезает на соседние подписи. Сокращаем до двух слов: тип + уровень.
+ * Смысл сохраняется, строка влезает под точку.
+ */
+const ECONOMY_SHORT = [
+  'пром. богатая',
+  'пром. средняя',
+  'пром. бедная',
+  'пром. преим.',
+  'агро преим.',
+  'агро богатая',
+  'агро средняя',
+  'агро бедная',
+] as const;
+
+function shortEconomy(i: number): string {
+  return ECONOMY_SHORT[i] ?? '—';
+}
+
 function systemInfo(index: number): string {
   const s = systemsOf(state.galaxy)[index];
   return `${ECONOMIES[s.economy]}, ${GOVERNMENTS[s.government]}, тех. уровень ${s.techLevel + 1}`;
@@ -220,7 +246,14 @@ function encounterCard(): string {
       title="${reason ?? ''}">${label}</button>`;
 
   const share = hostile && can.attack ? '' : '';
+  // Модель встречного корабля: видно, с кем имеешь дело, а не только
+  // название. Корабль, которого нет в парке (канистра, астероид),
+  // просто не показывается — лучше пусто, чем силуэт не того класса.
+  const model = FLEET[enemy.id]
+    ? `<canvas class="enc-model" data-ship="${enemy.id}" aria-label="Модель корабля ${enemy.name}"></canvas>`
+    : '';
   return `<div class="card warn"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
+    ${model}
     <div class="sub">${hostile ? 'Враждебен' : 'Не враждебен'} · Решение через <span id="enc-eta"></span></div>
     <div class="row" style="margin-top:12px">
       ${btn('attack', 'Напасть', can.attack, can.attackReason)}
@@ -252,10 +285,6 @@ function shipScreen(): string {
     .filter(Boolean)
     .join('<br>');
   return `${flightCard()}
-    <div class="card ship-view">
-      <canvas id="ship-model" aria-label="Модель корабля Cobra Mk III"></canvas>
-      <div class="sub" style="text-align:center">Cobra Mk III</div>
-    </div>
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
       ${stat('Топливо', ly(state.fuel))}
@@ -339,7 +368,9 @@ function mapScreen(): string {
       <div class="row" style="margin-top:12px">
         <span class="price">${ly(d)}</span><span class="spacer"></span>
         ${jumpControl(d, reason)}
-      </div>${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
+      </div>
+      <div class="sub" style="margin-top:6px">В пути: ${fmtDur(jumpDuration(settings, d))}${settings.speed > 1 ? ` (при ×${settings.speed})` : ''}</div>
+      ${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
   }
   // Две карты одна под другой: общая (вся галактика, горизонтальная)
   // и местная (окно вокруг корабля, крупно).
@@ -491,54 +522,55 @@ function prepareCanvas(view: ChartView): CanvasRenderingContext2D | null {
  */
 function placeLabels(
   ctx: CanvasRenderingContext2D,
-  items: { x: number; y: number; text: string; color: string }[],
+  items: LabelItem[],
   width: number,
   height: number,
 ): void {
-  ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const boxes: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  // Ширины измеряет canvas — раскладка их только использует.
+  const sizes = items.map((it) => {
+    ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+    const tw = ctx.measureText(it.text).width;
+    ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+    const sw = it.sub ? ctx.measureText(it.sub).width : 0;
+    return { tw, sw };
+  });
 
-  // Точки систем считаем занятыми: подпись не должна их накрывать.
-  for (const it of items) {
-    boxes.push({ x1: it.x - 5, y1: it.y - 5, x2: it.x + 5, y2: it.y + 5 });
+  const { placed, occupied } = layoutLabels(items, sizes, width, height);
+  const placedSet = new Set(placed.map((p) => p.item));
+
+  for (const pl of placed) {
+    const it = pl.item;
+    ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillStyle = it.color;
+    ctx.fillText(it.text, pl.cx, it.sub ? pl.cy - 6 : pl.cy);
+    if (it.sub) {
+      ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+      ctx.fillStyle = it.subColor ?? it.color;
+      ctx.fillText(it.sub, pl.cx, pl.cy + 6);
+    }
   }
 
+  /*
+   * Кому места не хватило.
+   *
+   * Раньше такие подписи пропускались целиком — и вместе с именем
+   * терялись характеристики планеты. Пользователь просил их видеть,
+   * поэтому теперь жмёмся: печатаем в одну строку «ИМЯ Т8» справа от
+   * точки. Такой текст вдвое уже двухстрочного блока и почти всегда
+   * находит себе место.
+   */
   for (const it of items) {
-    const tw = ctx.measureText(it.text).width;
-    const th = 11;
-    const spots: [number, number][] = [
-      [0, 15],
-      [0, -15],
-      [tw / 2 + 8, 0],
-      [-tw / 2 - 8, 0],
-      [tw / 2 + 6, 13],
-      [-tw / 2 - 6, 13],
-      [tw / 2 + 6, -13],
-      [-tw / 2 - 6, -13],
-    ];
-    for (const [dx, dy] of spots) {
-      const cx = it.x + dx;
-      const cy = it.y + dy;
-      const box = {
-        x1: cx - tw / 2 - 2,
-        y1: cy - th / 2 - 2,
-        x2: cx + tw / 2 + 2,
-        y2: cy + th / 2 + 2,
-      };
-      // Не даём уехать за холст.
-      if (box.x1 < 1 || box.y1 < 1 || box.x2 > width - 1 || box.y2 > height - 1) continue;
-      const clash = boxes.some(
-        (b) => !(box.x2 < b.x1 || box.x1 > b.x2 || box.y2 < b.y1 || box.y1 > b.y2),
-      );
-      if (clash) continue;
-      boxes.push(box);
-      ctx.fillStyle = it.color;
-      ctx.fillText(it.text, cx, cy);
-      break;
-    }
+    if (placedSet.has(it)) continue;
+    const short = it.sub ? `${it.text} Т${it.sub.split('Т').pop()}` : it.text;
+    ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+    const tw = ctx.measureText(short).width;
+    const spot = placeSingle(it.x, it.y, tw, width, occupied as Box[]);
+    if (!spot) continue; // совсем нет места — лучше пусто, чем каша
+    ctx.fillStyle = it.subColor ?? it.color;
+    ctx.fillText(short, spot.cx, spot.cy);
   }
 }
 
@@ -593,6 +625,11 @@ function drawSystems(
 
   // Подписи. Порядок задаёт приоритет: если места нет, подпись текущей
   // и выбранной системы важнее прочих.
+  //
+  // На местной карте под системой идёт вторая строка — характеристики
+  // планеты. Раньше они были отдельными полями под картой, но их
+  // приходилось сопоставлять со списком глазами, а рядом с точкой
+  // видно сразу, к какой звезде относится строка.
   const items = systems
     .filter((sys) => view.visible(sys))
     .map((sys) => ({ sys, p: view.screenOf(sys.x, sys.y) }))
@@ -607,7 +644,9 @@ function drawSystems(
         x: p.x,
         y: p.y,
         text: sys.name,
+        sub: `${shortEconomy(sys.economy)} · Т${sys.techLevel + 1}`,
         color: sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88',
+        subColor: sys.index === here.index ? 'rgba(79,216,196,.72)' : 'rgba(221,228,226,.55)',
       };
     });
 
@@ -773,12 +812,14 @@ function localSystemList(): string {
     .map(({ s, d }) => {
       const reachable = d <= state.fuel;
       const isSel = s.index === selected;
-      // Техуровень показываем как в оригинале: в данных он 0..15,
-      // в игре и в описании системы выводится +1 (DISO = 6, а не 5).
+      // Техуровень и экономику печатаем на самой карте, рядом с точкой
+      // (см. drawSystems). Здесь остаётся только имя и дистанция — то,
+      // по чему выбирают цель. Список нужен не для справки, а чтобы
+      // попасть пальцем в систему, которую на карте не отделить от соседа.
       const tech = s.techLevel + 1;
       return `<button class="btn small ${isSel ? 'active' : ''}" data-action="select-system" data-i="${s.index}"
-        ${reachable ? '' : 'disabled'} title="${reachable ? `${s.name} · тех. уровень ${tech}` : 'Не хватает топлива'}">
-        ${s.name} <span class="muted">· ${ly(d)}</span> <span class="tech">Т${tech}</span></button>`;
+        ${reachable ? '' : 'disabled'} title="${reachable ? `${s.name} · Т${tech} · ${shortEconomy(s.economy)}` : 'Не хватает топлива'}">
+        ${s.name} <span class="muted">· ${ly(d)}</span></button>`;
     })
     .join('');
   return `<div class="system-list">${rows}</div>`;
@@ -797,8 +838,13 @@ function marketScreen(): string {
   const rows = COMMODITIES.map((c, i) => {
     const m = state.market[i];
     if (c.name === 'Предметы пришельцев' && m.quantity === 0 && state.cargo[i] === 0) return '';
-    return `<div class="card"><div class="good-row">
-        <div><div class="name">${c.name} ${priceChip(i)}</div>
+    // Контрабанда помечается красным и словом: в оригинале это рабы,
+    // наркотики и оружие (SLAVES_INDEX, NARCOTICS_INDEX, FIREARMS_INDEX).
+    // Подсветка нужна не для красоты: за такой груз растёт правовой
+    // статус, и игрок должен видеть это до покупки, а не после.
+    const illegal = [SLAVES_INDEX, NARCOTICS_INDEX, FIREARMS_INDEX].includes(i);
+    return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
+        <div><div class="name">${c.name} ${priceChip(i)}${illegal ? ' <span class="chip illegal">контрабанда</span>' : ''}</div>
           <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${state.cargo[i]} ${UNITS[c.unit]}</div></div>
         <div class="price">${cr(m.price)}</div></div>
       <div class="row" style="margin-top:10px">
@@ -839,7 +885,16 @@ function equipmentRows(): string {
 function hangarScreen(): string {
   const docked = !state.flight;
   const missing = MAX_FUEL - state.fuel;
-  return `<div class="card"><h2>Топливо</h2>
+  // Модель корабля живёт в ангаре: это место про сам корабль, а экран
+  // «Корабль» — про полёт и груз. В пути модель не рисуем: в ангаре
+  // корабля нет, он улетел.
+  const model = docked
+    ? `<div class="card ship-view">
+      <canvas id="ship-model" aria-label="Модель корабля Cobra Mk III"></canvas>
+      <div class="sub" style="text-align:center">Cobra Mk III · ваш корабль в ангаре</div>
+    </div>`
+    : '';
+  return `${model}<div class="card"><h2>Топливо</h2>
       <div class="sub">${ly(state.fuel)} из ${ly(MAX_FUEL)} · цена 0.2 CR за св. год</div>
       <div class="progress"><div style="width:${(state.fuel / MAX_FUEL) * 100}%"></div></div>
       <div class="row">
@@ -878,6 +933,41 @@ function select(key: string, options: [string, string][], current: string): stri
   return `<select data-action="setting" data-key="${key}">${opts}</select>`;
 }
 
+/**
+ * Статистика командира для журнала.
+ *
+ * Показывает не только «сколько убил», но и торговый баланс: из
+ * статистики сделок видно, зарабатывает игрок на перевозках или
+ * теряет. Это подсказка к стратегии, а не просто цифры.
+ */
+function statsCard(): string {
+  const st = state.stats ?? {
+    kills: 0, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0,
+    tradeProfit: 0, jumps: 0, dockings: 0, dockingFails: 0,
+  };
+  const trades = st.goodTrades + st.badTrades;
+  const rate = trades > 0 ? Math.round((st.goodTrades / trades) * 100) : 0;
+  const profitSign = st.tradeProfit >= 0 ? '+' : '−';
+  return `<div class="card"><h2>Статистика</h2>
+    <div class="grid">
+      ${stat('Уничтожено', String(st.kills))}
+      ${stat('Ранг', rankOf(state.kills))}
+      ${stat('Прыжков', String(st.jumps))}
+      ${stat('Стыковок', `${st.dockings}${st.dockingFails ? ` / ${st.dockingFails} ✗` : ''}`)}
+      ${stat('Бегств', String(st.fled))}
+      ${stat('Пропущено', String(st.skipped))}
+    </div>
+    <h2 style="margin-top:14px">Торговля</h2>
+    <div class="grid">
+      ${stat('Удачных', String(st.goodTrades))}
+      ${stat('Неудачных', String(st.badTrades))}
+      ${stat('Успех', trades ? `${rate}%` : '—')}
+      ${stat('Прибыль', `${profitSign}${cr(Math.abs(st.tradeProfit))}`)}
+    </div>
+    ${trades === 0 ? '<div class="sub" style="margin-top:8px">Сделок пока не было — купите товар подешевле и продайте там, где дорого.</div>' : ''}
+  </div>`;
+}
+
 function logScreen(): string {
   const items = log.map((e) => `<li><time>${fmtTime(e.at)}</time>${e.text}</li>`).join('');
   const speeds = [0.5, 1, 2, 5, 10, 20, 100].map((s): [string, string] => [String(s), `×${s}`]);
@@ -894,9 +984,9 @@ function logScreen(): string {
         ? '<span class="muted">Уведомления включены</span>'
         : '<button class="btn tonal" data-action="notify-permission">Включить уведомления</button>'
       : '<span class="muted">Уведомления не поддерживаются</span>';
-  return `<div class="card"><h2>Настройки</h2>
+  return `${statsCard()}<div class="card"><h2>Настройки</h2>
       <div class="row"><label>Темп игры</label><span class="spacer"></span>${select('speed', speeds, String(settings.speed))}</div>
-      <div class="sub" style="margin:6px 0 12px">Один прыжок: ${fmtDur(jumpDuration(settings))}</div>
+      <div class="sub" style="margin:6px 0 12px">Прыжок 7 св. лет: ${fmtDur(jumpDuration(settings, 7))} · 3 св. года: ${fmtDur(jumpDuration(settings, 3))}</div>
       <div class="row"><label>Бой</label><span class="spacer"></span>${select('combatMode', [['auto', 'Автоматический'], ['manual', 'С вмешательством']], settings.combatMode)}</div>
       <div class="row" style="margin-top:10px"><label>При гибели</label><span class="spacer"></span>${select('deathMode', [['insurance', 'Страховка'], ['none', 'Без смерти']], settings.deathMode)}</div>
       <div class="row" style="margin-top:10px"><label>Чужой корабль исчезает через</label><span class="spacer"></span>${select('encounterTimeoutMs', timeouts, String(settings.encounterTimeoutMs))}</div>
@@ -1050,8 +1140,13 @@ function openDocking(): boolean {
         return;
       }
       if (outcome.docked) {
+        state = { ...state, stats: { ...state.stats, dockings: state.stats.dockings + 1 } };
         addLog(`Стыковка: успешно (${mod.label})`);
       } else {
+        state = {
+          ...state,
+          stats: { ...state.stats, dockingFails: state.stats.dockingFails + 1 },
+        };
         addLog(
           `Стыковка: провал, повреждение ${outcome.damage} (${mod.label})`,
         );
@@ -1096,11 +1191,15 @@ function render(): void {
         <span class="pill">${t.icon}</span>${t.label}</button>`,
   ).join('');
   if (tab === 'map' && !inCombat) drawMap();
-  if (tab === 'ship' && !inCombat) startShipModel();
+  if (state.encounter && !inCombat) drawEncounterModel();
+  // Модель корабля теперь в ангаре и только на стоянке: в полёте
+  // канваса нет, анимация не нужна.
+  if (tab === 'hangar' && !inCombat && !state.flight) startShipModel();
+  else cancelAnimationFrame(shipModelFrame);
   updateFlight();
 }
 
-/* ---------- Модель корабля на главном экране ---------- */
+/* ---------- Модель корабля в ангаре ---------- */
 
 let shipModelFrame = 0;
 let shipModelAngle = 0;
@@ -1135,6 +1234,31 @@ function drawShipFrame(now: number): void {
 
   drawShipModel(ctx, { width: w, height: h, yaw: shipModelAngle });
   shipModelFrame = requestAnimationFrame(drawShipFrame);
+}
+
+/**
+ * Модель встреченного корабля.
+ *
+ * Рисуется один раз (не анимация): экран встречи — это решение за
+ * несколько секунд, вращение тут отвлекало бы. Угол в три четверти,
+ * чтобы силуэт читался: нос, борт и то, насколько корабль большой.
+ */
+function drawEncounterModel(): void {
+  const canvas = document.querySelector('canvas.enc-model') as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const bp = FLEET[canvas.dataset.ship ?? ''];
+  const ctx = canvas.getContext('2d');
+  if (!bp || !ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 260;
+  const h = Math.round(w * 0.42);
+  canvas.style.height = `${h}px`;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  drawShipModel(ctx, { width: w, height: h, yaw: 0.7, ship: bp as ShipBlueprint });
 }
 
 function startShipModel(): void {
@@ -1215,6 +1339,18 @@ function onAction(el: HTMLElement): void {
     case 'buyMax': {
       const cashBefore = state.cash;
       const r = buy(state, i, a === 'buy1' ? 1 : 9999);
+      // Средняя цена покупки: нужно, чтобы потом понять, удачной ли
+      // была продажа. Пересчитываем средневзвешенно по остатку.
+      if (r.amount > 0) {
+        const prevTons = state.cargo[i];
+        const prevBasis = state.cargoBasis?.[i] ?? 0;
+        const paid = cashBefore - r.state.cash;
+        const newTons = prevTons + r.amount;
+        const basis = newTons > 0 ? Math.round((prevBasis * prevTons + paid) / newTons) : 0;
+        const basisArr = [...(state.cargoBasis ?? COMMODITIES.map(() => 0))];
+        basisArr[i] = basis;
+        r.state = { ...r.state, cargoBasis: basisArr };
+      }
       state = r.state;
       tradeLog('Куплено', i, r.amount, cashBefore - state.cash);
       break;
@@ -1223,6 +1359,30 @@ function onAction(el: HTMLElement): void {
     case 'sellAll': {
       const cashBefore = state.cash;
       const r = sell(state, i, a === 'sell1' ? 1 : 9999);
+      // Удачная сделка = продали дороже средней цены покупки.
+      if (r.amount > 0) {
+        const basis = state.cargoBasis?.[i] ?? 0;
+        const received = r.state.cash - cashBefore;
+        const cost = basis * r.amount;
+        // Отрицательная прибыль означает убыток: считаем и его.
+        const profit = received - cost;
+        const basisArr = [...(state.cargoBasis ?? COMMODITIES.map(() => 0))];
+        if (r.state.cargo[i] === 0) basisArr[i] = 0; // товар кончился — базис не нужен
+        r.state = {
+          ...r.state,
+          cargoBasis: basisArr,
+          stats: {
+            ...r.state.stats,
+            goodTrades: r.state.stats.goodTrades + (profit > 0 ? 1 : 0),
+            badTrades: r.state.stats.badTrades + (profit <= 0 ? 1 : 0),
+            tradeProfit: r.state.stats.tradeProfit + profit,
+          },
+        };
+        if (profit !== 0) {
+          const sign = profit > 0 ? '+' : '−';
+          addLog(`Сделка ${profit > 0 ? 'удачная' : 'в убыток'}: ${sign}${cr(Math.abs(profit))}`);
+        }
+      }
       state = r.state;
       tradeLog('Продано', i, r.amount, state.cash - cashBefore);
       break;
@@ -1265,7 +1425,21 @@ function onAction(el: HTMLElement): void {
         addLog('Это решение сейчас недоступно');
         break;
       }
-      let next: GameState = { ...state, cash: state.cash + r.bounty, encounter: null, combat: null };
+      const won = r.outcome === 'won' || r.outcome === 'auto-victory';
+      const skipped = r.outcome === 'skipped' || r.outcome === 'auto-skip';
+      let next: GameState = {
+        ...state,
+        cash: state.cash + r.bounty,
+        kills: state.kills + (won ? 1 : 0),
+        stats: {
+          ...state.stats,
+          kills: state.stats.kills + (won ? 1 : 0),
+          skipped: state.stats.skipped + (skipped ? 1 : 0),
+          fled: state.stats.fled + (r.podUsed ? 1 : 0),
+        },
+        encounter: null,
+        combat: null,
+      };
       if (r.podUsed) {
         // §37 / UpdateEscapePod: капсула тратится, груз теряется
         // (кроме предметов пришельцев), правовой статус обнуляется.

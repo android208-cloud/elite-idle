@@ -126,7 +126,10 @@ test('прибытие раньше N минут: корабль остаётс�
     ...g,
     encounter: { role: 'trader', enemyId: 'cobra3', detectedAt: NOW, resolveAt: NOW + 99 * MIN, outcome: 'leave' },
   };
-  const done = advance(s, NOW + 20 * MIN);
+  // Прибытие наступает по расписанию полёта, а оно теперь зависит от
+  // расстояния. Берём точный момент прибытия, а не «через 20 минут».
+  const arriveAt = s.flight!.arriveAt;
+  const done = advance(s, arriveAt);
   assert.equal(done.state.flight, null);
   assert.equal(done.state.encounter, null);
   assert.ok(done.events.some((e) => e.type === 'arrived'));

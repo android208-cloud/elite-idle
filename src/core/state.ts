@@ -167,7 +167,57 @@ export interface GameState {
   legal: number;
   encounter: Encounter | null;
   combat: ActiveCombat | null;
+  /** Статистика за игру — для журнала. */
+  stats: GameStats;
+  /**
+   * Средняя цена покупки по каждому товару — чтобы посчитать, удачной
+   * ли была сделка. В оригинале такого учёта нет; без него «удачная
+   * сделка» не определить, ведь продажа не знает, за сколько куплено.
+   *
+   * Хранится в десятых кредита, как и все цены. 0 = товара не покупали.
+   */
+  cargoBasis: number[];
 }
+
+/**
+ * Статистика командира.
+ *
+ * Считается накопительно и переживает сохранение. Сделка «удачная»,
+ * если продано дороже, чем куплено; в оригинале такого понятия нет,
+ * это наше дополнение — иначе журнал не о чем рассказывать.
+ */
+export interface GameStats {
+  /** Сколько кораблей уничтожено (совпадает с рангом, но отдельно). */
+  kills: number;
+  /** Сколько раз бежали на капсуле. */
+  fled: number;
+  /** Сколько встреч просто пропущено. */
+  skipped: number;
+  /** Удачные сделки: продано дороже покупки. */
+  goodTrades: number;
+  /** Неудачные: продано дешевле или в убыток. */
+  badTrades: number;
+  /** Суммарная прибыль от торговли (может быть отрицательной). */
+  tradeProfit: number;
+  /** Прыжков совершено. */
+  jumps: number;
+  /** Стыковок выполнено. */
+  dockings: number;
+  /** Провалов стыковки. */
+  dockingFails: number;
+}
+
+export const ZERO_STATS: GameStats = {
+  kills: 0,
+  fled: 0,
+  skipped: 0,
+  goodTrades: 0,
+  badTrades: 0,
+  tradeProfit: 0,
+  jumps: 0,
+  dockings: 0,
+  dockingFails: 0,
+};
 
 export type GameEventType =
   | 'arrived'
@@ -226,6 +276,8 @@ export function newGame(rngSeed: number): GameState {
     legal: 0,
     encounter: null,
     combat: null,
+    stats: { ...ZERO_STATS },
+    cargoBasis: COMMODITIES.map(() => 0),
   };
 }
 
@@ -465,9 +517,40 @@ export interface JumpResult {
 /** Темп не может быть нулевым или отрицательным: защита от деления на 0. */
 const safeSpeed = (settings: Settings): number => Math.max(settings.speed, 0.0001);
 
-/** Длительность прыжка в миллисекундах с учётом настроек темпа. */
-export function jumpDuration(settings: Settings): number {
-  return Math.max(0, Math.round(settings.baseJumpMs / safeSpeed(settings)));
+/**
+ * Базовая длительность прыжка (при speed = 1), миллисекунды.
+ *
+ * Зависит от расстояния. В оригинале ZX Elite прыжок занимал примерно
+ * 8 секунд независимо от дистанции — там нечего было растягивать,
+ * космос шёл в реальном времени. У нас прыжок — абстрактный отрезок,
+ * и привязка ко времени делает долгий перелёт осмысленным: лететь
+ * 30 световых лет интереснее, чем 4, и это влияет на решение.
+ *
+ * Формула: `baseJumpMs` — время на средний прыжок (≈7 св. лет,
+ * столько на старте доступно). Дальше прирост как корень из отношения:
+ *
+ *   t = baseJumpMs * (d / 7) ^ 0.6
+ *
+ * Корень, а не линейка, потому что гиперпрыжок в Elite — не «полёт со
+ * скоростью», а переход через гиперпространство: дальность почти не
+ * влияет на время. Показатель 0.6 — компромисс: 4 св. года ≈ 12 мин,
+ * 7 ≈ 15, 17 (весь полный бак) ≈ 27 мин при базовых настройках.
+ *
+ * У ближних прыжков есть нижняя граница (40% от базовой): совсем
+ * мгновенных перелётов быть не должно, иначе теряется смысл встреч.
+ */
+export function baseJumpDuration(distanceLy: number, settings: Settings): number {
+  const reference = 7; // св. лет — «средний» прыжок
+  const ratio = Math.max(distanceLy, 0.5) / reference;
+  const scaled = settings.baseJumpMs * Math.pow(ratio, 0.6);
+  // Не короче 40% базовой и не длиннее 4× базовой.
+  const clamped = Math.min(Math.max(scaled, settings.baseJumpMs * 0.4), settings.baseJumpMs * 4);
+  return Math.max(0, Math.round(clamped));
+}
+
+/** Длительность прыжка в миллисекундах с учётом темпа и расстояния. */
+export function jumpDuration(settings: Settings, distanceLy = 7): number {
+  return Math.max(0, Math.round(baseJumpDuration(distanceLy, settings) / safeSpeed(settings)));
 }
 
 /** Переводит «базовые» миллисекунды полёта в реальные при текущем темпе. */
@@ -549,7 +632,8 @@ export function startJump(state: GameState, target: number, now: number, setting
 
   // Длительность хранится в «базовых» миллисекундах (при speed = 1),
   // поэтому смена темпа потом влияет и на уже начатый полёт.
-  const baseDuration = Math.max(0, Math.round(settings.baseJumpMs));
+  // Зависит от расстояния: долгий перелёт занимает больше времени.
+  const baseDuration = baseJumpDuration(d, settings);
   let rng = state.rng;
   const pending: number[] = [];
   for (let k = 0; k < ENCOUNTER_ATTEMPTS; k++) {
@@ -567,6 +651,7 @@ export function startJump(state: GameState, target: number, now: number, setting
     state: {
       ...state,
       rng,
+      stats: { ...state.stats, jumps: state.stats.jumps + 1 },
       fuel: state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
       flight: {
@@ -765,9 +850,19 @@ function autoDecision(
   const can = availableDecisions(enemy, bestLaserOf(lasers), state.ship.escapePod, hostile);
   const r = autoResolve(enemy, can, hostile);
   events.push({ type: r.outcome, at, text: r.text });
+  // Статистика: победа считается убийством ровно так же, как и при
+  // ручном решении, иначе журнал расходится с рангом.
+  const won = r.outcome === 'won' || r.outcome === 'auto-victory';
+  const skipped = r.outcome === 'skipped' || r.outcome === 'auto-skip';
   return {
     ...state,
     cash: state.cash + r.bounty,
+    kills: state.kills + (won ? 1 : 0),
+    stats: {
+      ...state.stats,
+      kills: state.stats.kills + (won ? 1 : 0),
+      skipped: state.stats.skipped + (skipped ? 1 : 0),
+    },
     encounter: null,
     combat: null,
   };
@@ -1053,12 +1148,18 @@ export function deserialize(json: string): GameState {
       legal: 0,
       encounter: null,
       combat: null,
+      stats: { ...ZERO_STATS },
+      cargoBasis: COMMODITIES.map(() => 0),
     } as GameState;
     if (migrated.flight) migrated.flight = { ...migrated.flight, pending: [] };
     return migrated;
   }
   if (data.version !== SAVE_VERSION) throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
   const state = data as GameState;
+  // Совместимость: в сохранениях до §70 статистики ещё не было.
+  // Без этого старый файл даст undefined там, где читается stats.kills.
+  if (!state.stats) state.stats = { ...ZERO_STATS };
+  if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
   // Совместимость с сохранениями, сделанными до появления накопленного простоя.
   if (state.combat && typeof state.combat.pausedMs !== 'number') {
     state.combat = { ...state.combat, pausedMs: 0 };

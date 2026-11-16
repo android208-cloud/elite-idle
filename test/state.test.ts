@@ -92,7 +92,8 @@ test('прыжок: топливо списывается, прибытие по
   const started = startJump(g, target, NOW, DEFAULT_SETTINGS);
   assert.equal(started.error, undefined);
   assert.equal(started.state.fuel, g.fuel - d);
-  assert.equal(started.state.flight?.arriveAt, NOW + DEFAULT_SETTINGS.baseJumpMs);
+  // Время в пути зависит от расстояния (§70), а не от фиксированных 15 минут.
+  assert.equal(started.state.flight?.arriveAt, NOW + jumpDuration(DEFAULT_SETTINGS, d));
 
   // во время полёта торговать нельзя
   assert.equal(buy(started.state, FOOD, 1).amount, 0);
@@ -104,7 +105,7 @@ test('прыжок: топливо списывается, прибытие по
   assert.ok(early.state.flight);
 
   // вовремя: прибытие
-  const done = advance(started.state, NOW + DEFAULT_SETTINGS.baseJumpMs);
+  const done = advance(started.state, NOW + jumpDuration(DEFAULT_SETTINGS, d));
   assert.equal(done.events.length, 1);
   assert.equal(done.events[0].type, 'arrived');
   assert.equal(done.state.system, target);
@@ -140,7 +141,8 @@ test('детерминизм: одинаковое зерно даёт один�
     const systems = systemsOf(1);
     const target = systems.findIndex((s, i) => i !== g.system && distance(systems[g.system], s) <= g.fuel);
     const s = startJump(g, target, NOW, DEFAULT_SETTINGS).state;
-    return advance(s, NOW + DEFAULT_SETTINGS.baseJumpMs).state;
+    // Запас с лихвой перекрывает любой прыжок: время теперь зависит от расстояния.
+    return advance(s, NOW + DEFAULT_SETTINGS.baseJumpMs * 4).state;
   };
   assert.deepEqual(run(), run());
 });

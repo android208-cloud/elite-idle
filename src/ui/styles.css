@@ -96,6 +96,15 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
   height: auto;
 }
 
+/* Модель встреченного корабля: внутри карточки-предупреждения,
+   на всю ширину, с отступом сверху — чтобы не липла к заголовку. */
+.enc-model {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 8px 0 2px;
+}
+
 /* Карты: холст на всю ширину карточки, подпись под ним */
 .map-card {
   padding: 12px 12px 10px;
@@ -165,4 +174,15 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
 .system-list .btn:disabled .tech {
   background: rgba(255, 255, 255, 0.06);
   color: #7b8b88;
+}
+
+/* Контрабанда в рынке: красная рамка и метка. Цвет не для красоты —
+   за такой груз растёт правовой статус при взлёте (см. BAD в оригинале) */
+.card.illegal {
+  border-left: 3px solid #e05c5c;
+}
+.chip.illegal {
+  background: rgba(224, 92, 92, 0.18);
+  color: #ff8a8a;
+  border: 1px solid rgba(224, 92, 92, 0.35);
 }
