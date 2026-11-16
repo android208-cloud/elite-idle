@@ -568,17 +568,37 @@ export function drawShipModel(ctx: CanvasRenderingContext2D, o: ShipModelOptions
     ctx.stroke();
   }
 
-  // Нос: две передние вершины (0 и 21 — кончик). Отмечаем точкой, чтобы
-  // было видно направление вращения.
-  const nose = projected[21];
-  const nose2 = projected[20];
-  ctx.fillStyle = accent;
-  ctx.beginPath();
-  ctx.arc(nose.x, nose.y, 2.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(nose2.x, nose2.y, 1.6, 0, Math.PI * 2);
-  ctx.fill();
+  /*
+   * Нос — точка, чтобы было видно, куда корабль смотрит.
+   *
+   * Раньше здесь стояли жёстко вершины 20 и 21: у Cobra Mk III это
+   * кончик носа (z = 76 и 90). У Sidewinder всего 10 вершин, и
+   * projected[21] не существует — рендер падал с «undefined.x».
+   * У Python вершина 20 — это днище, и точка оказывалась снизу.
+   *
+   * Теперь нос ищется по геометрии: вершина с наибольшим z (в
+   * исходных координатах корабли смотрят в +z) среди тех, что ближе
+   * всего к оси симметрии — иначе кончиком «крыла» окажется угол
+   * размаха, а не нос.
+   */
+  let noseIdx = 0;
+  let bestZ = -Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const v = verts[i];
+    // Близко к оси X: нос у всех кораблей парка на оси.
+    if (Math.abs(v[0] - center[0]) > 12) continue;
+    if (v[2] > bestZ) {
+      bestZ = v[2];
+      noseIdx = i;
+    }
+  }
+  const nose = projected[noseIdx];
+  if (nose) {
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(nose.x, nose.y, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** Сколько пикселей отступать от краёв, чтобы модель не липла. */

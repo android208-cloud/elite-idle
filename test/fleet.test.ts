@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FLEET, shipSpan } from '../src/ui/ship-model.ts';
+import { drawShipModel, FLEET, shipSpan } from '../src/ui/ship-model.ts';
 import { layoutLabels, placeSingle, type LabelItem } from '../src/ui/label-layout.ts';
 import { ENEMIES } from '../src/core/ships.ts';
 
@@ -64,6 +64,34 @@ test('Cobra Mk III в парке совпадает с моделью из §69'
   assert.equal(FLEET.cobra3.verts.length, 28);
   assert.equal(FLEET.cobra3.edges.length, 38);
   assert.equal(FLEET.cobra3.faces.length, 13);
+});
+
+test('каждый корабль парка рисуется без исключений', () => {
+  // Настоящий баг, пойманный этой проверкой: «нос» был жёстко привязан
+  // к вершинам 20 и 21 — у Cobra это кончик, а у Sidewinder (10 вершин)
+  // их нет, и рендер падал с «undefined.x». Падало 11 моделей из 13.
+  for (const id of IDS) {
+    const ops: string[] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_t, key) {
+        if (key === 'measureText') return () => ({ width: 6 });
+        return (...args: unknown[]) => {
+          ops.push(String(key));
+          void args;
+        };
+      },
+      set() {
+        return true;
+      },
+    });
+    assert.doesNotThrow(
+      () => drawShipModel(ctx, { width: 300, height: 130, yaw: 0.7, ship: FLEET[id] }),
+      `${id}: рендер упал`,
+    );
+    // Силуэт плюс хотя бы три грани: корпус не пустой.
+    const fills = ops.filter((o) => o === 'fill').length;
+    assert.ok(fills >= 4, `${id}: заливок ${fills}, корпус пуст`);
+  }
 });
 
 /* ---------- Раскладка подписей ---------- */
