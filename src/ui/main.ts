@@ -444,7 +444,8 @@ function shipScreen(): string {
    * красным горит сам груз. Игрок видит причину там, где она написана,
    * а не только на карточке патруля.
    */
-  const wanted = isCriminal(state.legal);
+  // §83.2: «Статус» не красим — пользователь сказал «тогда ладно, не крась».
+  // Плитка сетки с цветной полосой смотрелась чужеродно рядом с карточками.
   const smuggling = contrabandLevel(state.cargo) > 0;
   return `${flightCard()}${destinationCard()}
     <div class="grid">
@@ -453,7 +454,7 @@ function shipScreen(): string {
       ${stat('Трюм (т)', `${tons} / ${tons + state.holdSpace}`)}
       ${stat('Галактика', String(state.galaxy))}
       ${stat('Ранг', rankOf(state.kills))}
-      ${stat('Статус', legalLabel(state.legal), wanted)}
+      ${stat('Статус', legalLabel(state.legal))}
     </div>
     <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
     <div class="card${smuggling ? ' danger' : ''}"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;

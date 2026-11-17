@@ -14,6 +14,9 @@ import {
   advance,
   DEFAULT_SETTINGS,
   ESCAPE_PLANETS,
+  ESCAPE_PLANETS_OFFENDER,
+  ESCAPE_PLANETS_FUGITIVE,
+  escapePlanetsFor,
   MAX_FUEL,
   newGame,
   startJump,
@@ -190,6 +193,33 @@ describe('§80: побег от статуса', () => {
     assert.equal(r.state.escapeRoute.length, 0, 'маршрут сгорел');
     assert.equal(r.state.legal, 60, 'статус вернулся к началу побега');
     assert.ok(r.events.some((e) => e.type === 'escape-reset'));
+  });
+
+  it('§84: нарушитель откупается 6 планетами', () => {
+    const r = escapeRun(30, 6);
+    assert.equal(r.state.legal, 0, '30 → 25 → 20 → 15 → 10 → 5 → 0');
+    assert.equal(r.state.escapeRoute.length, 0, 'маршрут сгорел');
+  });
+
+  it('§84: беглец откупается 12 планетами', () => {
+    const r = escapeRun(60, 12);
+    assert.equal(r.state.legal, 0);
+    assert.equal(r.state.escapeRoute.length, 0);
+  });
+
+  it('§84: на шестой планете беглец ещё НЕ чист', () => {
+    // Разница ступеней: у нарушителя шестая планета закрывает побег,
+    // у беглеца — только половина пути.
+    const r = escapeRun(60, 6);
+    assert.equal(r.state.legal, 30, '60 × 6/12');
+    assert.equal(r.state.escapeRoute.length, 6, 'маршрут продолжается');
+  });
+
+  it('§84: граница ступеней — 49 и 50', () => {
+    assert.equal(escapePlanetsFor(1), ESCAPE_PLANETS_OFFENDER);
+    assert.equal(escapePlanetsFor(49), ESCAPE_PLANETS_OFFENDER, 'ещё нарушитель');
+    assert.equal(escapePlanetsFor(50), ESCAPE_PLANETS_FUGITIVE, 'уже беглец');
+    assert.equal(escapePlanetsFor(255), ESCAPE_PLANETS_FUGITIVE);
   });
 
   it('старый файл без полей побега загружается', () => {

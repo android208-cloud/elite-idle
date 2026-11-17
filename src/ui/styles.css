@@ -49,8 +49,6 @@ main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .stat { background: var(--surface-3); border-radius: 12px; padding: 12px; }
-/* §83.1: ячейка сетки в розыске — та же красная рамка, что у карточек */
-.stat.danger { border-left: 4px solid var(--bad); }
 .stat .label { color: var(--on-variant); font-size: 12px; }
 .stat .value { font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
 

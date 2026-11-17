@@ -128,22 +128,23 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
 
   {
     const { status, cargoCard } = await shipScreen({ legal: 0 });
-    check('§83.1: чистый — «Статус» без рамки', !status?.className.includes('danger'));
+    check('§83.2: чистый — «Статус» без рамки', !status?.className.includes('danger'));
     check('§83.1: чистый — «Груз» без рамки', !cargoCard?.className.includes('danger'));
   }
+  /*
+   * §83.2: «Статус» больше НЕ красится — пользователь сказал «тогда ладно,
+   * не крась». Плитка сетки с цветной полосой смотрелась чужеродно.
+   * Красится только «Груз», и только за контрабанду.
+   */
   {
     const { status, cargoCard } = await shipScreen({ legal: 60 });
-    check('§83.1: нарушитель — «Статус» с рамкой', status?.className.includes('danger'));
-    check('§83.1: нарушитель — «Груз» без рамки', !cargoCard?.className.includes('danger'));
+    check('§83.2: нарушитель — «Статус» без рамки', !status?.className.includes('danger'));
+    check('§83.2: нарушитель — «Груз» без рамки', !cargoCard?.className.includes('danger'));
   }
   {
     const { status, cargoCard } = await shipScreen({ legal: 0, cargo: slaves });
     check('§83.1: контрабанда — «Груз» с рамкой', cargoCard?.className.includes('danger'));
-    check('§83.1: контрабанда — «Статус» без рамки', !status?.className.includes('danger'));
-  }
-  {
-    const { status, cargoCard } = await shipScreen({ legal: 60, cargo: slaves });
-    check('§83.1: оба повода — обе рамки', status?.className.includes('danger') && cargoCard?.className.includes('danger'));
+    check('§83.2: контрабанда — «Статус» без рамки', !status?.className.includes('danger'));
   }
 }
 

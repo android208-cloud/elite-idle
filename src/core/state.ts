@@ -62,16 +62,28 @@ export const POLICE_KILL_LEGAL = 64;
 export const RAID_LEGAL = 32;
 
 /**
- * Побег от последствий (§80.1).
+ * Побег от последствий (§84): чем тяжелее статус, тем дороже побег.
  *
- * Сколько РАЗНЫХ планет нужно посетить, чтобы статус обнулился.
+ * Пользователь: «нарушитель — 6 планет, беглец — 12». Это и есть три
+ * ступени, о которых шла речь ещё в §80: ступень выбирается по тяжести
+ * статуса, а не по числу планет.
  *
- * Статус гасится не по единице, а ДОЛЕЙ: после N планет остаётся
- * `снимок × (12 − N) / 12`. Поэтому важен именно порог 12, а промежуточные
- * 6 и 8 из обсуждения получаются сами — это точки, где статус переходит
- * из «беглеца» в «нарушителя» и почти в «чистого».
+ *   Нарушитель (1..49)  → 6 планет
+ *   Беглец    (50..255) → 12 планет
+ *
+ * Статус гасится ДОЛЕЙ от снимка, а не по единице: от 255 вычитанием за
+ * двенадцать планет не избавиться никогда.
  */
-export const ESCAPE_PLANETS = 12;
+export const ESCAPE_PLANETS_OFFENDER = 6;
+export const ESCAPE_PLANETS_FUGITIVE = 12;
+
+/** Сколько планет нужно этому статусу, чтобы обнулиться. */
+export function escapePlanetsFor(legal: number): number {
+  return legal >= 50 ? ESCAPE_PLANETS_FUGITIVE : ESCAPE_PLANETS_OFFENDER;
+}
+
+/** Обратная совместимость: самый строгий порог. */
+export const ESCAPE_PLANETS = ESCAPE_PLANETS_FUGITIVE;
 
 /**
  * Ближайшая планета тоже считается? Нет.
@@ -1021,7 +1033,30 @@ export function galacticJump(state: GameState): GalacticJumpResult {
 const PIRATE_CHANCE = [0.55, 0.45, 0.35, 0.3, 0.25, 0.2, 0.12, 0.08];
 /** Вероятность патруля полиции по типу правительства */
 const POLICE_CHANCE = [0.0, 0.1, 0.15, 0.2, 0.2, 0.3, 0.4, 0.5];
-const HUNTER_CHANCE = 0.1;
+/**
+ * Охотники за головами (§84).
+ *
+ * Пользователь: «награда охотникам увеличена». По смыслу это значит, что
+ * на беглеца охотятся СИЛЬНЕЕ, чем на мелкого нарушителя: чем больше
+ * награда, тем больше желающих.
+ *
+ *   Чист        → 10% (как было)
+ *   Нарушитель  → 18%
+ *   Беглец      → 30%
+ *
+ * Числа взяты из тех же соображений, что и в оригинале: там охотник
+ * появлялся при высоком статусе заметно чаще. Базовые 10% оставлены для
+ * чистых — иначе наградной промысел исчез бы вовсе.
+ */
+const HUNTER_CHANCE_CLEAN = 0.1;
+const HUNTER_CHANCE_OFFENDER = 0.18;
+const HUNTER_CHANCE_FUGITIVE = 0.3;
+
+function hunterChance(legal: number): number {
+  if (legal >= 50) return HUNTER_CHANCE_FUGITIVE;
+  if (legal >= 1) return HUNTER_CHANCE_OFFENDER;
+  return HUNTER_CHANCE_CLEAN;
+}
 const CANISTER_CHANCE = 0.12;
 
 /** Удобная обёртка над детерминированным генератором. */
@@ -1069,9 +1104,9 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     role = 'pirate';
   } else if ((r -= PIRATE_CHANCE[gov]) < POLICE_CHANCE[gov]) {
     role = 'police';
-  } else if ((r -= POLICE_CHANCE[gov]) < HUNTER_CHANCE) {
+  } else if ((r -= POLICE_CHANCE[gov]) < hunterChance(state.legal)) {
     role = 'hunter';
-  } else if ((r -= HUNTER_CHANCE) < CANISTER_CHANCE) {
+  } else if ((r -= hunterChance(state.legal)) < CANISTER_CHANCE) {
     /*
      * Дрейфующий контейнер: забирается только топливосборщиком.
      *
@@ -1590,14 +1625,19 @@ function escapeStep(
   }
 
   const grown = [...route, to];
-  const legal = grown.length >= ESCAPE_PLANETS ? 0 : Math.floor((startLegal * (ESCAPE_PLANETS - grown.length)) / ESCAPE_PLANETS);
+  /*
+   * §84: ступень выбирается по тяжести статуса на старте побега.
+   * Нарушитель откупается шестью планетами, беглец — двенадцатью.
+   */
+  const need = escapePlanetsFor(startLegal);
+  const legal = grown.length >= need ? 0 : Math.floor((startLegal * (need - grown.length)) / need);
 
   /*
    * Доля может дать нуль раньше порога — если статус был мал. Но это не
    * «побег удался»: маршрут ещё не пройден, и объявлять амнистию рано.
    * Побег считается состоявшимся только на пороге 12 планет.
    */
-  if (grown.length >= ESCAPE_PLANETS) {
+  if (grown.length >= need) {
     events.push({
       type: 'escape-clean',
       at,
@@ -1614,7 +1654,7 @@ function escapeStep(
   events.push({
     type: 'escape-step',
     at,
-    text: `Побег: ${name} (${grown.length}/${ESCAPE_PLANETS}), статус ${legal}`,
+    text: `Побег: ${name} (${grown.length}/${need}), статус ${legal}`,
   });
   return { legal, route: grown, status: startLegal };
 }
