@@ -89,12 +89,12 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
   check('нарушитель: красная рамка', card?.className.includes('danger'), `class="${card?.className}"`);
 }
 
-/* 3. Контрабанда — красная рамка */
+/* 3. §86: контрабанда при чистом статусе — ЖЁЛТАЯ («следят»), не красная */
 {
   const cargo = Array(17).fill(0);
   cargo[3] = 5; // рабы
   const { card } = await patrol({ legal: 0, cargo });
-  check('контрабанда: красная рамка', card?.className.includes('danger'), `class="${card?.className}"`);
+  check('§86: контрабанда — жёлтая рамка', card?.className.includes('warn'), `class="${card?.className}"`);
 }
 
 /* 4. Полный бак — полная полоска */
@@ -136,6 +136,20 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
    * не крась». Плитка сетки с цветной полосой смотрелась чужеродно.
    * Красится только «Груз», и только за контрабанду.
    */
+  /*
+   * §86: развели два красных. Патруль с розыском — ЖЁЛТЫЙ («следят»),
+   * пиратство — КРАСНЫЙ («я сам хищник»).
+   */
+  {
+    const { card } = await patrol({ legal: 60 });
+    check('§86: пиратство — красная', card?.className.includes('danger'), `class="${card?.className}"`);
+  }
+  {
+    const slavesCargo = Array(17).fill(0);
+    slavesCargo[3] = 5;
+    const { card } = await patrol({ legal: 0, cargo: slavesCargo });
+    check('§86: патруль с контрабандой — жёлтая', card?.className.includes('warn'), `class="${card?.className}"`);
+  }
   {
     const { status, cargoCard } = await shipScreen({ legal: 60 });
     check('§83.2: нарушитель — «Статус» без рамки', !status?.className.includes('danger'));

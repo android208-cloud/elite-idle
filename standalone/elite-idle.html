@@ -30,7 +30,7 @@
       <button class="btn text" data-action="log-toggle" aria-expanded="${En?`false`:`true`}">
         ${En?`Развернуть (${e})`:`Свернуть`}</button></div>`;return En?`<div class="card">${n}<div class="muted" style="margin-top:8px">${e===0?`Пока пусто`:`${e} ${t}, последняя: ${B[0].text}`}</div></div>`:`<div class="card">${n}<ul class="log">${B.map(e=>`<li><time>${jn(e.at)}</time>${e.text}</li>`).join(``)||`<li>Пока пусто</li>`}</ul></div>`}function Q(e,t,n=!1){return`<div class="stat${n?` danger`:``}"><div class="label">${e}</div><div class="value">${t}</div></div>`}var Rn=[`пром. богатая`,`пром. средняя`,`пром. бедная`,`пром. преим.`,`агро преим.`,`агро богатая`,`агро средняя`,`агро бедная`];function zn(e){return Rn[e]??`—`}function Bn(e){let t=F(z.galaxy)[e],n=t.population*256/1e3,r=n>=1?`${n.toFixed(1)} млрд`:`${Math.round(n*1e3)} млн`;return`${Oe[t.economy]}, ${ke[t.government]}<br>
     Техуровень ${t.techLevel+1} · Население ${r} · Продуктивность ${t.productivity}`}function Vn(){let e=z.flight;if(!e)return`<div class="card"><h2>На станции ${I(z).name}</h2>
-      <div class="sub">${Bn(z.system)}</div></div>`;if(e.patrol){let t=z.encounter?Hn():``,n=N(z.legal),r=N(z.legal),i=L(z.cargo)>0;return`<div class="card${r||i?` danger`:``}"><h2>${n?`Пиратство`:`Патруль`}: ${I(z).name}</h2>
+      <div class="sub">${Bn(z.system)}</div></div>`;if(e.patrol){let t=z.encounter?Hn():``,n=N(z.legal),r=N(z.legal),i=L(z.cargo)>0;return`<div class="card${n?` danger`:r||i?` warn`:``}"><h2>${n?`Пиратство`:`Патруль`}: ${I(z).name}</h2>
       <div class="row">
         ${Q(`Встреч`,String(e.encounters))}
         ${Q(`Израсходовано`,`${e.patrolFuelUsed??0} ед.`)}
@@ -39,7 +39,7 @@
       <div class="sub">Топливо <span id="flight-fuel-text">${X(z.fuel)}</span> из ${X(70)}</div></div>${t}`}let t=F(z.galaxy),n=z.encounter?Hn():``;return`<div class="card${N(z.legal)||L(z.cargo)>0?` danger`:``}"><h2>В пути: ${t[e.from].name} → ${t[e.to].name}</h2>
     <div class="progress"><div id="flight-bar" style="width:0%"></div></div>
     <div class="sub">Прибытие через <span id="flight-eta"></span></div></div>${n}`}function Hn(){let e=z.encounter,t=Te(e.enemyId),n=e.outcome===`attack`,r=Se(t,ye({pulse:z.ship.laser===`pulse`,beam:z.ship.laser===`beam`,military:z.ship.laser===`military`,mining:z.ship.laser===`mining`}),!0,n),i=(e,t,n,r)=>`<button class="btn" data-action="decide" data-decision="${e}" ${n?``:`disabled`}
-      title="${r??``}">${t}</button>`,a=n?` danger`:` calm`;n&&r.attack;let o=gn[t.id]?`<canvas class="enc-model" data-ship="${t.id}" aria-label="Модель корабля ${t.name}"></canvas>`:``;return`<div class="card${a}"><h2>В радиусе: ${it[e.role]} (${t.name})</h2>
+      title="${r??``}">${t}</button>`,a=n?` danger`:e.role===`pirate`?` warn`:` calm`;n&&r.attack;let o=gn[t.id]?`<canvas class="enc-model" data-ship="${t.id}" aria-label="Модель корабля ${t.name}"></canvas>`:``;return`<div class="card${a}"><h2>В радиусе: ${it[e.role]} (${t.name})</h2>
     ${o}
     <div class="sub">${n?`Враждебен`:`Не враждебен`} · Решение через <span id="enc-eta"></span></div>
     <div class="row" style="margin-top:12px">

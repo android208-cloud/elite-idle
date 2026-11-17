@@ -87,12 +87,17 @@ const tone = (cls) => (cls.includes('danger') ? 'красная' : cls.includes(
 /* Мирные — зелёные */
 for (const [name, args] of [
   ['торговец', { role: 'trader', enemy: 'cobra3', outcome: 'leave' }],
-  ['пират, летящий мимо', { role: 'pirate', enemy: 'sidewinder', outcome: 'leave' }],
   ['полиция, чистый пилот', { role: 'police', enemy: 'viper', outcome: 'leave' }],
   ['охотник, летящий мимо', { role: 'hunter', enemy: 'cobra1', outcome: 'leave' }],
 ]) {
   const cls = await encounter(args);
   check(`${name} — зелёная`, cls.includes('calm'), `class="${cls}"`);
+}
+
+/* §86: пират, который пока не атакует, — жёлтый */
+{
+  const cls = await encounter({ role: 'pirate', enemy: 'sidewinder', outcome: 'leave' });
+  check('пират, летящий мимо — жёлтая', cls.includes('warn'), `class="${cls}"`);
 }
 
 /* Угрозы — красные */
@@ -105,10 +110,10 @@ for (const [name, args] of [
   check(`${name} — красная`, cls.includes('danger'), `class="${cls}"`);
 }
 
-/* Жёлтой не бывает */
+/* Мирный торговец жёлтым не бывает — жёлтый только у пирата и розыска */
 {
   const cls = await encounter({ role: 'trader', enemy: 'cobra3', outcome: 'leave' });
-  check('жёлтой карточки больше нет', !cls.includes('warn'), `class="${cls}"`);
+  check('торговец не жёлтый', !cls.includes('warn'), `class="${cls}"`);
 }
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
