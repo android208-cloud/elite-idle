@@ -27,15 +27,27 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--on-sur
 .top-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: calc(env(safe-area-inset-top) + 14px) 20px 10px; }
 .top-bar h1 { margin: 0; font-size: 22px; font-weight: 500; }
-#top-info { color: var(--primary); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* §89: три сегмента вместо одних кредитов: корабль · место · время карьеры.
+   Три колонки, а не строка с разделителями: на узком экране так видно,
+   что подпись относится к значению, и каждая колонка ужимается сама.
+   Подпись мелкая и приглушённая — значение важнее. */
+#top-info { display: grid; grid-template-columns: repeat(3, minmax(0, auto)); gap: 4px 14px;
+  font-variant-numeric: tabular-nums; text-align: right; }
+.top-seg { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.top-key { font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--on-variant); }
+.top-val { font-size: 12px; font-weight: 500; color: var(--primary); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
 
 main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 
 .nav-bar { display: flex; background: var(--surface-2); padding: 8px 4px calc(env(safe-area-inset-bottom) + 10px); }
 .nav-bar button { flex: 1; background: none; border: 0; color: var(--on-variant); font: inherit; font-size: 12px;
   display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; cursor: pointer; }
-.nav-bar .pill { width: 64px; height: 32px; border-radius: 16px; display: grid; place-items: center; font-size: 18px;
+/* §89: в `.pill` теперь SVG (20×20, контур). Шрифтовые метрики больше не
+   нужны, но высота и скругление остаются: это фон активной вкладки. */
+.nav-bar .pill { width: 64px; height: 32px; border-radius: 16px; display: grid; place-items: center;
   transition: background .2s; }
+.nav-bar .pill svg { display: block; }
 .nav-bar button.active { color: var(--on-surface); }
 .nav-bar button.active .pill { background: var(--primary-container); color: var(--on-primary-container); }
 /* Вкладка, недоступная в полёте: видна, но приглушена — чтобы было понятно,

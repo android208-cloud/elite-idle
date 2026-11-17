@@ -57,6 +57,7 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
+import { topSegments, type TopSegment } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
 
@@ -134,6 +135,14 @@ function load(): void {
     if (raw) {
       const data = JSON.parse(raw) as { state: string; log: LogEntry[]; settings: Settings };
       state = deserialize(data.state);
+      /*
+       * §89: после загрузки точку отсчёта времени карьеры надо сбросить.
+       * `careerAt` в файле — момент игры, а браузер живёт своей жизнью:
+       * без сброса первый же тик начислил бы всё время, пока вкладка была
+       * закрыта. Сохраняем накопленное `careerMs`, а `careerAt` пусть
+       * выставит первый `tickCareer`.
+       */
+      state = { ...state, careerAt: 0 };
       log = data.log ?? [];
       settings = { ...DEFAULT_SETTINGS, ...data.settings };
       return;
@@ -235,13 +244,44 @@ function blockedTabs(): Tab[] {
   return state.flight ? DOCKED_ONLY : [];
 }
 
+/*
+ * §89: иконки вкладок — SVG, а не эмодзи.
+ *
+ * Эмодзи рисовал сам шрифт: на каждом телефоне свой, в цвете, с толщиной
+ * штриха, которая не совпадала ни с текстом, ни между собой. Здесь один
+ * набор: контурные фигуры 24×24, `stroke` текущим цветом, `fill` нет.
+ * Тогда активная вкладка красит иконку через `color`, а CSS остаётся
+ * единственным местом, где задан цвет.
+ *
+ * `currentColor` в `stroke` — не мелочь: без него иконки пришлось бы
+ * дублировать под активное и неактивное состояние.
+ */
+const icons = {
+  /** Корабль: стрелка вверх — «свой ход», как в навигации. */
+  ship: '<path d="M12 3.5 18.5 20 12 16.2 5.5 20 12 3.5Z"/>',
+  /** Карта: рамка и точка нахождения внутри. */
+  map: '<path d="M3.5 6.5 9 4.5v13l-5.5 2v-13Z"/><path d="M9 4.5 15 6.5v13L9 17.5"/><path d="M15 6.5l5.5-2v13l-5.5 2"/><circle cx="12" cy="11" r="1.4" fill="currentColor" stroke="none"/>',
+  /** Рынок: две встречные стрелки — обмен. */
+  market: '<path d="M4 8.5h13"/><path d="m13.5 5 3.5 3.5-3.5 3.5"/><path d="M20 15.5H7"/><path d="M10.5 12 7 15.5 10.5 19"/>',
+  /** Ангар: гаечный ключ — ремонт и снаряжение. */
+  hangar: '<path d="M15.5 4.5a4.6 4.6 0 0 0-4 6.9L4.6 18.3a1.6 1.6 0 0 0 2.2 2.2l6.9-6.9a4.6 4.6 0 0 0 5.8-6.1l-2.6 2.6-2.6-.7-.7-2.6 2.4-2.4a4.6 4.6 0 0 0-.5-.3Z"/>',
+  /** Журнал: лист с линиями. */
+  log: '<path d="M6 3.5h8.5L19 8v12.5H6V3.5Z"/><path d="M14 3.5V8h4.5"/><path d="M9 12h7"/><path d="M9 15.5h5"/>',
+} as const;
+
 const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'ship', label: 'Корабль', icon: '🚀' },
-  { id: 'map', label: 'Карта', icon: '🗺' },
-  { id: 'market', label: 'Рынок', icon: '⚖' },
-  { id: 'hangar', label: 'Ангар', icon: '🔧' },
-  { id: 'log', label: 'Журнал', icon: '📜' },
+  { id: 'ship', label: 'Корабль', icon: icons.ship },
+  { id: 'map', label: 'Карта', icon: icons.map },
+  { id: 'market', label: 'Рынок', icon: icons.market },
+  { id: 'hangar', label: 'Ангар', icon: icons.hangar },
+  { id: 'log', label: 'Журнал', icon: icons.log },
 ];
+
+/** Обёртка иконки: общие атрибуты в одном месте, чтобы не дублировать в разметке. */
+const icon = (body: string): string =>
+  `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true" focusable="false">${body}</svg>`;
 
 /**
  * Блок журнала, который можно свернуть.
@@ -1615,6 +1655,52 @@ function openDocking(): boolean {
 
 /* ---------- Отрисовка ---------- */
 
+/**
+ * §89: начисление времени карьеры.
+ *
+ * Живёт в UI, а не в `advance`, по важной причине: `advance` — чистый
+ * досчёт мира, и инвариант «один вызов = много вызовов» проверяется
+ * тестами. Настенное время внутри него сделало бы результат зависимым от
+ * того, как часто его зовут, — то есть перестало бы быть досчётом.
+ *
+ * Два правила, и оба про честность счётчика:
+ *
+ *  1. `careerAt <= 0` — точки отсчёта нет (новая игра или только что
+ *     загруженный файл). Первый тик только ставит её. Иначе закрытая на
+ *     сутки вкладка дала бы сутки «карьеры».
+ *  2. Шаг ограничен `CAREER_MAX_STEP`. Тик идёт раз в секунду, так что для
+ *     играющего человека потолок незаметен; срабатывает он на спящем
+ *     телефоне и переводе системных часов.
+ *
+ * Паузы боя и обломков отдельно не вычитаются, и это осознанно: тик не
+ * останавливается, пока игрок думает над ходом, — но и «игрой» это время
+ * не является. Считать его проще, чем объяснять расхождение с календарём.
+ */
+const CAREER_MAX_STEP = 5 * 60 * 1000;
+
+function tickCareer(state: GameState, now: number): GameState {
+  const at = state.careerAt ?? 0;
+  if (at <= 0) return { ...state, careerMs: state.careerMs ?? 0, careerAt: now };
+  if (now <= at) return state;
+  const step = Math.min(now - at, CAREER_MAX_STEP);
+  return { ...state, careerMs: (state.careerMs ?? 0) + step, careerAt: now };
+}
+
+/**
+ * §89: верхняя строка — не деньги, а «где я и на чём».
+ *
+ * Что показывать, решает `topSegments` (`top-bar.ts`): там это чистая
+ * функция и её проверяет `verify-topbar` и тесты. Здесь только разметка.
+ */
+function topBar(state: GameState): void {
+  const el = document.getElementById('top-info');
+  if (!el) return;
+  el.innerHTML = topSegments(state)
+    .map((seg: TopSegment) =>
+      `<span class="top-seg"><span class="top-key">${seg.key}</span><span class="top-val">${seg.value}</span></span>`)
+    .join('');
+}
+
 function render(): void {
   const content = document.getElementById('content')!;
   const screens: Record<Tab, () => string> = {
@@ -1654,7 +1740,7 @@ function render(): void {
     : inSalvage
       ? 'Обломки'
       : TABS.find((t) => t.id === tab)!.label;
-  document.getElementById('top-info')!.textContent = cr(state.cash);
+  topBar(state);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
     const off = blocked.includes(t.id);
@@ -1663,7 +1749,7 @@ function render(): void {
     return `<button class="${t.id === tab && !inCombat && !inSalvage ? 'active' : ''}${off ? ' off' : ''}"
         data-action="tab" data-tab="${t.id}" ${off ? 'disabled aria-disabled="true"' : ''}
         title="${off ? 'Только на станции' : ''}">
-        <span class="pill">${t.icon}</span>${t.label}</button>`;
+        <span class="pill">${icon(t.icon)}</span>${t.label}</button>`;
   }).join('');
   if (tab === 'map' && !inCombat && !inSalvage) drawMap();
   // Модель встречи живёт только пока экран её показывает: иначе кадры
@@ -2173,7 +2259,13 @@ function onAction(el: HTMLElement): void {
 
 function tick(): void {
   const prev = state;
-  const result = advance(state, Date.now(), settings);
+  // §89: время карьеры считается ДО досчёта мира и независимо от него:
+  // это счётчик присутствия, а не правило полёта (см. `tickCareer`).
+  // `now` берём один раз: два вызова `Date.now()` могли бы разойтись на
+  // миллисекунду, и карьера посчиталась бы по разным часам, чем полёт.
+  const now = Date.now();
+  state = tickCareer(state, now);
+  const result = advance(state, now, settings);
   const changed = result.state !== prev;
   const structural = changed && structuralChange(prev, result.state);
   if (result.events.length > 0 || changed) {

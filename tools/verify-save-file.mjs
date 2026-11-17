@@ -15,6 +15,17 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 const html = readFileSync('/home/user/elite-idle/standalone/elite-idle.html', 'utf8');
 
 let ok = 0, bad = 0;
+
+/*
+ * §89: верхняя строка больше не показывает деньги (там корабль, место и
+ * время карьеры). Кредиты остались на «Корабле», «Рынке» и «Ангаре» —
+ * читаем их оттуда. Проверка от этого не слабеет: важно, что прогресс
+ * применился к состоянию и виден игроку.
+ */
+const cashShown = (needle) => {
+  const t = doc.getElementById('content').textContent.replace(/\s+/g, ' ');
+  return t.includes(needle);
+};
 const check = (name, cond, extra = '') => {
   if (cond) { ok++; console.log('✅ ' + name + (extra ? ' · ' + extra : '')); }
   else { bad++; console.log('❌ ' + name + (extra ? ' · ' + extra : '')); }
@@ -55,6 +66,12 @@ const doc = w.document;
 const click = (el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 const title = () => doc.getElementById('title').textContent;
 const text = () => doc.getElementById('content').textContent;
+/* §89: кредиты читаются на «Корабле», поэтому перед проверкой денег
+   нужно уйти с «Настроек» (они живут во вкладке «Журнал»). */
+const goShip = async () => {
+  click([...doc.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'ship'));
+  await new Promise((r) => setTimeout(r, 200));
+};
 const goSettings = async () => {
   click([...doc.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
   await new Promise((r) => setTimeout(r, 200));
@@ -99,7 +116,7 @@ await new Promise((r) => setTimeout(r, 500));
 
 check('загрузка спросила подтверждение', confirmText.length > 0);
 check('в question показана сводка', /Система:/.test(confirmText) && /Текущий прогресс будет заменён/.test(confirmText));
-check('деньги применились из файла', doc.getElementById('top-info').textContent.includes('9876.5'), doc.getElementById('top-info').textContent);
+check('деньги применились из файла', cashShown('9876.5'), doc.getElementById('content').textContent.match(/Деньги[^\n]{0,20}/)?.[0] ?? 'нет');
 // После загрузки игра переходит на «Корабль» — сообщение живёт в настройках,
 // значит возвращаемся туда и читаем.
 await goSettings();
@@ -112,7 +129,8 @@ fake2.cash = 1000;
 await goSettings();
 pickFile(new w.File([JSON.stringify({ ...fileData, state: JSON.stringify(fake2) })], 'other.json', { type: 'application/json' }));
 await new Promise((r) => setTimeout(r, 500));
-check('отказ сохраняет текущий прогресс', doc.getElementById('top-info').textContent.includes('9876.5'), doc.getElementById('top-info').textContent);
+await goShip();
+check('отказ сохраняет текущий прогресс', cashShown('9876.5'), doc.getElementById('content').textContent.match(/Деньги[^\n]{0,20}/)?.[0] ?? 'нет');
 await goSettings();
 check('отказ честно сообщён', /Загрузка отменена/.test(text()), text().match(/Загрузка[^<]*/)?.[0] ?? 'нет');
 
@@ -123,7 +141,8 @@ pickFile(new w.File(['{"app":"elite-idle","fileVersion":1,"state":"{сломан
 await new Promise((r) => setTimeout(r, 500));
 await goSettings();
 check('битый файл отвергнут с объяснением', /повреждён|не читается/.test(text()), text().match(/broken\.json[^<]*/)?.[0] ?? '');
-check('битый файл не тронул прогресс', doc.getElementById('top-info').textContent.includes('9876.5'));
+await goShip();
+check('битый файл не тронул прогресс', cashShown('9876.5'));
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 w.close();
