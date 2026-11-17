@@ -27,6 +27,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -88,6 +89,21 @@ if (!jsPath) {
   throw new Error('Не нашёл JS в dist/index.html — сначала выполните `npm run build`');
 }
 
+/*
+ * §92: отметка сборки. На телефоне нельзя открыть консоль и посмотреть
+ * `git log`, поэтому версия и дата кладутся прямо в файл — их видно в
+ * исходнике и в `<meta name="build">`. Это спасает от классической
+ * путаницы «я тестирую старый файл».
+ */
+const commit = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: root, encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+})();
+const buildId = `${commit} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
 const js = read(resolve(dist, jsPath));
 const css = cssPath ? read(resolve(dist, cssPath)) : '';
 const docking = read(resolve(root, 'public/user-docking3-tune.html'));
@@ -117,6 +133,7 @@ const page = `<!doctype html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Elite Idle</title>
+<meta name="build" content="${buildId}">
 <style>
 ${css}
 </style>
