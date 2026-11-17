@@ -1,0 +1,104 @@
+/**
+ * Полоска топлива и красная рамка в патруле (§83).
+ *
+ * Требования пользователя:
+ *  1. в патруле полоска топлива — как полоска времени в обычном полёте;
+ *  2. статус нарушителя — красная рамка у бокса;
+ *  3. контрабанда в трюме — тоже красная рамка.
+ */
+import { readFileSync } from 'node:fs';
+import { JSDOM, VirtualConsole } from 'jsdom';
+
+const html = readFileSync('/home/user/elite-idle/standalone/elite-idle.html', 'utf8');
+const vc = new VirtualConsole();
+
+function make(store) {
+  return new JSDOM(html, {
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    url: 'https://elite.test/',
+    virtualConsole: vc,
+    beforeParse(win) {
+      win.HTMLCanvasElement.prototype.getContext = () => ({
+        setTransform(){}, clearRect(){}, beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){}, fill(){},
+        arc(){}, save(){}, restore(){}, setLineDash(){}, strokeRect(){}, fillText(){},
+        measureText: (t) => ({ width: String(t).length * 6 }),
+        set lineWidth(v){}, set strokeStyle(v){}, set fillStyle(v){}, set font(v){},
+        set textAlign(v){}, set textBaseline(v){}, set lineJoin(v){},
+      });
+      Object.defineProperty(win.HTMLElement.prototype, 'clientWidth', { get() { return 360; }, configurable: true });
+      win.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
+      win.cancelAnimationFrame = clearTimeout;
+      if (store) win.localStorage.setItem('elite-idle-save-v1', store);
+    },
+  });
+}
+
+let ok = 0, bad = 0;
+const check = (name, cond, extra = '') => {
+  if (cond) { ok++; console.log('✅ ' + name + (extra ? ' · ' + extra : '')); }
+  else { bad++; console.log('❌ ' + name + (extra ? ' · ' + extra : '')); }
+};
+
+const base = make(null);
+await new Promise((r) => setTimeout(r, 900));
+const template = JSON.parse(base.window.localStorage.getItem('elite-idle-save-v1'));
+
+/** Патруль с заданными статусом/трюмом/топливом. */
+async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
+  const save = JSON.parse(JSON.stringify(template));
+  const st = JSON.parse(save.state);
+  st.ship.missiles = 4;
+  st.fuel = fuel;
+  st.legal = legal;
+  st.cargo = cargo ?? Array(17).fill(0);
+  st.escapeRoute = [];
+  st.escapeStatus = -1;
+  save.state = JSON.stringify(st);
+
+  const dom = make(JSON.stringify(save));
+  await new Promise((r) => setTimeout(r, 900));
+  const w = dom.window;
+  const dest = () => [...w.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+  [...(dest()?.querySelectorAll('button') ?? [])]
+    .find((b) => /Патрулировать|Пиратство/.test(b.textContent))
+    ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 600));
+
+  const card = [...w.document.querySelectorAll('#content > .card')].find((c) => /Патруль:|Пиратство:/.test(c.textContent));
+  return { w, card, bar: w.document.getElementById('flight-fuel'), text: w.document.getElementById('content').textContent };
+}
+
+/* 1. Полоска топлива */
+{
+  const { card, bar } = await patrol({ fuel: 35 });
+  check('в патруле есть полоска топлива', !!bar);
+  check('полоска заполнена наполовину', bar?.style.width === '50%', `ширина ${bar?.style.width}`);
+  check('рядом подпись топлива', /Топливо\s*3\.5/.test(card?.textContent ?? ''));
+  check('нет «Прибытие через»', !/Прибытие через/.test(card?.textContent ?? ''));
+  check('нет Infinity', !/Infinity/.test(card?.textContent ?? ''));
+  check('обычный патруль без рамки', !card?.className.includes('danger'));
+}
+
+/* 2. Нарушитель — красная рамка */
+{
+  const { card } = await patrol({ legal: 60 });
+  check('нарушитель: красная рамка', card?.className.includes('danger'), `class="${card?.className}"`);
+}
+
+/* 3. Контрабанда — красная рамка */
+{
+  const cargo = Array(17).fill(0);
+  cargo[3] = 5; // рабы
+  const { card } = await patrol({ legal: 0, cargo });
+  check('контрабанда: красная рамка', card?.className.includes('danger'), `class="${card?.className}"`);
+}
+
+/* 4. Полный бак — полная полоска */
+{
+  const { bar } = await patrol({ fuel: 70 });
+  check('полный бак — полоска 100%', bar?.style.width === '100%', `ширина ${bar?.style.width}`);
+}
+
+console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
+process.exit(bad === 0 ? 0 : 1);

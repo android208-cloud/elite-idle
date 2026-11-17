@@ -55,6 +55,7 @@ import {
   type Settings,
   PATROL_MISSILES_REQUIRED,
   PATROL_RETURN_RESERVE,
+  contrabandLevel,
 } from '../core/state.ts';
 
 /* ---------- Сохранение ---------- */
@@ -331,17 +332,28 @@ function flightCard(): string {
   if (f.patrol) {
     const enc = state.encounter ? encounterCard() : '';
     const pirate = isCriminal(state.legal);
-    return `<div class="card"><h2>${pirate ? 'Пиратство' : 'Патруль'}: ${currentSystem(state).name}</h2>
+    /*
+     * §83: КРАСНАЯ РАМКА — «за тобой следят».
+     *
+     * Два повода, одна рамка: нарушитель в розыске ИЛИ контрабанда в
+     * трюме. Игроку важно видеть это в патруле, не открывая другие
+     * экраны: именно здесь на него и нападут.
+     */
+    const wanted = isCriminal(state.legal);
+    const smuggling = contrabandLevel(state.cargo) > 0;
+    const frame = wanted || smuggling ? ' danger' : '';
+    return `<div class="card${frame}"><h2>${pirate ? 'Пиратство' : 'Патруль'}: ${currentSystem(state).name}</h2>
       <div class="row">
         ${stat('Встреч', String(f.encounters))}
-        ${stat('Топливо', `${ly(state.fuel)} из ${ly(MAX_FUEL)}`)}
         ${stat('Израсходовано', `${f.patrolFuelUsed ?? 0} ед.`)}
       </div>
-      <div class="sub" style="margin-top:8px">Патруль идёт, пока хватает топлива.</div></div>${enc}`;
+      ${bar(state.fuel, MAX_FUEL, '', 'flight-fuel')}
+      <div class="sub">Топливо <span id="flight-fuel-text">${ly(state.fuel)}</span> из ${ly(MAX_FUEL)}</div></div>${enc}`;
   }
   const systems = systemsOf(state.galaxy);
   const enc = state.encounter ? encounterCard() : '';
-  return `<div class="card"><h2>В пути: ${systems[f.from].name} → ${systems[f.to].name}</h2>
+  const frame = isCriminal(state.legal) || contrabandLevel(state.cargo) > 0 ? ' danger' : '';
+  return `<div class="card${frame}"><h2>В пути: ${systems[f.from].name} → ${systems[f.to].name}</h2>
     <div class="progress"><div id="flight-bar" style="width:0%"></div></div>
     <div class="sub">Прибытие через <span id="flight-eta"></span></div></div>${enc}`;
 }
@@ -587,9 +599,10 @@ function destinationCard(): string {
   </div>`;
 }
 
-function bar(value: number, max: number, cls = ''): string {
+function bar(value: number, max: number, cls = '', id = ''): string {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
-  return `<div class="progress ${cls}"><div style="width:${pct.toFixed(0)}%"></div></div>`;
+  const mark = id ? ` id="${id}"` : '';
+  return `<div class="progress ${cls}"><div${mark} style="width:${pct.toFixed(0)}%"></div></div>`;
 }
 
 function combatScreen(): string {
@@ -1754,6 +1767,19 @@ function updateFlight(): void {
     const frac = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
     bar.style.width = `${(frac * 100).toFixed(1)}%`;
     eta.textContent = fmtDur(Math.max(0, f.arriveAt - now));
+  }
+  /*
+   * §83: полоска топлива в патруле — живая.
+   *
+   * Обновляем её тем же тиком, что и время полёта: топливо убывает по
+   * встречам, и игрок должен видеть, что патруль подходит к концу, не
+   * дожидаясь полной перерисовки экрана.
+   */
+  if (f?.patrol) {
+    const fuelBar = document.getElementById('flight-fuel');
+    const fuelText = document.getElementById('flight-fuel-text');
+    if (fuelBar) fuelBar.style.width = `${Math.max(0, Math.min(100, (state.fuel / MAX_FUEL) * 100)).toFixed(1)}%`;
+    if (fuelText) fuelText.textContent = ly(state.fuel);
   }
   const encEta = document.getElementById('enc-eta');
   if (state.encounter && encEta) encEta.textContent = fmtDur(state.encounter.resolveAt - now);
