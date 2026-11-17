@@ -269,8 +269,12 @@ function logCard(): string {
   return `<div class="card">${head}<ul class="log">${items || '<li>Пока пусто</li>'}</ul></div>`;
 }
 
-function stat(label: string, value: string): string {
-  return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+/**
+ * Ячейка сетки показателей. Флаг `danger` (§83.1) красит рамку — так
+ * красным горит сам «Статус», когда пилот в розыске.
+ */
+function stat(label: string, value: string, danger = false): string {
+  return `<div class="stat${danger ? ' danger' : ''}"><div class="label">${label}</div><div class="value">${value}</div></div>`;
 }
 
 /**
@@ -431,6 +435,17 @@ function shipScreen(): string {
   const items = COMMODITIES.map((c, i) => (state.cargo[i] > 0 ? `${c.name}: ${state.cargo[i]} ${UNITS[c.unit]}` : ''))
     .filter(Boolean)
     .join('<br>');
+  /*
+   * §83.1: красная рамка у «Статуса» и «Груза».
+   *
+   * Пользователь заметил: рамка появилась только у патруля, а блоки,
+   * которые ПОКАЗЫВАЮТ то же самое, остались обычными. Логика простая:
+   * если в розыске — красным горит сам статус; если в трюме запрещёнка —
+   * красным горит сам груз. Игрок видит причину там, где она написана,
+   * а не только на карточке патруля.
+   */
+  const wanted = isCriminal(state.legal);
+  const smuggling = contrabandLevel(state.cargo) > 0;
   return `${flightCard()}${destinationCard()}
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
@@ -438,10 +453,10 @@ function shipScreen(): string {
       ${stat('Трюм (т)', `${tons} / ${tons + state.holdSpace}`)}
       ${stat('Галактика', String(state.galaxy))}
       ${stat('Ранг', rankOf(state.kills))}
-      ${stat('Статус', legalLabel(state.legal))}
+      ${stat('Статус', legalLabel(state.legal), wanted)}
     </div>
     <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
-    <div class="card"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
+    <div class="card${smuggling ? ' danger' : ''}"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
 }
 
 /**
@@ -498,7 +513,7 @@ function flightButtons(): string {
   const pirate = isCriminal(state.legal);
   let patrolReason = '';
   if (state.ship.missiles < PATROL_MISSILES_REQUIRED) {
-    patrolReason = `Нужно ${PATROL_MISSILES_REQUIRED} ракеты: в арсенале ${state.ship.missiles}`;
+    patrolReason = 'Не полный боекомплект';
   } else if (state.fuel <= PATROL_RETURN_RESERVE) {
     patrolReason = `Нужен запас топлива на возврат: в баке ${ly(state.fuel)}`;
   }

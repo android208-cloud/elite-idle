@@ -5,6 +5,9 @@
  *  1. в патруле полоска топлива — как полоска времени в обычном полёте;
  *  2. статус нарушителя — красная рамка у бокса;
  *  3. контрабанда в трюме — тоже красная рамка.
+ *
+ * §83.1: те же рамки и на блоках «Статус» и «Груз» экрана «Корабль» —
+ * там, где причина написана, а не только на карточке патруля.
  */
 import { readFileSync } from 'node:fs';
 import { JSDOM, VirtualConsole } from 'jsdom';
@@ -98,6 +101,71 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
 {
   const { bar } = await patrol({ fuel: 70 });
   check('полный бак — полоска 100%', bar?.style.width === '100%', `ширина ${bar?.style.width}`);
+}
+
+/* 5. §83.1: блоки «Статус» и «Груз» на экране «Корабль» */
+{
+  /** Экран «Корабль» без запуска патруля. */
+  async function shipScreen({ legal = 0, cargo = null } = {}) {
+    const save = JSON.parse(JSON.stringify(template));
+    const st = JSON.parse(save.state);
+    st.legal = legal;
+    st.cargo = cargo ?? Array(17).fill(0);
+    st.escapeRoute = [];
+    st.escapeStatus = -1;
+    save.state = JSON.stringify(st);
+    const dom = make(JSON.stringify(save));
+    await new Promise((r) => setTimeout(r, 900));
+    const w = dom.window;
+    const stats = [...w.document.querySelectorAll('.stat')];
+    const status = stats.find((e) => e.textContent.includes('Статус'));
+    const cargoCard = [...w.document.querySelectorAll('#content > .card')].find((c) => c.querySelector('h2')?.textContent === 'Груз');
+    return { status, cargoCard, text: w.document.getElementById('content').textContent };
+  }
+
+  const slaves = Array(17).fill(0);
+  slaves[3] = 5;
+
+  {
+    const { status, cargoCard } = await shipScreen({ legal: 0 });
+    check('§83.1: чистый — «Статус» без рамки', !status?.className.includes('danger'));
+    check('§83.1: чистый — «Груз» без рамки', !cargoCard?.className.includes('danger'));
+  }
+  {
+    const { status, cargoCard } = await shipScreen({ legal: 60 });
+    check('§83.1: нарушитель — «Статус» с рамкой', status?.className.includes('danger'));
+    check('§83.1: нарушитель — «Груз» без рамки', !cargoCard?.className.includes('danger'));
+  }
+  {
+    const { status, cargoCard } = await shipScreen({ legal: 0, cargo: slaves });
+    check('§83.1: контрабанда — «Груз» с рамкой', cargoCard?.className.includes('danger'));
+    check('§83.1: контрабанда — «Статус» без рамки', !status?.className.includes('danger'));
+  }
+  {
+    const { status, cargoCard } = await shipScreen({ legal: 60, cargo: slaves });
+    check('§83.1: оба повода — обе рамки', status?.className.includes('danger') && cargoCard?.className.includes('danger'));
+  }
+}
+
+/*
+ * 6. §83.1: текст причины вместо подробностей про ракеты.
+ *
+ * Проверяем ДО старта патруля: после старта кнопки уже нет, значит и
+ * причины нет. Раньше здесь стояло «Нужно 4 ракеты: в арсенале 3» —
+ * пользователь просил короткую формулировку.
+ */
+{
+  const save = JSON.parse(JSON.stringify(template));
+  const st = JSON.parse(save.state);
+  st.ship.missiles = 3;
+  st.cargo = Array(17).fill(0);
+  st.legal = 0;
+  save.state = JSON.stringify(st);
+  const dom = make(JSON.stringify(save));
+  await new Promise((r) => setTimeout(r, 900));
+  const text = dom.window.document.getElementById('content').textContent;
+  check('причина: «Не полный боекомплект»', text.includes('Не полный боекомплект'));
+  check('без подробностей про ракеты', !/Нужно 4 ракеты/.test(text));
 }
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
