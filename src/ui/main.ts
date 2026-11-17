@@ -12,6 +12,7 @@ import {
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES, isTonneCargo } from '../core/market.ts';
+import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
@@ -70,6 +71,15 @@ let selected: number | null = null;
 
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
+
+/** Когда прогресс последний раз выгружали в файл (0 — ни разу за сеанс). */
+let lastFileSaveAt = '';
+
+/**
+ * Сообщение под кнопками сохранения: что вышло и чем это кончилось.
+ * Живёт до следующего действия — игрок должен увидеть, что файл записан.
+ */
+let saveNotice: { ok: boolean; text: string } | null = null;
 
 /**
  * Есть ли рабочее хранилище.
@@ -451,6 +461,33 @@ function combatScreen(): string {
       </div>
     </div>
     <div class="card"><h2>Ход боя</h2><ul class="log">${lines}</ul></div>`;
+}
+
+/**
+ * Карточка «Прогресс в файле».
+ *
+ * Зачем файл, если игра уже сохраняется в браузере: `localStorage` привязан
+ * к устройству и к браузеру. Почистил кэш, открыл на другом компьютере,
+ * зашёл в приватном окне — прогресса нет. Файл переносит игру между
+ * устройствами и переживает чистку браузера.
+ *
+ * Кнопка выгрузки не спрашивает подтверждения: она ничего не меняет.
+ * Кнопка загрузки спрашивает всегда — она затирает текущий прогресс, а
+ * вернуть его будет нечем.
+ */
+function saveCard(): string {
+  const when = lastFileSaveAt ? `<div class="muted" style="margin-top:8px">Последняя выгрузка: ${formatSavedAt(lastFileSaveAt)}</div>` : '';
+  return `<div class="card"><h2>Прогресс в файле</h2>
+      <div class="sub">Игра сохраняется в этом браузере. Файл нужен, чтобы перенести прогресс на другое устройство или сохранить его навсегда.</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn tonal" data-action="save-file">Сохранить в файл</button>
+        <span class="spacer"></span>
+        <button class="btn tonal" data-action="load-file">Загрузить из файла</button>
+      </div>
+      <input type="file" id="load-file-input" accept=".json,application/json" hidden>
+      ${when}
+      ${saveNotice ? `<div class="${saveNotice.ok ? 'sub' : 'alert'}" style="margin-top:10px">${saveNotice.text}</div>` : ''}
+    </div>`;
 }
 
 /**
@@ -1186,6 +1223,7 @@ function logScreen(): string {
         ? 'Прыжок — только из мини-игры стыковки. На карте «Отстыковка».'
         : 'Прыжок — прямо с карты, без мини-игры.'}</div>
       <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div></div>
+    ${saveCard()}
     <div class="card"><h2>Журнал</h2><ul class="log">${items || '<li>Пока пусто</li>'}</ul></div>`;
 }
 
@@ -1787,6 +1825,39 @@ function onAction(el: HTMLElement): void {
       if (r.dropped > 0) addLog(`Выброшено: ${COMMODITIES[i].name}, ${r.dropped} ${UNITS[COMMODITIES[i].unit]}`);
       break;
     }
+    case 'save-file': {
+      /*
+       * Выгрузка в файл. `Blob` + ссылка с `download` — единственный способ
+       * отдать файл без сервера: игра работает и как одинокий HTML-файл.
+       * Ссылку убираем сразу после клика, иначе в некоторых браузерах она
+       * остаётся висеть в документе и течёт память.
+       */
+      try {
+        const now = Date.now();
+        const file = buildSaveFile(state, log, settings, now);
+        const blob = new Blob([encodeSaveFile(file)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = saveFileName(state, now);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Освобождаем ссылку не сразу: браузеру нужно время начать скачивание.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        lastFileSaveAt = new Date(now).toISOString();
+        saveNotice = { ok: true, text: `Файл сохранён: ${a.download}` };
+      } catch {
+        saveNotice = { ok: false, text: 'Не удалось сохранить файл: браузер не дал скачать.' };
+      }
+      break;
+    }
+    case 'load-file': {
+      // Открываем выбор файла. Сама загрузка — в обработчике change ниже.
+      const input = document.getElementById('load-file-input') as HTMLInputElement | null;
+      input?.click();
+      return;
+    }
     case 'notify-permission':
       void Notification.requestPermission().then(() => render());
       return;
@@ -1871,6 +1942,58 @@ document.addEventListener('click', (ev) => {
    */
   const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action]');
   if (el && el.tagName !== 'SELECT') onAction(el);
+});
+
+/*
+ * Загрузка прогресса из файла.
+ *
+ * Отдельный обработчик `change` на input: файл приходит асинхронно, а
+ * `FileReader` — единственный способ прочитать его без сервера. Сначала
+ * читаем и проверяем, потом спрашиваем подтверждение, и только потом
+ * затираем текущую игру. Порядок именно такой: если файл битый, игрок
+ * узнает об этом до того, как согласится что-то потерять.
+ */
+document.addEventListener('change', async (ev) => {
+  const el = ev.target as HTMLInputElement;
+  if (el.id !== 'load-file-input') return;
+  const file = el.files?.[0];
+  // Сбрасываем значение: иначе выбор того же файла второй раз не вызовет
+  // change, и кнопка «загрузить» будет выглядеть сломанной.
+  el.value = '';
+  if (!file) return;
+  const text = await file.text();
+  const result = importSaveFile(text, Date.now());
+  if (!result.ok) {
+    saveNotice = { ok: false, text: `${file.name}: ${result.message}` };
+    render();
+    return;
+  }
+  const s = result.summary;
+  const answer = confirm(
+    `Загрузить сохранение?\n\n` +
+      `Система: ${s.systemName}, галактика ${s.galaxy}\n` +
+      `Деньги: ${(s.cash / 10).toFixed(1)} CR, ранг: ${s.rank}\n` +
+      `Сохранено: ${formatSavedAt(result.savedAt)}\n\n` +
+      `Текущий прогресс будет заменён.`,
+  );
+  if (!answer) {
+    saveNotice = { ok: true, text: 'Загрузка отменена — прогресс не тронут.' };
+    render();
+    return;
+  }
+  state = result.state;
+  log = result.log;
+  settings = result.settings;
+  selected = null;
+  // Бой и обломки из файла оставляем как есть — они часть прогресса, и
+  // `structuralChange` сам покажет нужный экран. А вот вкладку сбрасываем
+  // на «Корабль»: в файле её нет, и оставаться на «Карте» с чужими
+  // координатами было бы странно.
+  tab = 'ship';
+  addLog(`Сохранение загружено из файла (${file.name})`);
+  saveNotice = { ok: true, text: `Загружено из ${file.name}: ${s.systemName}, ${(s.cash / 10).toFixed(1)} CR` };
+  save();
+  render();
 });
 
 document.addEventListener('change', (ev) => {
