@@ -72,6 +72,18 @@ let selected: number | null = null;
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
 
+/**
+ * Свёрнут ли журнал.
+ *
+ * Это состояние ВИДА, а не игры: оно не сохраняется в файл прогресса и не
+ * влияет на расчёты. Живёт в памяти вкладки — пережило перезагрузку
+ * страницы или нет, не важно.
+ *
+ * Свёрнут по умолчанию: журнал длинный и на телефоне занимал пол-экрана
+ * под настройками, до которых надо было прокручивать.
+ */
+let logCollapsed = true;
+
 /** Когда прогресс последний раз выгружали в файл (0 — ни разу за сеанс). */
 let lastFileSaveAt = '';
 
@@ -196,6 +208,24 @@ const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
 
 /* ---------- Экраны ---------- */
 
+/**
+ * Вкладки, которые доступны только на станции.
+ *
+ * Рынок и ангар — это места, куда надо СТЫКОВАТЬСЯ: торговать и ставить
+ * оборудование можно лишь у причала. В полёте они показывались, но все
+ * кнопки были выключены, и экран выглядел сломанным. Правильнее не пускать
+ * туда вовсе.
+ *
+ * Это ещё и проверка честности игры: раз мы «просто летим», рынок в пути
+ * не должен быть доступен — иначе полёт перестаёт что-либо значить.
+ */
+const DOCKED_ONLY: Tab[] = ['market', 'hangar'];
+
+/** Вкладки, недоступные в полёте именно сейчас. */
+function blockedTabs(): Tab[] {
+  return state.flight ? DOCKED_ONLY : [];
+}
+
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'ship', label: 'Корабль', icon: '🚀' },
   { id: 'map', label: 'Карта', icon: '🗺' },
@@ -203,6 +233,32 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'hangar', label: 'Ангар', icon: '🔧' },
   { id: 'log', label: 'Журнал', icon: '📜' },
 ];
+
+/**
+ * Блок журнала, который можно свернуть.
+ *
+ * Свёрнутый — одна строка: сколько записей и кнопка «Развернуть». Развёрнутый
+ * — обычный список. Используется один и тот же код и на «Журнале», и в
+ * настройках, чтобы вид не разъезжался.
+ *
+ * Кнопка — настоящий `button`, а не `details`: `details` при перерисовке
+ * `innerHTML` теряет открытость, а её пришлось бы хранить отдельно и
+ * восстанавливать. Один флаг в памяти проще и надёжнее.
+ */
+function logCard(): string {
+  const count = log.length;
+  const word = count === 1 ? 'запись' : count >= 2 && count <= 4 ? 'записи' : 'записей';
+  const head = `<div class="row"><h2 style="margin:0">Журнал</h2><span class="spacer"></span>
+      <button class="btn text" data-action="log-toggle" aria-expanded="${logCollapsed ? 'false' : 'true'}">
+        ${logCollapsed ? `Развернуть (${count})` : 'Свернуть'}</button></div>`;
+  if (logCollapsed) {
+    return `<div class="card">${head}<div class="muted" style="margin-top:8px">${
+      count === 0 ? 'Пока пусто' : `${count} ${word}, последняя: ${log[0].text}`
+    }</div></div>`;
+  }
+  const items = log.map((e) => `<li><time>${fmtTime(e.at)}</time>${e.text}</li>`).join('');
+  return `<div class="card">${head}<ul class="log">${items || '<li>Пока пусто</li>'}</ul></div>`;
+}
 
 function stat(label: string, value: string): string {
   return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>`;
@@ -304,6 +360,16 @@ function equipmentSummary(): string {
   if (s.galacticHyperdrive) parts.push('Галактический гипердвигатель');
   if (s.cargoBayExtended) parts.push('Увеличенный трюм');
   return parts.join(' · ');
+}
+
+/**
+ * Что показать вместо экрана, который в полёте недоступен.
+ *
+ * Возвращается на «Корабль», потому что там полёт виден лучше всего.
+ */
+function unavailableNote(): string {
+  return `<div class="card"><h2>Только на станции</h2>
+    <div class="sub">Рынок и ангар открываются у причала. В полёте вы в космосе — торговать и ставить оборудование негде.</div></div>`;
 }
 
 function shipScreen(): string {
@@ -1195,7 +1261,6 @@ function statsCard(): string {
 }
 
 function logScreen(): string {
-  const items = log.map((e) => `<li><time>${fmtTime(e.at)}</time>${e.text}</li>`).join('');
   const speeds = [0.5, 1, 2, 5, 10, 20, 100, 200].map((s): [string, string] => [String(s), `×${s}`]);
   const timeouts = [1, 2, 5, 10, 30].map((m): [string, string] => [String(m * 60000), `${m} мин`]);
   const rates = [
@@ -1224,7 +1289,7 @@ function logScreen(): string {
         : 'Прыжок — прямо с карты, без мини-игры.'}</div>
       <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div></div>
     ${saveCard()}
-    <div class="card"><h2>Журнал</h2><ul class="log">${items || '<li>Пока пусто</li>'}</ul></div>`;
+    ${logCard()}`;
 }
 
 
@@ -1427,11 +1492,16 @@ function render(): void {
       ? 'Обломки'
       : TABS.find((t) => t.id === tab)!.label;
   document.getElementById('top-info')!.textContent = cr(state.cash);
-  document.getElementById('nav')!.innerHTML = TABS.map(
-    (t) =>
-      `<button class="${t.id === tab && !inCombat && !inSalvage ? 'active' : ''}" data-action="tab" data-tab="${t.id}">
-        <span class="pill">${t.icon}</span>${t.label}</button>`,
-  ).join('');
+  const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
+  document.getElementById('nav')!.innerHTML = TABS.map((t) => {
+    const off = blocked.includes(t.id);
+    // Заблокированная вкладка остаётся видимой, но приглушённой: игрок
+    // должен видеть, что рынок существует и вернётся, когда сядешь.
+    return `<button class="${t.id === tab && !inCombat && !inSalvage ? 'active' : ''}${off ? ' off' : ''}"
+        data-action="tab" data-tab="${t.id}" ${off ? 'disabled aria-disabled="true"' : ''}
+        title="${off ? 'Только на станции' : ''}">
+        <span class="pill">${t.icon}</span>${t.label}</button>`;
+  }).join('');
   if (tab === 'map' && !inCombat && !inSalvage) drawMap();
   // Модель встречи живёт только пока экран её показывает: иначе кадры
   // крутятся на невидимом холсте и жгут батарею.
@@ -1632,11 +1702,18 @@ function onAction(el: HTMLElement): void {
   const a = el.dataset.action;
   const i = Number(el.dataset.i);
   switch (a) {
-    case 'tab':
+    case 'tab': {
       // Пока идут обломки, уйти с экрана нельзя: подбор держит полёт на
       // паузе, и «уехать» на другую вкладку значило бы бросить его молча.
-      if (!state.salvage) tab = el.dataset.tab as Tab;
+      if (state.salvage) break;
+      const want = el.dataset.tab as Tab;
+      // Рынок и ангар — только на станции. Кнопка уже выключена, но
+      // проверяем и здесь: заблокированный элемент можно активировать
+      // скриптом, а правило должно держаться в одном месте.
+      if (blockedTabs().includes(want)) break;
+      tab = want;
       break;
+    }
     case 'go-map':
       tab = 'map';
       break;
@@ -1825,6 +1902,9 @@ function onAction(el: HTMLElement): void {
       if (r.dropped > 0) addLog(`Выброшено: ${COMMODITIES[i].name}, ${r.dropped} ${UNITS[COMMODITIES[i].unit]}`);
       break;
     }
+    case 'log-toggle':
+      logCollapsed = !logCollapsed;
+      break;
     case 'save-file': {
       /*
        * Выгрузка в файл. `Blob` + ссылка с `download` — единственный способ
