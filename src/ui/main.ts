@@ -387,6 +387,21 @@ function encounterCard(): string {
     `<button class="btn" data-action="decide" data-decision="${decision}" ${enabled ? '' : 'disabled'}
       title="${reason ?? ''}">${label}</button>`;
 
+  /*
+   * §85: ЦВЕТ КАРТОЧКИ ВСТРЕЧИ ПО РОЛИ И ВРАЖДЕБНОСТИ.
+   *
+   * Пользователь: «красить карточку, полицию и охотника различать только
+   * если враждебны, а так — зелёный».
+   *
+   * Правило простое: угроза красная, всё остальное зелёное. Пират, который
+   * уже атакует, и власть, которая вас ищет, — красные. Мирный торговец,
+   * патруль, которому вы безразличны, и охотник, летящий мимо, — зелёные:
+   * драться с ними не нужно.
+   *
+   * Жёлтого больше нет: раньше карточка была жёлтой ВСЕГДА, то есть цвет
+   * не нёс информации.
+   */
+  const tone = hostile ? ' danger' : ' calm';
   const share = hostile && can.attack ? '' : '';
   // Модель встречного корабля: видно, с кем имеешь дело, а не только
   // название. Корабль, которого нет в парке (канистра, астероид),
@@ -394,7 +409,7 @@ function encounterCard(): string {
   const model = FLEET[enemy.id]
     ? `<canvas class="enc-model" data-ship="${enemy.id}" aria-label="Модель корабля ${enemy.name}"></canvas>`
     : '';
-  return `<div class="card warn"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
+  return `<div class="card${tone}"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
     ${model}
     <div class="sub">${hostile ? 'Враждебен' : 'Не враждебен'} · Решение через <span id="enc-eta"></span></div>
     <div class="row" style="margin-top:12px">

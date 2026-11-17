@@ -97,6 +97,12 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
 
 .card.warn { border-left: 4px solid var(--warn); }
 .card.danger { border-left: 4px solid var(--bad); }
+/*
+ * §85: спокойная встреча. Пользователь: «а так — зелёный». Полиция и
+ * охотник становятся красными только когда враждебны, а торговец и
+ * мирный прохожий — всегда зелёные: они не угроза.
+ */
+.card.calm { border-left: 4px solid var(--good); }
 .alert { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: rgba(255, 138, 128, .15); color: var(--bad); font-weight: 500; }
 .progress.enemy > div { background: var(--bad); }
 
