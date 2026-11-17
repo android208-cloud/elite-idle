@@ -42,55 +42,88 @@ function startFlying(speed: number): GameState {
   return startJump(g, targetOf(g), NOW, noEncounters(speed)).state;
 }
 
+/**
+ * База полёта в миллисекундах при ×1.
+ *
+ * Время прыжка теперь зависит от расстояния (§70), поэтому «15 минут»
+ * в тестах больше не константа: ожидание берём из той же функции, а
+ * проверяем то, ради чего тесты и написаны, — влияние темпа.
+ */
+function baseMs(g: GameState): number {
+  const systems = systemsOf(g.galaxy);
+  const d = distance(systems[g.flight!.from], systems[g.flight!.to]);
+  return jumpDuration(noEncounters(1), d);
+}
+
 test('jumpDuration обратно пропорционален темпу', () => {
-  assert.equal(jumpDuration(noEncounters(1)), 15 * MIN);
-  assert.equal(jumpDuration(noEncounters(5)), 3 * MIN);
-  assert.equal(jumpDuration(noEncounters(100)), 15 * MIN / 100);
+  // §77: опорная точка — полный бак (70 св. лет) за 10 секунд на ×200.
+  const fullTank = jumpDuration(noEncounters(1), 70);
+  assert.equal(fullTank, 2000 * 1000, 'на ×1 полный бак — 2000 секунд');
+  const base = jumpDuration(noEncounters(1), 7);
+  assert.equal(jumpDuration(noEncounters(5), 7), Math.round(base / 5));
+  assert.equal(jumpDuration(noEncounters(100), 7), Math.round(base / 100));
   assert.equal(baseToReal(15 * MIN, noEncounters(10)), 1.5 * MIN);
+});
+
+test('полный бак на ×200 занимает десять секунд', () => {
+  // Главное число §77: полный бак на быстром темпе — десять секунд.
+  assert.equal(jumpDuration(noEncounters(200), 70), 10 * 1000);
 });
 
 test('повышение темпа посреди полёта ускоряет прибытие (было: не ускоряло)', () => {
   const flying = startFlying(1);
-  assert.equal(flying.flight!.arriveAt, NOW + 15 * MIN);
+  const base = baseMs(flying);
+  assert.equal(flying.flight!.arriveAt, NOW + base);
 
   // Прошло 3 минуты при ×1, затем темп поднят до ×100
   const after = advance(flying, NOW + 3 * MIN, noEncounters(100)).state;
-  // Осталось 12 базовых минут, при ×100 это 7.2 секунды — полёт уже завершён
+  // Осталось base − 3 минуты базовых, при ×100 это единицы секунд
   assert.equal(after.flight, null, 'при ×100 полёт должен моментально завершиться');
   assert.equal(after.system, flying.flight!.to);
 });
 
 test('повышение темпа с частичным прогрессом: остаток считается в базовых единицах', () => {
   const flying = startFlying(1);
-  // 1 минута при ×10 = 10 базовых минут из 15
+  const base = baseMs(flying);
+  // 1 минута при ×10 = 10 базовых минут
   const tenX = advance(flying, NOW + MIN, noEncounters(10)).state;
   assert.ok(tenX.flight, 'полёт продолжается');
-  assert.equal(tenX.flight.remainingBaseMs, 5 * MIN, 'осталось 5 базовых минут');
-  // остаток при ×10 — это 30 секунд реального времени
-  assert.equal(tenX.flight.arriveAt - (NOW + MIN), 30_000);
+  assert.equal(tenX.flight.remainingBaseMs, base - 10 * MIN, 'осталось base − 10 базовых минут');
+  // Остаток при ×10 переводится в реальное время делением на 10.
+  assert.equal(tenX.flight.arriveAt - (NOW + MIN), baseToReal(base - 10 * MIN, noEncounters(10)));
 });
 
 test('понижение темпа посреди полёта замедляет прибытие', () => {
   const flying = startFlying(100);
   const half = flying.flight!.arriveAt - NOW;
   const mid = advance(flying, NOW + half / 2, noEncounters(100)).state;
+  const base = baseMs(flying);
   assert.ok(mid.flight);
-  assert.equal(mid.flight.remainingBaseMs, 7.5 * MIN, 'половина базового времени пройдена');
+  // Допуск шире пары миллисекунд: реальное время переводится в базовое
+  // делением на темп, и при ×100 округление даёт доли процента разброса.
+  assert.ok(
+    Math.abs(mid.flight.remainingBaseMs - base / 2) <= base * 0.001 + 2,
+    `половина базового времени пройдена: ${mid.flight.remainingBaseMs} из ${base}`,
+  );
 
   const switchAt = NOW + half / 2;
   const slowed = advance(mid, switchAt, noEncounters(1)).state;
   assert.ok(slowed.flight, 'при ×1 полёт ещё не завершён');
-  // Осталось 7.5 базовых минут, при ×1 это ровно 7.5 реальных минут
-  // (допускаем 1 мс на округление baseToReal)
+  // Осталась половина базового времени, при ×1 это ровно столько реальных
+  // минут. Допуск 0.1% — на округление baseToReal и обратный перевод при ×100.
   const left = slowed.flight.arriveAt - switchAt;
-  assert.ok(Math.abs(left - 7.5 * MIN) <= 2, `осталось ${left} мс вместо ${7.5 * MIN}`);
+  assert.ok(
+    Math.abs(left - base / 2) <= base * 0.001 + 2,
+    `осталось ${left} мс вместо ${base / 2}`,
+  );
 });
 
 test('темп не влияет на прошлое: прошедшая часть пути не пересчитывается', () => {
   const flying = startFlying(1);
+  const base = baseMs(flying);
   const mid = advance(flying, NOW + 6 * MIN, noEncounters(1)).state;
   assert.equal(mid.flight!.elapsedBaseMs, 6 * MIN);
-  assert.equal(mid.flight!.remainingBaseMs, 9 * MIN);
+  assert.equal(mid.flight!.remainingBaseMs, base - 6 * MIN);
   // Меняем темп — прошедшее остаётся 6 минут, а не пересчитывается
   const fast = advance(mid, NOW + 6 * MIN + 1000, noEncounters(50)).state;
   assert.ok(fast.flight!.elapsedBaseMs >= 6 * MIN);

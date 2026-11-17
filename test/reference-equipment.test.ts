@@ -39,7 +39,14 @@ import {
 } from '../src/core/ships.ts';
 import { buildGalaxy } from '../src/core/galaxy.ts';
 
-/** Экранные номера XX13 из EQSHP (1 — топливо, покупок в таблице — 2..14). */
+/**
+ * Экранные номера XX13 из EQSHP (1 — топливо, покупок в таблице — 2..14).
+ *
+ * §77: `pod` (номер 8) убран из игры вместе с капсулой. Запись оставлена
+ * здесь, чтобы было видно: пропуск осознанный, а не «забыли».
+ */
+const REMOVED_BY_DESIGN = new Set(['pod']);
+
 const REFERENCE_SCREEN_NUMBERS: Record<string, number> = {
   missile: 2,
   cargoBay: 3,
@@ -60,11 +67,17 @@ describe('доступность оборудования по EQSHP', () => {
   it('номера предметов совпадают с порядком PRXS в оригинале', () => {
     for (const [id, screen] of Object.entries(REFERENCE_SCREEN_NUMBERS)) {
       const item = EQUIPMENT.find((e) => e.id === id);
+      if (REMOVED_BY_DESIGN.has(id)) {
+        assert.equal(item, undefined, `${id} убран из игры по решению §77`);
+        continue;
+      }
       assert.ok(item, `предмет ${id} не найден`);
       assert.equal(item.screenNumber, screen, `${id}: номер на верфи должен быть ${screen}`);
     }
-    // В оригинале после гипердвигателя (12) идут военный (13) и добывающий (14)
-    assert.equal(EQUIPMENT.length, REFERENCE_SCREEN_NUMBERS.mining - 1);
+    // В оригинале после гипердвигателя (12) идут военный (13) и добывающий (14).
+    // У нас на один предмет меньше — капсула убрана, но её номер остался
+    // пропущенным, поэтому длина на единицу меньше числа «14 − 1».
+    assert.equal(EQUIPMENT.length, REFERENCE_SCREEN_NUMBERS.mining - 1 - REMOVED_BY_DESIGN.size);
   });
 
   it('QQ25 = min(tek + 3, 14)', () => {
@@ -95,6 +108,7 @@ describe('доступность оборудования по EQSHP', () => {
       ['mining', 11],
     ];
     for (const [id, minTek] of expected) {
+      if (REMOVED_BY_DESIGN.has(id)) continue;
       const item = EQUIPMENT.find((e) => e.id === id)!;
       if (minTek > 0) {
         assert.equal(equipmentAvailable(item, minTek - 1), false, `${id} не должен быть доступен при tek ${minTek - 1}`);
@@ -142,10 +156,12 @@ describe('доступность оборудования по EQSHP', () => {
       const s = galaxy.find((x) => x.name === name)!;
       return EQUIPMENT.filter((e) => equipmentAvailable(e, s.techLevel)).length;
     };
-    // Значения зафиксированы по генератору: tek LAVE = 4 → QQ25 = 7 → 6 покупок
+    // Значения зафиксированы по генератору: tek LAVE = 4 → QQ25 = 7 → 6 покупок.
+    // §77: капсула (номер 8) убрана, поэтому где она была доступна, счёт
+    // уменьшился на единицу. LAVE её и не видела — там без изменений.
     assert.equal(count('LAVE'), 6);
-    assert.equal(count('DISO'), 9);
+    assert.equal(count('DISO'), 8, 'DISO: tek 6 → QQ25 = 9, но капсулы больше нет');
     // LEESTI: tek 10 → QQ25 = 13, добывающий (14) ещё не продаётся
-    assert.equal(count('LEESTI'), 12);
+    assert.equal(count('LEESTI'), 11);
   });
 });

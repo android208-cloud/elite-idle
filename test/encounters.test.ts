@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   deserialize,
   newGame,
+  SAVE_VERSION,
   startJump,
   systemsOf,
   INSURANCE_CASH_KEPT,
@@ -38,7 +39,7 @@ function flying(settings: Settings = DEFAULT_SETTINGS): GameState {
 /* ---------- Бой ---------- */
 
 test('бой детерминирован и всегда заканчивается', () => {
-  const run = () => autoCombat(startCombat('sidewinder', STARTER_SHIP, true, 0, 123));
+  const run = () => autoCombat(startCombat('sidewinder', STARTER_SHIP, 0, 123));
   const a = run();
   assert.ok(a.outcome);
   assert.deepEqual(a, run());
@@ -48,7 +49,7 @@ test('баланс: стартовый корабль почти всегда п
   const rate = (enemy: string): number => {
     let died = 0;
     for (let seed = 1; seed <= 300; seed++) {
-      if (autoCombat(startCombat(enemy, STARTER_SHIP, false, 0, seed)).outcome === 'died') died++;
+      if (autoCombat(startCombat(enemy, STARTER_SHIP, 0, seed)).outcome === 'died') died++;
     }
     return died / 300;
   };
@@ -59,30 +60,33 @@ test('баланс: стартовый корабль почти всегда п
 });
 
 test('доступность действий: ECM только против ракеты, бомба только при наличии', () => {
-  const c = startCombat('python', { ...STARTER_SHIP, ecm: true }, true, 5, 1);
+  const c = startCombat('python', { ...STARTER_SHIP, ecm: true }, 5, 1);
   assert.equal(canDo(c, 'ecm'), false);
   assert.equal(canDo({ ...c, incomingMissile: true }, 'ecm'), true);
   assert.equal(canDo(c, 'bomb'), false);
   assert.equal(canDo(c, 'dump'), true);
-  assert.equal(canDo(startCombat('python', STARTER_SHIP, true, 0, 1), 'dump'), false);
+  assert.equal(canDo(startCombat('python', STARTER_SHIP, 0, 1), 'dump'), false);
 });
 
 test('энергобомба уничтожает противника сразу', () => {
-  const c = startCombat('python', { ...STARTER_SHIP, energyBomb: true }, true, 0, 1);
+  const c = startCombat('python', { ...STARTER_SHIP, energyBomb: true }, 0, 1);
   const r = combatRound(c, 'bomb');
   assert.equal(r.outcome, 'won');
   assert.equal(r.bombUsed, true);
 });
 
-test('капсула завершает бой исходом pod, только если она есть', () => {
-  const withPod = startCombat('python', { ...STARTER_SHIP, escapePod: true }, true, 0, 1);
-  assert.equal(combatRound(withPod, 'pod').outcome, 'pod');
-  const without = startCombat('python', STARTER_SHIP, true, 0, 1);
-  assert.equal(canDo(without, 'pod'), false);
+test('§77: капсулы в бою больше нет', () => {
+  // Раньше здесь проверялось, что «pod» завершает бой и доступен только
+  // с купленной капсулой. §77 убрал и действие, и предмет: смертей нет,
+  // спасать нечего. Тест сторожит, что действие не вернулось тайком.
+  const c = startCombat('python', STARTER_SHIP, 0, 1);
+  // Действия 'pod' больше нет в перечислении CombatAction, поэтому
+  // canDo возвращает undefined (ветки нет в switch), а не false.
+  assert.ok(!canDo(c, 'pod' as never), 'капсула не должна быть доступна');
 });
 
 test('ракета противника без ECM наносит урон', () => {
-  const c = { ...startCombat('python', STARTER_SHIP, true, 0, 7), incomingMissile: true };
+  const c = { ...startCombat('python', STARTER_SHIP, 0, 7), incomingMissile: true };
   const r = combatRound(c, 'laser');
   assert.equal(r.incomingMissile, false);
   assert.ok(r.log.some((l) => l.includes('Ракета противника попала')));
@@ -94,15 +98,18 @@ test('встречи: при высокой частоте за полёт чт�
   const g = newGame(5);
   const s = { ...DEFAULT_SETTINGS, encounterRate: 100 };
   const started = startJump(g, targetOf(g), NOW, s);
-  assert.ok(started.state.flight!.pending.length > 0);
+  assert.equal(started.state.flight!.encounters, 0, 'встречи рождаются в процессе, а не заранее');
   const done = advance(started.state, NOW + 48 * 60 * MIN, s);
   assert.equal(done.state.flight, null);
   assert.equal(done.state.combat, null);
   assert.ok(done.events.some((e) => e.type === 'detected' || e.type === 'canister'));
-  assert.ok(done.events.some((e) => e.type === 'arrived' || e.type === 'death'));
+  assert.ok(done.events.some((e) => e.type === 'arrived' || e.type === 'damaged'));
 });
 
 test('ненападающий корабль исчезает через N минут, полёт не прерывается', () => {
+  // `flying()` уже включает encounterRate: 0 — встречи не рождаются, и в
+  // кадре только та, что подложена вручную. §76 сделал встречи живыми,
+  // поэтому без этого в полёте успевала появиться ещё одна и портила кадр.
   const g = flying();
   const encounter = {
     role: 'trader' as const,
@@ -112,9 +119,13 @@ test('ненападающий корабль исчезает через N ми
     outcome: 'leave' as const,
   };
   const s: GameState = { ...g, encounter };
-  const before = advance(s, NOW + 5 * MIN);
+  // §76: настройки передаются в КАЖДЫЙ вызов advance, а не запоминаются при
+  // старте прыжка. Без этого `encounterRate: 0` не действует на досчёт, и в
+  // полёте рождаются новые встречи — тест ловил именно это.
+  const quiet: Settings = { ...DEFAULT_SETTINGS, encounterRate: 0 };
+  const before = advance(s, NOW + 5 * MIN, quiet);
   assert.ok(before.state.encounter, 'через 4 минуты корабль ещё рядом');
-  const after = advance(s, NOW + 7 * MIN);
+  const after = advance(s, NOW + 7 * MIN, quiet);
   assert.equal(after.state.encounter, null);
   assert.ok(after.events.some((e) => e.type === 'vanished'));
   assert.ok(after.state.flight, 'полёт продолжается');
@@ -126,42 +137,49 @@ test('прибытие раньше N минут: корабль остаётс�
     ...g,
     encounter: { role: 'trader', enemyId: 'cobra3', detectedAt: NOW, resolveAt: NOW + 99 * MIN, outcome: 'leave' },
   };
-  const done = advance(s, NOW + 20 * MIN);
+  // Прибытие наступает по расписанию полёта, а оно теперь зависит от
+  // расстояния. Берём точный момент прибытия, а не «через 20 минут».
+  const arriveAt = s.flight!.arriveAt;
+  const done = advance(s, arriveAt);
   assert.equal(done.state.flight, null);
   assert.equal(done.state.encounter, null);
   assert.ok(done.events.some((e) => e.type === 'arrived'));
 });
 
-test('нападение в ручном режиме ставит полёт на паузу и ждёт игрока', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
-  const g = flying(settings);
+test('§38.1: не решил вовремя — слабый враждебный даёт победу', () => {
+  // Раундов больше нет: истёк срок — исход наступил сам.
+  const g = flying();
   const s: GameState = {
     ...g,
+    ship: { ...g.ship, laser: 'pulse' },
     encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  const r = advance(s, NOW + 100 * MIN, settings);
-  assert.ok(r.state.combat, 'бой ждёт решения игрока');
-  assert.ok(r.state.flight, 'полёт не завершён');
-  assert.ok(r.events.some((e) => e.type === 'combat-start' && e.manual));
-  assert.ok(!r.events.some((e) => e.type === 'arrived'));
+  const r = advance(s, NOW + 100 * MIN);
+  assert.equal(r.state.combat, null, 'боя как процесса нет');
+  assert.equal(r.state.encounter, null);
+  assert.ok(r.events.some((e) => e.type === 'auto-victory'));
+  assert.ok(r.state.cash > g.cash, 'награда начислена');
 });
 
-test('нападение в автоматическом режиме разрешается без участия игрока', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'auto' as const };
-  const g = flying(settings);
+test('§38.1: не решил вовремя — сильный пропускается', () => {
+  const g = flying();
   const s: GameState = {
     ...g,
-    encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
+    ship: { ...g.ship, laser: 'pulse' },
+    encounter: { role: 'pirate', enemyId: 'python', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  const r = advance(s, NOW + 100 * MIN, settings);
+  // §76: за 100 минут рождаются новые встречи, и они тоже дают свой вклад.
+  // Тест про КОНКРЕТНУЮ встречу — поэтому остальные отключаем.
+  const r = advance(s, NOW + 100 * MIN, { ...DEFAULT_SETTINGS, encounterRate: 0 });
   assert.equal(r.state.combat, null);
-  assert.ok(r.events.some((e) => e.type === 'combat-end' || e.type === 'death'));
+  assert.ok(r.events.some((e) => e.type === 'auto-skip'));
+  assert.equal(r.state.cash, g.cash, 'награды нет');
 });
 
 test('пауза боя сдвигает прибытие на время ожидания игрока', () => {
   const g = flying();
   const arrive = g.flight!.arriveAt;
-  const won = { ...startCombat('sidewinder', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
+  const won = { ...startCombat('sidewinder', STARTER_SHIP, 0, 1), outcome: 'won' as const };
   // Бой начался через минуту, игрок вернулся через три минуты после начала,
   // но игра была открыта только две из них: простой = 2 минуты, остальное — офлайн
   const s: GameState = {
@@ -177,7 +195,7 @@ test('пауза боя сдвигает прибытие на время ожи
 test('ход игрока спустя часы не откладывает прибытие на всё это время', () => {
   const g = flying();
   const arrive = g.flight!.arriveAt;
-  const won = { ...startCombat('sidewinder', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
+  const won = { ...startCombat('sidewinder', STARTER_SHIP, 0, 1), outcome: 'won' as const };
   // Игрок закрыл вкладку на два часа: пауза «стоит» с момента начала боя
   const s: GameState = { ...g, combat: { combat: won, role: 'pirate', pausedAt: NOW + MIN, pausedMs: 0 } };
   const r = combatAutoplay(s, NOW + MIN + 120 * MIN);
@@ -188,7 +206,7 @@ test('досчёт перед ходом фиксирует простой, но
   const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
   const g = flying(settings);
   const arrive = g.flight!.arriveAt;
-  const c = startCombat('python', STARTER_SHIP, true, 0, 1);
+  const c = startCombat('python', STARTER_SHIP, 0, 1);
   const waiting: GameState = { ...g, combat: { combat: c, role: 'pirate', pausedAt: NOW, pausedMs: 0 } };
 
   // Игрок вернулся через час: досчёт закрывает паузу ровно этим часом
@@ -202,74 +220,78 @@ test('досчёт перед ходом фиксирует простой, но
   assert.equal(acted.flight!.arriveAt, arrive);
 });
 
-test('ручной бой: действие игрока не ломает состояние и в итоге завершается', () => {
-  const settings = { ...DEFAULT_SETTINGS, combatMode: 'manual' as const };
-  const g = flying(settings);
-  let s: GameState = {
+test('§38.1: решение принимается один раз, раундов нет', () => {
+  // Прежняя модель с раундами снята решением пользователя (§38.1).
+  // Встреча разрешается одним исходом, `combat` остаётся null.
+  const g = flying();
+  const s: GameState = {
     ...g,
+    ship: { ...g.ship, laser: 'military' },
     encounter: { role: 'pirate', enemyId: 'sidewinder', detectedAt: NOW, resolveAt: NOW + MIN, outcome: 'attack' },
   };
-  s = advance(s, NOW + 2 * MIN, settings).state;
-  assert.ok(s.combat);
-  let guard = 0;
-  while (s.combat && guard++ < 200) s = combatAction(s, 'laser', NOW + 3 * MIN, settings).state;
-  assert.equal(s.combat, null);
+  const r = advance(s, NOW + 2 * MIN);
+  assert.equal(r.state.combat, null, 'боя как процесса нет');
+  assert.equal(r.state.encounter, null, 'встреча разрешена');
+  assert.ok(r.events.length > 0, 'исход зафиксирован в событиях');
 });
 
-/* ---------- Смерть ---------- */
+/* ---------- Проигранный бой (§77: смерти нет, есть «повреждён») ---------- */
 
 function deadState(settings: Settings): { s: GameState; from: number } {
   const g = flying(settings);
   const bought: GameState = { ...g, cargo: g.cargo.map((_, i) => (i === 0 ? 5 : 0)), holdSpace: 15 };
-  const died = { ...startCombat('python', STARTER_SHIP, true, 5, 1), outcome: 'died' as const };
+  const died = { ...startCombat('python', STARTER_SHIP, 5, 1), outcome: 'died' as const };
   return { s: { ...bought, combat: { combat: died, role: 'pirate', pausedAt: NOW, pausedMs: 0 } }, from: g.flight!.from };
 }
 
-test('смерть, режим «страховка»: потеря груза и части денег, возврат на станцию вылета', () => {
-  const settings = { ...DEFAULT_SETTINGS, deathMode: 'insurance' as const };
+test('§77 проигранный бой: груз и четверть денег потеряны, корабль и оборудование целы', () => {
+  // Раньше здесь было две ветки по настройке `deathMode` («страховка» /
+  // «без смерти») и отдельный тест на капсулу. §77 оставил одну цену
+  // проигрыша — она и проверяется.
+  const settings = { ...DEFAULT_SETTINGS };
+  const g = flying(settings);
   const { s, from } = deadState(settings);
-  const r = combatAutoplay(s, NOW, settings);
-  assert.equal(r.state.flight, null);
-  assert.equal(r.state.system, from);
-  assert.equal(r.state.cargo[0], 0);
-  assert.equal(r.state.cash, Math.floor(s.cash * INSURANCE_CASH_KEPT));
-  assert.ok(r.events.some((e) => e.type === 'death'));
-});
-
-test('смерть, режим «без смерти»: ничего не теряется, возврат на станцию вылета', () => {
-  const settings = { ...DEFAULT_SETTINGS, deathMode: 'none' as const };
-  const { s, from } = deadState(settings);
-  const r = combatAutoplay(s, NOW, settings);
-  assert.equal(r.state.flight, null);
-  assert.equal(r.state.system, from);
-  assert.equal(r.state.cargo[0], 5);
-  assert.equal(r.state.cash, s.cash);
-});
-
-test('спасательная капсула: корабль и оборудование потеряны, деньги целы', () => {
-  const g = flying();
-  const rich: GameState = { ...g, ship: { ...g.ship, ecm: true, escapePod: true } };
-  const pod = { ...startCombat('python', rich.ship, true, 0, 1), outcome: 'pod' as const };
-  const s: GameState = { ...rich, combat: { combat: pod, role: 'pirate', pausedAt: NOW, pausedMs: 0 } };
-  const r = combatAutoplay(s, NOW);
-  assert.equal(r.state.ship.ecm, false);
-  assert.equal(r.state.ship.escapePod, false);
-  assert.equal(r.state.cash, s.cash);
-  assert.equal(r.state.flight, null);
+  const rich: GameState = { ...s, ship: { ...s.ship, ecm: true } };
+  const r = combatAutoplay(rich, NOW, settings);
+  assert.equal(r.state.flight, null, 'полёт окончен');
+  assert.equal(r.state.system, from, 'вернулись на станцию вылета');
+  assert.equal(r.state.cargo[0], 0, 'груз потерян');
+  assert.equal(r.state.cash, Math.floor(s.cash * INSURANCE_CASH_KEPT), 'четверть денег потеряна');
+  assert.equal(r.state.ship.ecm, true, 'оборудование осталось при корабле');
+  assert.ok(r.events.some((e) => e.type === 'damaged'), 'событие «повреждён»');
+  assert.ok(!r.events.some((e) => (e.type as string) === 'death'), 'смерти больше нет');
 });
 
 test('убийство полицейского делает беглецом', () => {
   const g = flying();
-  const won = { ...startCombat('viper', STARTER_SHIP, true, 0, 1), outcome: 'won' as const };
+  const won = { ...startCombat('viper', STARTER_SHIP, 0, 1), outcome: 'won' as const };
   const s: GameState = { ...g, combat: { combat: won, role: 'police', pausedAt: NOW, pausedMs: 0 } };
   const r = combatAutoplay(s, NOW);
   assert.equal(legalLabel(r.state.legal), 'Беглец');
 });
 
 test('правовой статус уменьшается при прибытии', () => {
-  const g = { ...flying(), legal: 100 };
-  const r = advance(g, NOW + 99 * MIN);
-  assert.equal(r.state.legal, 50);
+  /*
+   * §80.1: деление при прибытии ОТМЕНЕНО для криминального статуса —
+   * вместо него работает побег (доля от 12 планет). Поэтому 100 после
+   * одного прыжка дают 92 (100 × 11/12), а не 50.
+   *
+   * Встречи отключаем: при криминальном статусе патруль становится
+   * пиратством и может поднять статус сам.
+   */
+  const settings = { ...DEFAULT_SETTINGS, encounterRate: 0 };
+  const g = { ...flying(settings), legal: 100 };
+  const r = advance(g, NOW + 99 * MIN, settings);
+  assert.equal(r.state.legal, 91, "100 × 11/12 = 91.67, округление вниз");
+});
+
+test('§80.1: у чистого пилота прибытие по-прежнему делит статус', () => {
+  // Деление сохранилось только там, где побег не идёт: делить нуль нечего,
+  // но если статус вдруг ненулевой и не криминальный — оригинал работает.
+  const settings = { ...DEFAULT_SETTINGS, encounterRate: 0 };
+  const g = { ...flying(settings), legal: 0 };
+  const r = advance(g, NOW + 99 * MIN, settings);
+  assert.equal(r.state.legal, 0);
 });
 
 /* ---------- Оборудование, ранги, миграция ---------- */
@@ -306,8 +328,10 @@ test('миграция сохранения версии 1', () => {
   const old = { ...newGame(3), version: 1 } as Record<string, unknown>;
   for (const k of ['ship', 'kills', 'legal', 'encounter', 'combat']) delete old[k];
   const g = deserialize(JSON.stringify(old));
-  assert.equal(g.version, 2);
+  assert.equal(g.version, SAVE_VERSION, 'миграция поднимает версию до текущей');
   assert.equal(g.kills, 0);
   assert.equal(g.ship.missiles, 3);
+  assert.deepEqual(g.escapeRoute, [], '§80: маршрут побега пуст');
+  assert.equal(g.escapeStatus, -1);
 });
 

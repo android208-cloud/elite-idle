@@ -7,6 +7,7 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
+import { autoScoop, canisterCount, rollCanisters, scoopOne, type CargoCanister } from './cargo-canisters.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import {
   COMMODITIES,
@@ -16,6 +17,15 @@ import {
   type MarketEntry,
 } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
+import {
+  autoResolve,
+  availableDecisions,
+  bestLaserOf,
+  canBeat,
+  enemyOf,
+  isCriminal,
+  needsMissile,
+} from './one-decision.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
 import {
   ENEMIES,
@@ -32,7 +42,7 @@ import {
 
 export { nextByte } from './rng.ts';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const MAX_FUEL = 70;
 /** Цена топлива: 0.2 CR за световой год, т. е. 2 десятых кредита за десятую св. года */
 export const FUEL_COST_PER_UNIT = 2;
@@ -41,7 +51,43 @@ export const START_CASH = 1000;
 export const START_HOLD = HOLD_BASE;
 /** Прибавка к правовому статусу за убийство полицейского */
 export const POLICE_KILL_LEGAL = 64;
-/** Доля денег, остающаяся после гибели при режиме «страховка» */
+
+/**
+ * Прибавка за ограбление торговца (§79).
+ *
+ * Чуть меньше, чем за полицейского: торговец не защищает закон, но
+ * нападение на мирного всё равно преступление. 32 — половина от
+ * «убил полицейского», и порога «беглец» (50) достигается за два грабежа.
+ */
+export const RAID_LEGAL = 32;
+
+/**
+ * Побег от последствий (§80.1).
+ *
+ * Сколько РАЗНЫХ планет нужно посетить, чтобы статус обнулился.
+ *
+ * Статус гасится не по единице, а ДОЛЕЙ: после N планет остаётся
+ * `снимок × (12 − N) / 12`. Поэтому важен именно порог 12, а промежуточные
+ * 6 и 8 из обсуждения получаются сами — это точки, где статус переходит
+ * из «беглеца» в «нарушителя» и почти в «чистого».
+ */
+export const ESCAPE_PLANETS = 12;
+
+/**
+ * Ближайшая планета тоже считается? Нет.
+ *
+ * Побег начинается С ПЕРВОГО прыжка: если на старте маршрута статус уже
+ * криминальный, то первый прыжок и открывает маршрут — он же и первый шаг.
+ * Отдельного «порога входа» нет, и это важно: иначе преступник мог бы
+ * бесконечно прыгать, не начиная побег.
+ */
+/**
+ * Доля денег, остающаяся после проигранного боя.
+ *
+ * §77: смерти больше нет, поэтому константа перестала быть «страховкой»:
+ * это просто цена неудачи. Имя оставлено, чтобы не плодить переименования
+ * по всей кодовой базе, но смысл теперь единственный.
+ */
 export const INSURANCE_CASH_KEPT = 0.75;
 
 export interface Settings {
@@ -51,21 +97,64 @@ export interface Settings {
   baseJumpMs: number;
   /** Автоматический бой или с вмешательством игрока */
   combatMode: 'auto' | 'manual';
-  /** «Страховка»: потери при гибели. «Без смерти»: корабль только возвращается на станцию */
-  deathMode: 'insurance' | 'none';
   /** Через сколько миллисекунд ненападающий корабль исчезает из радиуса */
   encounterTimeoutMs: number;
   /** Множитель частоты встреч: 0 отключает встречи */
   encounterRate: number;
+  /**
+   * Модуль стыковки включён.
+   *
+   * Когда включён — прыжок доступен только из мини-игры стыковки
+   * (космос у нас есть только там), а на карте вместо «Прыжок»
+   * показывается «Отстыковка». Когда выключен — прыжок на карте,
+   * как в простом варианте.
+   */
+  dockingModule: boolean;
+  /**
+   * Забирать контейнеры после боя автоматически.
+   *
+   * Если выключено — после победы появляется список обломков и игрок сам
+   * решает, что взять (и что выбросить, если места нет). Если включено —
+   * берётся всё, что влезает, без вопросов, как в оригинале, где выбора
+   * не было вовсе.
+   */
+  autoScoop: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   speed: 1,
-  baseJumpMs: 15 * 60 * 1000,
+  /**
+   * Базовое время полёта в миллисекундах при ×1 для пути в MAX_FUEL (70 св. лет).
+   *
+   * 2000 секунд: на ×200 это 10 секунд — столько занимает полный бак.
+   * На ×1 — 33 минуты. Референс пересчитан вместе с выбором пользователя:
+   * сначала ориентировались на 5 секунд (§76), теперь на 10 (решение §77).
+   */
+  baseJumpMs: 2000 * 1000,
   combatMode: 'auto',
-  deathMode: 'insurance',
-  encounterTimeoutMs: 5 * 60 * 1000,
+  /**
+   * Сколько мирный корабль висит в радиусе, прежде чем исчезнуть.
+   *
+   * 60 секунд, а не 5 минут (§76): встречи не могут идти внахлёст, поэтому
+   * долгий таймаут «запирает» полёт — новая встреча ждёт, пока уйдёт
+   * предыдущая, и плотность падает втрое. Минуты хватает, чтобы заметить
+   * корабль и решить, что делать.
+   */
+  encounterTimeoutMs: 60 * 1000,
   encounterRate: 1,
+  /*
+   * §81: мини-игра стыковки ОТКЛЮЧЕНА по умолчанию.
+   *
+   * Пользователь сказал: «начнём с простого, мини-игра стыковка
+   * отключена». Космос теперь начинается кнопками в блоке «Пункт
+   * назначения» — «Перелёт» и «Патрулировать», а не через мини-игру.
+   *
+   * Модуль остаётся: он рабочий, и включить его можно в настройках.
+   * Выключать его совсем — значит выбрасывать готовую работу, а игрок
+   * может захотеть ручную стыковку (она в списке желаний).
+   */
+  dockingModule: false,
+  autoScoop: false,
 };
 
 export interface Flight {
@@ -94,13 +183,31 @@ export interface Flight {
   /** Момент, для которого посчитан `arriveAt` (чтобы не пересчитывать без нужды) */
   dueAt: number;
   /**
-   * Моменты встреч в «базовых» миллисекундах ОТ ВЫЛЕТА (`departAt`).
+   * Сколько встреч уже случилось в этом полёте.
    *
-   * Базовая шкала не зависит от текущего темпа: при его смене двигается
-   * только `dueAt`/`arriveAt`, а встречи остаются на своих местах полёта
-   * и потому наступают раньше или позже вместе с прибытием.
+   * Раньше встречи были СПИСКОМ моментов, раскатанным заранее на всё время
+   * пути. Это плохо работало с темпом: список не пополнялся, поэтому
+   * медленный полёт не давал больше встреч, а быстрый — меньше. С §76
+   * встречи рождаются в процессе по РЕАЛЬНОМУ времени: чем дольше летишь,
+   * тем больше встретишь. Счётчик нужен для пола (минимальное число встреч
+   * за перелёт) и для показа прогресса.
    */
-  pending: number[];
+  encounters: number;
+  /** Когда случилась последняя встреча (реальное время), — точка отсчёта. */
+  lastEncounterAt: number;
+  /**
+   * Патруль (§78): полёт внутри системы, а не прыжок между ними.
+   *
+   * Чем отличается:
+   * - топливо тратится НЕ авансом за путь, а по мере событий: 1 за встречу
+   *   и ещё 1 за бой;
+   * - время не кончается само — идёт, пока цел бак;
+   * - `to` равен `from`: система не меняется, прыжка нет;
+   * - темп ×N НЕ действует: патруль живёт по реальному времени.
+   */
+  patrol?: boolean;
+  /** Сколько топлива ушло на патруль (для итогов в журнале). */
+  patrolFuelUsed?: number;
 }
 
 export type EncounterRole = 'pirate' | 'police' | 'hunter' | 'trader';
@@ -135,6 +242,27 @@ export interface ActiveCombat {
   pausedMs: number;
 }
 
+/**
+ * Подбор груза из обломков после победы.
+ *
+ * Пока это поле не пусто, полёт стоит на паузе — ровно как во время боя.
+ * Игрок либо забирает контейнеры по одному, либо закрывает подбор, и
+ * игра продолжает путь. Автоподбор в настройках снимает вопрос вовсе.
+ */
+export interface Salvage {
+  /** Что осталось в обломках после победы */
+  canisters: CargoCanister[];
+  /** Какие контейнеры уже взяты (для показа «взято») */
+  taken: number;
+  /** Сколько контейнеров пришлось бросить из-за нехватки места */
+  left: number;
+  /** Когда обломки появились — для сроков паузы, как у боя */
+  pausedAt: number;
+  pausedMs: number;
+  /** Название уничтоженного корабля — в заголовке подбора */
+  enemyName: string;
+}
+
 export interface GameState {
   version: number;
   galaxy: number;
@@ -156,7 +284,79 @@ export interface GameState {
   legal: number;
   encounter: Encounter | null;
   combat: ActiveCombat | null;
+  /** Обломки после победы, ждущие решения игрока. */
+  salvage: Salvage | null;
+  /** Статистика за игру — для журнала. */
+  stats: GameStats;
+  /**
+   * Средняя цена покупки по каждому товару — чтобы посчитать, удачной
+   * ли была сделка. В оригинале такого учёта нет; без него «удачная
+   * сделка» не определить, ведь продажа не знает, за сколько куплено.
+   *
+   * Хранится в десятых кредита, как и все цены. 0 = товара не покупали.
+   */
+  cargoBasis: number[];
+
+  /*
+   * §80: ПОБЕГ ОТ СТАТУСА.
+   *
+   * Накопление, а не «подряд»: каждая НОВАЯ планета гасит единицу статуса.
+   * Вернулся на уже посещённую — маршрут откатывается к началу, статус
+   * возвращается к тому, что был на старте побега.
+   *
+   * `escapeStatus` — статус на момент старта маршрута. Это и есть точка
+   * отката: возвращаться «на +1 за прыжок» не нужно, достаточно вернуть
+   * снимок. Так не надо хранить историю — только начало.
+   */
+  escapeRoute: number[];
+  escapeStatus: number;
 }
+
+/**
+ * Статистика командира.
+ *
+ * Считается накопительно и переживает сохранение. Сделка «удачная»,
+ * если продано дороже, чем куплено; в оригинале такого понятия нет,
+ * это наше дополнение — иначе журнал не о чем рассказывать.
+ */
+export interface GameStats {
+  /** Сколько кораблей уничтожено (совпадает с рангом, но отдельно). */
+  kills: number;
+  /** Сколько раз бежали на капсуле. */
+  fled: number;
+  /** Сколько встреч просто пропущено. */
+  skipped: number;
+  /** Удачные сделки: продано дороже покупки. */
+  goodTrades: number;
+  /** Неудачные: продано дешевле или в убыток. */
+  badTrades: number;
+  /** Суммарная прибыль от торговли (может быть отрицательной). */
+  tradeProfit: number;
+  /** Прыжков совершено. */
+  jumps: number;
+  /** Стыковок выполнено. */
+  dockings: number;
+  /** Провалов стыковки. */
+  dockingFails: number;
+  /** Удачных грабежей торговцев (§79). */
+  raided: number;
+  /** Патрулей проведено (§78). */
+  patrols: number;
+}
+
+export const ZERO_STATS: GameStats = {
+  kills: 0,
+  fled: 0,
+  skipped: 0,
+  goodTrades: 0,
+  badTrades: 0,
+  tradeProfit: 0,
+  jumps: 0,
+  dockings: 0,
+  dockingFails: 0,
+  patrols: 0,
+  raided: 0,
+};
 
 export type GameEventType =
   | 'arrived'
@@ -166,7 +366,26 @@ export type GameEventType =
   | 'combat-end'
   | 'canister'
   | 'contraband'
-  | 'death';
+  /**
+   * Корабль повреждён и отбуксирован на станцию. §77: заменил 'death' —
+   * смерти в игре больше нет, есть только неудача.
+   */
+  | 'damaged'
+  | 'won'
+  | 'skipped'
+  | 'fled'
+  | 'auto-victory'
+  | 'auto-skip'
+  /** §78: патруль окончен — топливо на возврат. */
+  | 'patrol-end'
+  /** §79: ограблен торговец. */
+  | 'raided'
+  /** §80: прыжок в рамках побега от статуса (новая планета). */
+  | 'escape-step'
+  /** §80: побег провален — вернулся на посещённую планету. */
+  | 'escape-reset'
+  /** §80: побег удался — статус чист. */
+  | 'escape-clean';
 
 export interface GameEvent {
   type: GameEventType;
@@ -210,11 +429,30 @@ export function newGame(rngSeed: number): GameState {
     legal: 0,
     encounter: null,
     combat: null,
+    salvage: null,
+    stats: { ...ZERO_STATS },
+    cargoBasis: COMMODITIES.map(() => 0),
+    escapeRoute: [],
+    escapeStatus: -1,
   };
 }
 
 export function currentSystem(state: GameState): StarSystem {
   return systemsOf(state.galaxy)[state.system];
+}
+
+/**
+ * Русское склонение по числу: 1 контейнер, 2 контейнера, 5 контейнеров.
+ * Вынесено отдельно, потому что журнал печатает числа постоянно, а
+ * «5 контейнер» в тексте выглядит как ошибка.
+ */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs >= 11 && abs <= 19) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
 }
 
 export function cargoTons(state: GameState): number {
@@ -330,8 +568,6 @@ export function owns(ship: PlayerShip, id: EquipmentId): boolean {
       return ship.laser === id;
     case 'scoops':
       return ship.fuelScoops;
-    case 'pod':
-      return ship.escapePod;
     case 'bomb':
       return ship.energyBomb;
     case 'energyUnit':
@@ -373,9 +609,6 @@ export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult
       break;
     case 'scoops':
       ship.fuelScoops = true;
-      break;
-    case 'pod':
-      ship.escapePod = true;
       break;
     case 'bomb':
       ship.energyBomb = true;
@@ -432,7 +665,16 @@ export function legalAfterLaunch(legal: number, cargo: readonly number[]): numbe
 
 /* ---------- Прыжок ---------- */
 
-export type JumpError = 'in-flight' | 'same-system' | 'too-far' | 'bad-target';
+/** Отказы при старте прыжка или патруля. */
+export type JumpError =
+  | 'in-flight'
+  | 'same-system'
+  | 'too-far'
+  | 'bad-target'
+  /** §78: для патруля нужно четыре ракеты. */
+  | 'no-missiles'
+  /** §78: топлива не хватает даже на резерв возврата. */
+  | 'no-fuel';
 
 export type GalacticJumpError = 'in-flight' | 'no-drive';
 
@@ -449,9 +691,51 @@ export interface JumpResult {
 /** Темп не может быть нулевым или отрицательным: защита от деления на 0. */
 const safeSpeed = (settings: Settings): number => Math.max(settings.speed, 0.0001);
 
-/** Длительность прыжка в миллисекундах с учётом настроек темпа. */
-export function jumpDuration(settings: Settings): number {
-  return Math.max(0, Math.round(settings.baseJumpMs / safeSpeed(settings)));
+/**
+ * Базовая длительность прыжка (при speed = 1), миллисекунды.
+ *
+ * Зависит от расстояния. В оригинале ZX Elite прыжок занимал примерно
+ * 8 секунд независимо от дистанции — там нечего было растягивать,
+ * космос шёл в реальном времени. У нас прыжок — абстрактный отрезок,
+ * и привязка ко времени делает долгий перелёт осмысленным: лететь
+ * 30 световых лет интереснее, чем 4, и это влияет на решение.
+ *
+ * Формула: `baseJumpMs` — время на средний прыжок (≈7 св. лет,
+ * столько на старте доступно). Дальше прирост как корень из отношения:
+ *
+ *   t = baseJumpMs * (d / 7) ^ 0.6
+ *
+ * Корень, а не линейка, потому что гиперпрыжок в Elite — не «полёт со
+ * скоростью», а переход через гиперпространство: дальность почти не
+ * влияет на время. Показатель 0.6 — компромисс: 4 св. года ≈ 12 мин,
+ * 7 ≈ 15, 17 (весь полный бак) ≈ 27 мин при базовых настройках.
+ *
+ * У ближних прыжков есть нижняя граница (40% от базовой): совсем
+ * мгновенных перелётов быть не должно, иначе теряется смысл встреч.
+ */
+export function baseJumpDuration(distanceLy: number, settings: Settings): number {
+  /*
+   * Опорная точка (выбрана пользователем): полный бак на ×200 — десять секунд.
+   *
+   * Полный бак — это MAX_FUEL = 70 св. лет, значит базовое время для любого
+   * прыжка выводится из него: `baseJumpMs` относится к пути в 70 св. лет.
+   * На ×1 такой путь займёт 2000 секунд ≈ 33 минуты, на ×200 — 10 секунд.
+   *
+   * Показатель 0.6 подобран в §71: короткий прыжок занимает не ноль времени,
+   * длинный растёт медленнее линейного, но всё же заметно растёт.
+   */
+  const reference = MAX_FUEL;
+  const ratio = Math.max(distanceLy, 0.5) / reference;
+  const scaled = settings.baseJumpMs * Math.pow(ratio, 0.6);
+  // Не короче 10% базовой и не длиннее базовой: путь не может занять больше
+  // времени, чем полный бак топлива, — это была бы ошибка в расчётах.
+  const clamped = Math.min(Math.max(scaled, settings.baseJumpMs * 0.1), settings.baseJumpMs);
+  return Math.max(0, Math.round(clamped));
+}
+
+/** Длительность прыжка в миллисекундах с учётом темпа и расстояния. */
+export function jumpDuration(settings: Settings, distanceLy = 7): number {
+  return Math.max(0, Math.round(baseJumpDuration(distanceLy, settings) / safeSpeed(settings)));
 }
 
 /** Переводит «базовые» миллисекунды полёта в реальные при текущем темпе. */
@@ -460,29 +744,89 @@ export function baseToReal(baseMs: number, settings: Settings): number {
 }
 
 /**
- * Реальный момент следующей встречи полёта, либо Infinity.
+ * Через сколько РЕАЛЬНОГО времени после прошлой встречи наступит следующая.
  *
- * Встречи хранятся в базовой шкале от вылета, а игра живёт в реальном
- * времени, поэтому остаток базовых миллисекунд переводится по текущему темпу.
+ * Плотность встреч задана в реальном времени, а не в базовом: это ключевое
+ * решение §76. Смысл простой — встреча это корабль, который вы проходите
+ * мимо, а не событие «на пути». Значит, чем дольше вы в пути, тем больше
+ * проходите. Медленная скорость растягивает время в пути, быстрая — сжимает.
+ *
+ * `encounterRate` из настроек работает множителем: «часто» — вдвое плотнее,
+ * «нет встреч» — отключает их вовсе.
  */
-export function nextEncounterAt(flight: Flight, settings: Settings): number {
-  const elapsedBase = flight.elapsedBaseMs;
-  for (const at of flight.pending) {
-    if (at > elapsedBase) {
-      // Сколько базовых миллисекунд осталось до встречи, переводим в реальные
-      return flight.dueAt + baseToReal(at - elapsedBase, settings);
-    }
+export const ENCOUNTER_PERIOD_MS = 120 * 1000;
+
+/* ---------- Патруль (§78) ---------- */
+
+/** Сколько топлива стоит одна встреча в патруле. */
+export const PATROL_FUEL_PER_ENCOUNTER = 1;
+/** Сколько топлива стоит бой (победа над враждебным). */
+export const PATROL_FUEL_PER_FIGHT = 1;
+/**
+ * Резерв на возврат домой.
+ *
+ * Патруль не начинается и прекращается, если бака не хватает на дорогу
+ * обратно. Игрок не должен застрять в космосе без топлива — это его
+ * прямое условие.
+ */
+export const PATROL_RETURN_RESERVE = 3;
+
+export function nextEncounterAt(flight: Flight, now: number, settings: Settings): number {
+  // Единственная точка, где решается «встречи отключены». Раньше это
+  // проверялось ещё и при генерации списка в startJump; списка больше нет,
+  // поэтому проверка должна жить только здесь — иначе `encounterRate: 0`
+  // перестанет отключать встречи (что и случилось при первом заходе §76).
+  if (settings.encounterRate <= 0) return Infinity;
+  const period = ENCOUNTER_PERIOD_MS / settings.encounterRate;
+  /*
+   * Точка отсчёта — момент последней встречи, и НИЧЕГО больше.
+   *
+   * Соблазнительно взять `Math.max(lastEncounterAt, now)`, чтобы встреча не
+   * назначалась в прошлое. Но `now` здесь — это `dueAt`, который цикл
+   * досчёта двигает вперёд на каждом шаге. Получалось, что назначенная
+   * встреча всё время отодвигается на один шаг и не наступает никогда:
+   * при досчёте одним вызовом встречи были, при досчёте по минутам — ни
+   * одной. Встреча в прошлом безопасна: цикл всё равно не отправится
+   * раньше, чем позволит `t > now`.
+   */
+  const natural = flight.lastEncounterAt + period;
+  /*
+   * ПОЛ: хотя бы одна встреча за перелёт.
+   *
+   * Без него быстрый полёт пустой: на ×200 полный бак проходится за 10 секунд,
+   * и при плотности раз в 90 секунд не случается ничего. Пользователь выбрал
+   * для ×200 ровно одну встречу — отсюда этот пол. Медленный темп получает
+   * много встреч, быстрый — одну: разница в добыче остаётся, но быстрый
+   * полёт не выглядит сломанным.
+   *
+   * Момент — за секунду до прибытия, чтобы встреча успела состояться до
+   * конца пути и не наложилась на прибытие.
+   */
+  /*
+   * §78: в патруле пола нет — там `arriveAt` бесконечно, и «середина пути»
+   * не имеет смысла. Патруль кончается по топливу, а не по времени,
+   * поэтому отсчёт всегда обычный: `lastEncounterAt + период`.
+   */
+  if (flight.patrol) return natural;
+  if (flight.encounters === 0) {
+    /*
+     * Момент — в середине пути, но не позже, чем за 20 секунд до прибытия:
+     * встреча должна успеть ОБНАРУЖИТЬСЯ до конца полёта, иначе игрок её
+     * не увидит, а счётчик покажет ноль. На очень коротких полётах (полный
+     * бак на ×200 — десять секунд) середина пути и есть эти десять секунд.
+     */
+    /*
+     * Половина пути — единственная точка, которая работает на ЛЮБОЙ
+     * длительности. Попытка взять «за 20 секунд до прибытия» на коротком
+     * перелёте (полный бак на ×200 — 3.8 секунды) уводила в отрицательное
+     * время, а обрезка до момента старта давала ровно начало полёта — и
+     * встреча не наступала, потому что цикл ждёт строго `t > now`.
+     */
+    return flight.departAt + (flight.arriveAt - flight.departAt) / 2;
   }
-  return Infinity;
+  return natural;
 }
 
-/**
- * Приводит полёт к текущему темпу: пересчитывает `arriveAt` из остатка
- * базового времени, сохраняя при этом уже прошедшую часть пути.
- *
- * Вызывается перед каждым досчётом, поэтому смена темпа действует сразу,
- * в том числе посреди полёта.
- */
 export function syncFlightToSpeed(flight: Flight, now: number, settings: Settings): Flight {
   // Сколько реального времени прошло с прошлой синхронизации
   const realMs = Math.max(0, now - flight.dueAt);
@@ -513,9 +857,14 @@ export function syncFlightToSpeed(flight: Flight, now: number, settings: Setting
   };
 }
 
-/** Попыток встречи за прыжок и шанс каждой (до умножения на encounterRate) */
-const ENCOUNTER_ATTEMPTS = 2;
-const ENCOUNTER_CHANCE = 0.35;
+/**
+ * Сколько времени есть на решение при нападении: от минимума до максимума.
+ *
+ * В оригинале на решение отводилось ограниченное время, и оно не зависело от
+ * длины пути. Здесь так же — 6–30 секунд реального времени.
+ */
+const ENCOUNTER_RESOLVE_MIN_MS = 6 * 1000;
+const ENCOUNTER_RESOLVE_MAX_MS = 30 * 1000;
 
 /**
  * Начало прыжка: топливо списывается сразу, прибытие по таймеру.
@@ -523,6 +872,21 @@ const ENCOUNTER_CHANCE = 0.35;
  * Здесь же применяется проверка контрабанды из TT110: взлёт со станции с
  * запрещённым грузом поднимает правовой статус (`FIST = FIST OR BAD`).
  */
+/**
+ * §82: перелёт прямо из патруля.
+ *
+ * Игрок в патруле не должен быть заперт: увидел на карте цель — улетел.
+ * Патруль при этом заканчивается сам, потому что `startJump` сменит
+ * `flight` на обычный прыжок.
+ *
+ * Топливо: патруль тратил по факту, а прыжок стоит как обычно. Двойного
+ * списания нет — патрульный `fuelUsed` остаётся в истории.
+ */
+export function jumpFromPatrol(state: GameState, target: number, now: number, settings: Settings): JumpResult {
+  if (!state.flight?.patrol) return startJump(state, target, now, settings);
+  return startJump({ ...state, flight: null, encounter: null }, target, now, settings);
+}
+
 export function startJump(state: GameState, target: number, now: number, settings: Settings): JumpResult {
   if (state.flight) return { state, error: 'in-flight' };
   const systems = systemsOf(state.galaxy);
@@ -533,24 +897,13 @@ export function startJump(state: GameState, target: number, now: number, setting
 
   // Длительность хранится в «базовых» миллисекундах (при speed = 1),
   // поэтому смена темпа потом влияет и на уже начатый полёт.
-  const baseDuration = Math.max(0, Math.round(settings.baseJumpMs));
-  let rng = state.rng;
-  const pending: number[] = [];
-  for (let k = 0; k < ENCOUNTER_ATTEMPTS; k++) {
-    const [roll, r1] = nextFloat(rng);
-    const [when, r2] = nextFloat(r1);
-    rng = r2;
-    if (roll < ENCOUNTER_CHANCE * settings.encounterRate) {
-      // Встречи — тоже в базовых миллисекундах от начала полёта
-      pending.push(Math.round(baseDuration * (0.1 + 0.8 * when)));
-    }
-  }
-  pending.sort((a, b) => a - b);
+  // Зависит от расстояния: долгий перелёт занимает больше времени.
+  const baseDuration = baseJumpDuration(d, settings);
 
   return {
     state: {
       ...state,
-      rng,
+      stats: { ...state.stats, jumps: state.stats.jumps + 1 },
       fuel: state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
       flight: {
@@ -562,11 +915,60 @@ export function startJump(state: GameState, target: number, now: number, setting
         remainingBaseMs: baseDuration,
         elapsedBaseMs: 0,
         dueAt: now,
-        pending,
+        // Встречи рождаются в процессе (§76), а не раскладываются заранее.
+        // Отсчёт первой — от момента вылета.
+        encounters: 0,
+        lastEncounterAt: now,
       },
     },
   };
 }
+
+/**
+ * Начало патруля: полёт внутри текущей системы (§78).
+ *
+ * Отличия от прыжка, которые надо держать в голове:
+ * - топливо НЕ списывается авансом: платим по мере встреч и боёв;
+ * - `to === from`: система не меняется;
+ * - время течёт по реальным часам, темп ×N не действует;
+ * - патруль кончается сам, когда топлива остаётся только на возврат.
+ *
+ * Ракеты: нужно 4, чтобы вообще начать. Тратить их будем по факту боя,
+ * а не все сразу — игрок должен видеть, на что уходят деньги.
+ */
+export function startPatrol(state: GameState, now: number): JumpResult {
+  if (state.flight) return { state, error: 'in-flight' };
+  if (state.ship.missiles < PATROL_MISSILES_REQUIRED) return { state, error: 'no-missiles' };
+  // Возврат домой бесплатный — станция рядом, но резерв нужен, чтобы
+  // патруль не начался «на последних каплях».
+  if (state.fuel <= PATROL_RETURN_RESERVE) return { state, error: 'no-fuel' };
+
+  return {
+    state: {
+      ...state,
+      stats: { ...state.stats, patrols: state.stats.patrols + 1 },
+      flight: {
+        from: state.system,
+        to: state.system,
+        departAt: now,
+        // Патруль не имеет конца по времени: `arriveAt` = бесконечность,
+        // а прекращает его топливо. Иначе досчёт ждал бы прибытия.
+        arriveAt: Number.POSITIVE_INFINITY,
+        fuelUsed: 0,
+        remainingBaseMs: Number.POSITIVE_INFINITY,
+        elapsedBaseMs: 0,
+        dueAt: now,
+        encounters: 0,
+        lastEncounterAt: now,
+        patrol: true,
+        patrolFuelUsed: 0,
+      },
+    },
+  };
+}
+
+/** Сколько ракет нужно, чтобы выйти в патруль (§78). */
+export const PATROL_MISSILES_REQUIRED = 4;
 
 /* ---------- Галактический гиперпрыжок ---------- */
 
@@ -604,6 +1006,8 @@ export function galacticJump(state: GameState): GalacticJumpResult {
       ship: { ...state.ship, galacticHyperdrive: false },
       // Смена галактики очищает криминальное дозье
       legal: 0,
+      escapeRoute: [],
+      escapeStatus: -1,
       encounter: null,
       combat: null,
       flight: null,
@@ -657,11 +1061,7 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
   const flight = state.flight!;
   const dice = new Dice(state.rng);
   const gov = systemsOf(state.galaxy)[flight.to].government;
-  // Сработавшую встречу убираем из базовой шкалы
-  const rest: Flight = {
-    ...flight,
-    pending: flight.pending.filter((at) => at > flight.elapsedBaseMs),
-  };
+  const rest: Flight = { ...flight, encounters: flight.encounters + 1, lastEncounterAt: at };
 
   let r = dice.next();
   let role: EncounterRole;
@@ -672,10 +1072,16 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
   } else if ((r -= POLICE_CHANCE[gov]) < HUNTER_CHANCE) {
     role = 'hunter';
   } else if ((r -= HUNTER_CHANCE) < CANISTER_CHANCE) {
-    // Дрейфующий контейнер: забирается только топливосборщиком
+    /*
+     * Дрейфующий контейнер: забирается только топливосборщиком.
+     *
+     * `flight` здесь — БЕЗ отметки о встрече: контейнер не корабль и не
+     * должен тратить слот. Иначе на быстрых перелётах пол «одна встреча за
+     * полёт» срабатывал на канистре, и кораблей не появлялось вовсе.
+     */
     const index = Math.floor(dice.next() * 16);
     const amount = 1 + Math.floor(dice.next() * 3);
-    let next: GameState = { ...state, rng: dice.rng, flight: rest };
+    let next: GameState = { ...state, rng: dice.rng, flight };
     let text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. Топливосборщика нет, проходим мимо`;
     if (state.ship.fuelScoops) {
       const room = Math.min(amount, cargoRoom(state, index));
@@ -704,17 +1110,49 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
           : pickPirate(state.kills, dice);
   const hostile = role === 'pirate' ? dice.next() < 0.8 : role === 'trader' ? false : state.legal >= 1;
 
-  const duration = flight.arriveAt - flight.departAt;
+  /*
+   * Через сколько встреча разрешится — считается ОТ МОМЕНТА ОБНАРУЖЕНИЯ.
+   *
+   * Было: доля от всей длительности полёта (`arriveAt - departAt`). Это
+   * годилось, пока встреча назначалась заранее в `startJump` и `at` был
+   * точкой на шкале пути. §76 рождает встречи в процессе, и старая формула
+   * давала `resolveAt` в ПРОШЛОМ: полёт длиной 13 минут, встреча на 5-й
+   * минуте, а «разрешить» её надо через 2% от 13 минут — то есть раньше,
+   * чем её увидели. События шли в неправильном порядке, а прибытие
+   * наступало раньше срока.
+   *
+   * Теперь: 6–30 секунд на решение для нападающего (было столько же в
+   * пересчёте на короткий прыжок), таймаут ожидания для мирного.
+   */
   const resolveAt = hostile
-    ? Math.round(at + duration * (0.02 + 0.06 * dice.next()))
+    ? Math.round(at + ENCOUNTER_RESOLVE_MIN_MS + (ENCOUNTER_RESOLVE_MAX_MS - ENCOUNTER_RESOLVE_MIN_MS) * dice.next())
     : at + settings.encounterTimeoutMs;
 
+  /*
+   * Отмечаем встречу: следующая отсчитывается от этого момента (§76).
+   *
+   * Здесь, а не в начале функции: дрейфующий контейнер — НЕ встреча, это
+   * находка на пути. Раньше он считался встречей и «съедал» слот, из-за
+   * чего на быстрых скоростях перелёт оставался без кораблей вовсе — пол
+   * срабатывал на канистре, а не на пирате. Эта ветка до контейнера не
+   * доходит: контейнер возвращает состояние выше, со своим `flight`.
+   */
+  /*
+   * §79: в режиме пиратства торговец — тоже цель.
+   *
+   * `outcome` означает «что происходит во встрече»: мирный корабль просто
+   * уходит (`leave`), и это автоматически исключало его из разбора. Но
+   * пирату неважно, что торговец летит мимо, — именно его и грабят.
+   * Поэтому при криминальном статусе помечаем встречу как `attack`:
+   * не торговец нападает, а НА НЕГО нападают.
+   */
+  const raidable = role === 'trader' && isCriminal(state.legal);
   const encounter: Encounter = {
     role,
     enemyId,
     detectedAt: at,
     resolveAt,
-    outcome: hostile ? 'attack' : 'leave',
+    outcome: hostile || raidable ? 'attack' : 'leave',
   };
   const shipName = enemyById(enemyId).name;
   events.push({
@@ -722,13 +1160,184 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
     at,
     text: `В радиусе действия корабль: ${ROLE_NAMES[role]} (${shipName})`,
   });
-  return { ...state, rng: dice.rng, flight: rest, encounter };
+  /*
+   * §78: в патруле каждая встреча стоит топлива.
+   *
+   * Списываем здесь, при обнаружении, а не при разрешении: если игрок
+   * уйдёт из игры между этими моментами, «долг» не потеряется. Бой
+   * оплачивается отдельно, при победе.
+   */
+  let charged = state;
+  let restCharged = rest;
+  if (rest.patrol) {
+    const cost = PATROL_FUEL_PER_ENCOUNTER;
+    restCharged = {
+      ...rest,
+      patrolFuelUsed: (rest.patrolFuelUsed ?? 0) + cost,
+    };
+    charged = { ...state, fuel: Math.max(0, state.fuel - cost) };
+  }
+  return { ...charged, rng: dice.rng, flight: restCharged, encounter };
+}
+
+/**
+ * Разрешает встречу автобоем, когда игрок не успел решить (§40).
+ *
+ * Безопасный режим: слабый враждебный → победа, иначе → пропуск.
+ * Смерти игрока быть не может, капсула не тратится.
+ */
+function autoDecision(
+  state: GameState,
+  at: number,
+  _settings: Settings,
+  events: GameEvent[],
+): GameState {
+  const enc = state.encounter!;
+  const enemy = enemyOf(enc.enemyId);
+  const hostile = enc.outcome === 'attack';
+  const lasers = {
+    pulse: state.ship.laser === 'pulse',
+    beam: state.ship.laser === 'beam',
+    military: state.ship.laser === 'military',
+    mining: state.ship.laser === 'mining',
+  };
+  // §78: в патруле решает СНАРЯЖЕНИЕ, а не симуляция раундов.
+  // Игрок не смотрит на экран — разыгранный бой с шансом провала там
+  // неуместен. Правило простое: «есть ли чем справиться».
+  const best = bestLaserOf(lasers);
+  const kit = {
+    militaryLaser: state.ship.laser === 'military',
+    ecm: state.ship.ecm,
+    energyBomb: state.ship.energyBomb,
+    missiles: state.ship.missiles,
+  };
+  const patrol = state.flight?.patrol === true;
+
+  /*
+   * §79: РЕЖИМ ПИРАТСТВА.
+   *
+   * Если правовой статус криминальный, патруль превращается в пиратство:
+   * в зачёт идут ВСЕ встречные корабли, а не только пираты. Торговец —
+   * законная добыча, полиция — тоже, если осмелишься (и это добавит
+   * розыска). Смысл: игрок сам выбрал путь и живёт по его правилам.
+   *
+   * Отдельно — РАЗБОЙ: на торговца можно напасть и чистым, но это
+   * преступление, и статус вырастет. Так появляется вход в пиратство.
+   */
+  const criminal = isCriminal(state.legal);
+  const raiding = patrol && criminal;
+  const can = availableDecisions(enemy, best, true, hostile);
+  const beat = canBeat(enemy, kit, best);
+  // Пиратство: бить можно любого. Обычный патруль: только враждебных
+  // (пират, а также полиция и охотник, если статус уже криминальный).
+  const mayAttack = raiding ? beat : hostile && beat;
+  const r = autoResolve(enemy, { ...can, attack: mayAttack }, hostile);
+  events.push({ type: r.outcome, at, text: r.text });
+  // Статистика: победа считается убийством ровно так же, как и при
+  // ручном решении, иначе журнал расходится с рангом.
+  const won = r.outcome === 'won' || r.outcome === 'auto-victory';
+  const skipped = r.outcome === 'skipped' || r.outcome === 'auto-skip';
+
+  /*
+   * §78: бой в патруле стоит топлива, а бой с БОЛЬШИМ кораблём — ещё и
+   * ракеты.
+   *
+   * Ракета уходит только на тех, кому она нужна: Python и Анаконду. Первый
+   * заход тратил её на любую победу — замер показал абсурд: четыре ракеты
+   * сгорали на Sidewinder'ах за четыре боя, и после этого большие корабли
+   * закрывались до конца патруля. Ракеты нужны как раз для них, а не
+   * наоборот.
+   *
+   * Пропуск стоит ноль: не дрались — не платим.
+   */
+  let fuel = state.fuel;
+  let ship = state.ship;
+  let flight = state.flight;
+  if (flight?.patrol && won) {
+    fuel = Math.max(0, fuel - PATROL_FUEL_PER_FIGHT);
+    flight = { ...flight, patrolFuelUsed: (flight.patrolFuelUsed ?? 0) + PATROL_FUEL_PER_FIGHT };
+    if (needsMissile(enemyOf(state.encounter!.enemyId))) {
+      ship = { ...ship, missiles: Math.max(0, ship.missiles - 1) };
+    }
+  }
+
+  /*
+   * §79: ДОБЫЧА С ГРАБЕЖА.
+   *
+   * Победа над торговцем даёт не награду (он не преступник), а ГРУЗ. Он
+   * уходит в трюм; что не поместилось — теряется. Это и есть смысл
+   * пиратства: не деньги за голову, а товар.
+   *
+   * Статус растёт: нападение на мирного — преступление. За убийство
+   * полицейского — сильнее (POLICE_KILL_LEGAL).
+   */
+  let cash = state.cash + r.bounty;
+  let legal = state.legal;
+  let cargo = state.cargo;
+  let holdSpace = state.holdSpace;
+  let looted = 0;
+
+  if (won && enc.role === 'trader') {
+    /*
+     * Груз торговца. Сколько контейнеров — по блюпринту корабля, товар —
+     * из ассортимента системы, как и в обычных обломках (§73). Разница
+     * только в том, что это не «выпало», а «отобрано».
+     */
+    const count = canisterCount(enc.enemyId, 'trader');
+    if (count > 0) {
+      const rolled = rollCanisters(count, state.market, state.rng);
+      legal = Math.min(255, legal + RAID_LEGAL);
+      const got = autoScoop(cargo, holdSpace, rolled.canisters);
+      cargo = got.cargo;
+      holdSpace = got.holdSpace;
+      looted = got.taken;
+      events.push({
+        type: 'raided',
+        at,
+        text:
+          looted > 0
+            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником`
+            : 'Торговец уничтожен, но трюм полон — груз потерян',
+      });
+    }
+  } else if (won && enc.role === 'police') {
+    legal = Math.min(255, legal + POLICE_KILL_LEGAL);
+  }
+
+  /*
+   * §80: новый грабёж обнуляет маршрут побега. Начал грабить — беги
+   * заново. Иначе выходило бы, что пират копит планеты и тратит их
+   * на будущие преступления, то есть «откладывает долг».
+   */
+  const escaped = legal > state.legal ? { route: [], status: -1 } : { route: state.escapeRoute, status: state.escapeStatus };
+
+  return {
+    ...state,
+    cash,
+    fuel,
+    ship,
+    flight,
+    legal,
+    escapeRoute: escaped.route,
+    escapeStatus: escaped.status,
+    cargo,
+    holdSpace,
+    kills: state.kills + (won ? 1 : 0),
+    stats: {
+      ...state.stats,
+      kills: state.stats.kills + (won ? 1 : 0),
+      skipped: state.stats.skipped + (skipped ? 1 : 0),
+      raided: state.stats.raided + (looted > 0 ? 1 : 0),
+    },
+    encounter: null,
+    combat: null,
+  };
 }
 
 /** Начинает бой и, в автоматическом режиме, сразу доигрывает его. */
 function beginCombat(state: GameState, at: number, settings: Settings, events: GameEvent[]): GameState {
   const enc = state.encounter!;
-  const combat = startCombat(enc.enemyId, state.ship, settings.deathMode === 'insurance', cargoTons(state), state.rng);
+  const combat = startCombat(enc.enemyId, state.ship, cargoTons(state), state.rng);
   const startText =
     enc.role === 'police' ? 'Полиция требует остановиться и открывает огонь' : `${ROLE_NAMES[enc.role]} атакует`;
   const next: GameState = {
@@ -769,15 +1378,10 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
 
   /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
   const resume = (st: GameState): GameState => {
-    if (!st.flight) return st;
-    return {
-      ...st,
-      flight: {
-        ...st.flight,
-        arriveAt: st.flight.arriveAt + pausedMs,
-        pending: st.flight.pending.map((t) => t + pausedMs),
-      },
-    };
+    if (!st.flight || pausedMs <= 0) return st;
+    // Сдвиг через `dueAt`, а не правкой одного `arriveAt`: иначе следующий
+    // досчёт пересчитает прибытие из остатка и сотрёт сдвиг (§73).
+    return { ...st, flight: shiftFlightBy(st.flight, pausedMs) };
   };
 
   /** Возврат на станцию вылета: полёт отменяется, рынок обновляется. */
@@ -806,19 +1410,58 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
         next = { ...next, legal: Math.min(255, next.legal + POLICE_KILL_LEGAL) };
         text += '. Вы стали беглецом';
       }
+
+      /*
+       * Обломки. Сколько контейнеров выпало — из блюпринта корабля
+       * (docs/cargo-canisters.md), товар — из ассортимента системы.
+       * Контейнеров нет, если их нет по блюпринту или некуда положить:
+       * пустой трюм без скупов в оригинале означал бы разбитые канистры.
+       */
+      const count = canisterCount(c.enemyId, active.role);
       const dice = new Dice(next.rng);
-      if (next.ship.fuelScoops && dice.next() < 0.5) {
-        const index = Math.floor(dice.next() * 16);
-        const amount = 1 + Math.floor(dice.next() * 2);
-        const room = Math.min(amount, cargoRoom(next, index));
-        if (room > 0) {
-          const cargo = next.cargo.slice();
-          cargo[index] += room;
-          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? next.holdSpace - room : next.holdSpace };
-          text += `. Подобран груз: ${COMMODITIES[index].name}, ${room}`;
-        }
-      }
+      let leftovers: CargoCanister[] = [];
       next = { ...next, rng: dice.rng };
+
+      if (count > 0) {
+        const rolled = rollCanisters(count, next.market, next.rng);
+        next = { ...next, rng: rolled.rng };
+        leftovers = rolled.canisters;
+
+        if (!next.ship.fuelScoops) {
+          // Без топливосборщика контейнеры не подобрать — ровно как в
+          // оригинале, где канистра при касании разбивалась.
+          text += `. В обломках ${count} ${plural(count, 'контейнер', 'контейнера', 'контейнеров')}, но без топливосборщика их не взять`;
+          say(text);
+          return resume(next);
+        }
+
+        if (settings.autoScoop) {
+          // Автоподбор: берём всё, что влезает, остальное остаётся в космосе.
+          const got = autoScoop(next.cargo, next.holdSpace, leftovers);
+          next = { ...next, cargo: got.cargo, holdSpace: got.holdSpace };
+          if (got.taken > 0) {
+            text += `. Подобрано контейнеров: ${got.taken}`;
+          }
+          if (got.left > 0) text += `, ${got.left} не поместилось`;
+          say(text);
+          return resume(next);
+        }
+
+        // Ручной подбор: полёт встаёт на паузу до решения игрока.
+        say(text);
+        return {
+          ...resume(next),
+          salvage: {
+            canisters: leftovers,
+            taken: 0,
+            left: 0,
+            pausedAt: at,
+            pausedMs: 0,
+            enemyName: enemy.name,
+          },
+        };
+      }
+
       say(text);
       return resume(next);
     }
@@ -831,45 +1474,149 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
     case 'enemy-left':
       say(`${enemy.name} потерял интерес и ушёл`);
       return resume(s);
-    case 'pod': {
-      const fresh: PlayerShip = { ...STARTER_SHIP };
+    /*
+     * Корабль повреждён. §77: смерти нет — это единственный «плохой» исход.
+     *
+     * Раньше здесь был выбор из двух ветвей по настройке `deathMode`
+     * («Страховка» / «Без смерти»), а до них — капсула. Капсулу убрали
+     * вместе со смертью, настройку тоже: осталась одна честная цена
+     * проигрыша.
+     *
+     * Цена выбрана не «с нуля»: груз и четверть денег — это ровно то,
+     * что терялось при страховке. Но корабль и всё купленное оборудование
+     * остаются: отбирать их значило бы наказывать за один неудачный бой
+     * всем, что нажито.
+     *
+     * Почему теряется именно четверть денег, а не груз целиком: без
+     * этого проигрыш в бою на пустом трюме не стоил бы ничего, и игрок
+     * мог бы таранить Анаконду без последствий.
+     */
+    default: {
       const next = returnToStation({
         ...s,
-        ship: fresh,
         cargo: s.cargo.map(() => 0),
-        holdSpace: holdCapacity(fresh),
+        holdSpace: holdCapacity(s.ship),
+        cash: Math.floor(s.cash * INSURANCE_CASH_KEPT),
       });
       events.push({
-        type: 'death',
+        type: 'damaged',
         at,
-        text: 'Капсула доставила вас на станцию вылета. Корабль, груз и оборудование потеряны',
+        text: 'Корабль повреждён и отбуксирован на станцию вылета. Груз и часть денег потеряны',
       });
       return next;
     }
-    default: {
-      // гибель корабля
-      if (settings.deathMode === 'insurance') {
-        const next = returnToStation({
-          ...s,
-          cargo: s.cargo.map(() => 0),
-          holdSpace: holdCapacity(s.ship),
-          cash: Math.floor(s.cash * INSURANCE_CASH_KEPT),
-        });
-        events.push({
-          type: 'death',
-          at,
-          text: 'Корабль уничтожен. Страховка вернула вас на станцию вылета, груз и часть денег потеряны',
-        });
-        return next;
-      }
-      events.push({
-        type: 'death',
-        at,
-        text: 'Корабль серьёзно повреждён и отбуксирован на станцию вылета. Ничего не потеряно',
-      });
-      return returnToStation(s);
-    }
   }
+}
+
+/**
+ * §80: Побег от последствий.
+ *
+ * Правила, принятые пользователем:
+ * - каждая НОВАЯ планета гасит единицу правового статуса;
+ * - вернулся на уже посещённую — маршрут откатывается к началу,
+ *   статус возвращается к тому, что был на старте побега;
+ * - набрал 12 разных планет — статус чист, маршрут сгорает;
+ * - новый грабёж обнуляет маршрут: начал грабить — беги заново.
+ *
+ * Возвращается новая пара значений (статус, маршрут, снимок), а события
+ * складываются в переданный массив — так же, как это делает `arrive`.
+ */
+function escapeStep(
+  state: GameState,
+  /** Статус после взлёта — с контрабандой он уже вырос (TT110). */
+  legalAtDeparture: number,
+  to: number,
+  name: string,
+  at: number,
+  events: GameEvent[],
+): { legal: number; route: number[]; status: number } {
+  const carriers = contrabandLevel(state.cargo);
+
+  /*
+   * §80.1: КОНТРАБАНДА В ТРЮМЕ — ПОБЕГ НЕВОЗМОЖЕН.
+   *
+   * Везёшь рабов или наркотики — ты не бежишь от закона, ты продолжаешь
+   * преступление. Маршрут не начинается, а уже начатый сгорает.
+   *
+   * Это единственное наказание за контрабанду во время побега, и оно
+   * работает без новых чисел: игрок видит, что трюм не пуст, и понимает,
+   * почему побег стоит.
+   */
+  if (carriers > 0) {
+    if (state.escapeRoute.length > 0) {
+      /*
+       * Откат к началу побега — как при возврате на посещённую планету.
+       * Сама контрабанда статус уже подняла (на взлёте, TT110), и это
+       * остаётся: трюм не опустел, розыск не отменился.
+       */
+      events.push({
+        type: 'escape-reset',
+        at,
+        text: `Побег провален: в трюме контрабанда (${carriers}). Маршрут сгорел, статус ${state.escapeStatus}`,
+      });
+      return { legal: state.escapeStatus, route: [], status: -1 };
+    }
+    return { legal: state.legal, route: [], status: -1 };
+  }
+
+  /*
+   * Статус гасится ДОЛЕЙ, а не по единице. Снимок — статус на старте
+   * маршрута: после N планет остаётся `снимок × (12 − N) / 12`.
+   *
+   * Доля, а не вычитание, потому что статус бывает 255, а планет максимум
+   * двенадцать: вычитанием от 255 не избавиться никогда.
+   */
+  /*
+   * Бежать не от чего: статус нулевой и маршрута нет. Это не «побег
+   * удался» — просто нечего гасить. Важно проверить ДО создания маршрута,
+   * иначе чистый пилот после первого же прыжка получал бы «побег удался».
+   */
+  if (legalAtDeparture === 0 && state.escapeRoute.length === 0) {
+    return { legal: 0, route: [], status: -1 };
+  }
+
+  const starting = state.escapeStatus < 0 || state.escapeRoute.length === 0;
+  const route = starting ? [] : state.escapeRoute;
+  const startLegal = starting ? legalAtDeparture : state.escapeStatus;
+
+  // Вернулся туда, где уже был, — откат к началу побега.
+  if (route.includes(to)) {
+    events.push({
+      type: 'escape-reset',
+      at,
+      text: `Побег провален: ${name} уже посещена. Статус вернулся к ${startLegal}`,
+    });
+    return { legal: startLegal, route: [], status: -1 };
+  }
+
+  const grown = [...route, to];
+  const legal = grown.length >= ESCAPE_PLANETS ? 0 : Math.floor((startLegal * (ESCAPE_PLANETS - grown.length)) / ESCAPE_PLANETS);
+
+  /*
+   * Доля может дать нуль раньше порога — если статус был мал. Но это не
+   * «побег удался»: маршрут ещё не пройден, и объявлять амнистию рано.
+   * Побег считается состоявшимся только на пороге 12 планет.
+   */
+  if (grown.length >= ESCAPE_PLANETS) {
+    events.push({
+      type: 'escape-clean',
+      at,
+      text: `Побег удался: ${grown.length} разных планет, статус чист`,
+    });
+    return { legal: 0, route: [], status: -1 };
+  }
+
+  // Статус обнулился долей раньше порога — маршрут продолжается.
+  if (legal === 0) {
+    return { legal: 0, route: grown, status: startLegal };
+  }
+
+  events.push({
+    type: 'escape-step',
+    at,
+    text: `Побег: ${name} (${grown.length}/${ESCAPE_PLANETS}), статус ${legal}`,
+  });
+  return { legal, route: grown, status: startLegal };
 }
 
 /** Прибытие в систему: обновляется рынок со случайным колебанием. */
@@ -878,7 +1625,26 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
   const system = systemsOf(state.galaxy)[flight.to];
   const [fluct, rng] = nextByte(state.rng);
   if (state.encounter) events.push({ type: 'vanished', at, text: 'Корабль остался позади' });
-  events.push({ type: 'arrived', at, system: flight.to, name: system.name, text: `Прибытие: ${system.name}` });
+  events.push({ type: 'arrived', at, name: system.name, text: `Прибытие: ${system.name}` });
+
+  /*
+   * §80.1: ПОБЕГ ОТМЕНЯЕТ ДЕЛЕНИЕ.
+   *
+   * В оригинале каждый прыжок делит статус пополам (`SRL (HL)`). Пока
+   * статус не криминальный, ниже нуля не уйти — делить нечего, и это
+   * правило работает как раньше.
+   *
+   * Но у преступника первый же прыжок открывает маршрут побега, и тогда
+   * действует СВОЁ правило: доля от снимка. Два наказания одновременно
+   * (деление + планеты) давали непонятную арифметику и, что хуже,
+   * стирали контрабанду, набранную в пути.
+   *
+   * Поэтому: идёт побег — деления нет, только планеты.
+   */
+  const escaping = isCriminal(state.legal) || state.escapeRoute.length > 0;
+  const legalAtArrival = escaping ? state.legal : state.legal >> 1;
+  const escape = escapeStep(state, legalAtArrival, flight.to, system.name, at, events);
+
   return {
     ...state,
     system: flight.to,
@@ -887,7 +1653,53 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
     flight: null,
     encounter: null,
     combat: null,
-    legal: state.legal >> 1,
+    legal: escape.legal,
+    escapeRoute: escape.route,
+    escapeStatus: escape.status,
+  };
+}
+
+/**
+ * Конец патруля (§78): корабль возвращается на станцию.
+ *
+ * Причина всегда одна — топливо. Не «время вышло», не «игрок устал»:
+ * бака хватает ровно на столько встреч, сколько в нём помещается.
+ * Так «поставил и забыл» получает встроенный предел, и игрок никогда
+ * не застревает в космосе пустым.
+ */
+/**
+ * §82: досрочный выход из патруля по кнопке «Вернуться».
+ *
+ * `endPatrol` вызывается таймером топлива, а здесь игрок решает сам.
+ * Разницы в результате нет: патруль заканчивается, корабль на станции.
+ * Топливо не списывается — возврат бесплатный, станция рядом.
+ */
+export function returnFromPatrol(state: GameState, at: number): { state: GameState; events: GameEvent[] } {
+  if (!state.flight?.patrol) return { state, events: [] };
+  const events: GameEvent[] = [];
+  const flight = state.flight;
+  events.push({
+    type: 'patrol-end',
+    at,
+    text: `Возврат с патруля: ${flight.encounters} ${plural(flight.encounters, 'встреча', 'встречи', 'встреч')}, израсходовано ${flight.patrolFuelUsed ?? 0} ед. топлива`,
+  });
+  return { state: { ...state, flight: null, encounter: null }, events };
+}
+
+function endPatrol(state: GameState, at: number, events: GameEvent[]): GameState {
+  const flight = state.flight!;
+  const used = flight.patrolFuelUsed ?? 0;
+  events.push({
+    type: 'patrol-end',
+    at,
+    text: `Патруль окончен: топливо на возврат. Израсходовано ${used} ед. за ${flight.encounters} ${plural(flight.encounters, 'встречу', 'встречи', 'встреч')}`,
+  });
+  return {
+    ...state,
+    // Бак не обнуляем: резерв на возврат потрачен «на дорогу», но это
+    // отдельная строка. Показываем остаток честно.
+    flight: null,
+    encounter: null,
   };
 }
 
@@ -910,31 +1722,78 @@ export function advance(
     s = { ...s, combat: { ...s.combat, pausedAt: now, pausedMs: s.combat.pausedMs + (now - s.combat.pausedAt) } };
   }
 
-  for (let guard = 0; guard < 500; guard++) {
-    if (s.combat || !s.flight) break;
+  // Подбор из обломков тоже держит полёт: пока игрок решает, что взять,
+  // время пути не идёт — иначе обломки «уедут» вместе с прибытием.
+  if (s.salvage && now > s.salvage.pausedAt) {
+    s = { ...s, salvage: { ...s.salvage, pausedAt: now, pausedMs: s.salvage.pausedMs + (now - s.salvage.pausedAt) } };
+  }
+
+  /*
+   * Предел итераций — защита от вечного цикла, а не от длинного досчёта.
+   *
+   * §76 сделал встречи частыми: при encounterRate=100 и двух сутках
+   * отсутствия событий набирается несколько тысяч. Старые 500 обрывали
+   * досчёт до прибытия, и игрок возвращался «в пути» спустя сутки. Берём
+   * запас на порядок, сохраняя защиту от зацикливания.
+   */
+  for (let guard = 0; guard < 20000; guard++) {
+    if (s.combat || s.salvage || !s.flight) break;
     const f = s.flight;
     // Следующее событие полёта в реальном времени — по ТЕКУЩЕМУ темпу.
     // Так смена темпа действует на уже начатый полёт, но события посреди
     // интервала не теряются при досчёте одним вызовом.
     const tArrive = f.dueAt + baseToReal(f.remainingBaseMs, settings);
     const tEnc = s.encounter ? s.encounter.resolveAt : Infinity;
-    const tSpawn = s.encounter ? Infinity : nextEncounterAt(f, settings);
+    const tSpawn = s.encounter ? Infinity : nextEncounterAt(f, f.dueAt, settings);
     const t = Math.min(tArrive, tEnc, tSpawn);
     if (t > now) break;
+    /*
+     * Событие не может случиться РАНЬШЕ, чем уже пройденный путь.
+     *
+     * Встреча, назначенная в момент, который досчёт уже прошёл (например,
+     * пол, поставленный на середину короткого перелёта), подтягивает
+     * `syncFlightToSpeed` к прошлому. Там `realMs` обрезается нулём, но
+     * остаток пути уже уменьшен в предыдущем вызове — и полёт «теряет»
+     * отрезок. Замер §76: прибытие наступало на 100 секунд раньше срока,
+     * ровно по 20 секунд за событие. Досчитываем всё до момента `now`.
+     */
+    const tEvent = Math.max(t, f.dueAt);
 
     // Подводим полёт ровно к моменту события: начисляем прошедшие базовые
     // миллисекунды и заново выводим `arriveAt` из остатка.
-    const advanced = syncFlightToSpeed(f, t, settings);
+    const advanced = syncFlightToSpeed(f, tEvent, settings);
     if (advanced !== f) s = { ...s, flight: advanced };
 
     if (s.encounter && tEnc <= tArrive) {
+      /*
+       * Точка отсчёта следующих встреч — момент ОБНАРУЖЕНИЯ этой.
+       *
+       * Он уже записан в `spawnEncounter`. Здесь ничего не трогаем: если
+       * сдвигать отсчёт на момент разрешения, плотность падает вдвое-втрое —
+       * следующая встреча ждёт, пока разберётся предыдущая. Именно так и
+       * вышло в первом заходе §76: на ×1 получалось 3.8 встречи вместо 6.
+       */
       if (s.encounter.outcome === 'leave') {
         events.push({ type: 'vanished', at: tEnc, text: 'Корабль покинул радиус действия' });
         s = { ...s, encounter: null };
       } else {
-        s = beginCombat(s, tEnc, settings, events);
+        // §38.1: раундов нет. Игрок не решил за отведённое время —
+        // слабый враждебный даёт победу, сильный или нейтральный пропуск.
+        // Смерти нет, капсула не тратится (§40).
+        s = autoDecision(s, tEnc, settings, events);
       }
     } else if (!s.encounter && tSpawn < tArrive) {
+      /*
+       * §78: топливо кончилось — патруль окончен, корабль возвращается.
+       *
+       * Проверка стоит ПЕРЕД появлением встречи, а не после: так игрок
+       * никогда не окажется без топлива в бою. Нужен запас на саму встречу
+       * и бой плюс резерв на дорогу домой.
+       */
+      if (s.flight?.patrol && s.fuel < PATROL_FUEL_PER_ENCOUNTER + PATROL_FUEL_PER_FIGHT + PATROL_RETURN_RESERVE) {
+        s = endPatrol(s, tSpawn, events);
+        break;
+      }
       s = spawnEncounter(s, tSpawn, settings, events);
     } else {
       s = arrive(s, tArrive, events);
@@ -970,6 +1829,135 @@ export function combatAction(
   return { state: combat.outcome ? finishCombat(s, now, settings, events) : s, events };
 }
 
+/* ---------- Подбор груза из обломков ---------- */
+
+/**
+ * Отодвигает полёт на `realMs` реальных миллисекунд — «время на паузе не
+ * считается».
+ *
+ * Как это работает. Истина о пути — пара `dueAt` + `remainingBaseMs`:
+ * `dueAt` это момент, на который посчитан остаток. Досчёт берёт
+ * `realMs = now − dueAt` и вычитает из остатка `realMs · темп`. Значит,
+ * чтобы полёт не продвинулся за время паузы, достаточно сдвинуть `dueAt`
+ * вперёд на длину паузы: тот же `now` окажется «раньше» на эту величину,
+ * и вычтется меньше.
+ *
+ * `arriveAt` сдвигаем на ту же величину для согласованности — он
+ * производный и пересчитается из остатка при следующем досчёте.
+ *
+ * `pending` (встречи) трогать не надо: они хранятся в базовой шкале и
+ * отсчитываются от `dueAt`, поэтому сдвиг `dueAt` отодвигает и их —
+ * ровно так же, как отодвигает прибытие.
+ */
+function shiftFlightBy(flight: Flight, realMs: number): Flight {
+  return {
+    ...flight,
+    dueAt: flight.dueAt + realMs,
+    arriveAt: flight.arriveAt + realMs,
+  };
+}
+
+/**
+ * Продлевает полёт на время, которое он простоял на паузе из-за подбора.
+ *
+ * Та же логика, что в `finishCombat` после боя: время, пока игрок решал,
+ * не должно съедать путь. Без этого «подождал три минуты у обломков» =
+ * «прилетел на три минуты раньше» — то есть выбор был бы не бесплатным,
+ * а крадущим дорогу, и чем внимательнее игрок, тем хуже.
+ */
+function resumeAfterSalvage(state: GameState): GameState {
+  const sv = state.salvage;
+  const flight = state.flight;
+  if (!sv || !flight || sv.pausedMs <= 0) return state;
+  return { ...state, flight: shiftFlightBy(flight, sv.pausedMs) };
+}
+
+export type SalvageError = 'none' | 'no-room';
+
+/**
+ * Взять один контейнер из обломков по индексу.
+ *
+ * Если в трюме не хватает места, контейнер остаётся лежать: игрок может
+ * сначала выбросить что-нибудь ненужное и вернуться к нему. Именно ради
+ * этого выбор и ручной, а не автоматический, — в тесноте надо решать,
+ * что дороже.
+ */
+export function salvageTake(
+  state: GameState,
+  index: number,
+  at: number,
+): { state: GameState; error: SalvageError } {
+  const sv = state.salvage;
+  if (!sv || index < 0 || index >= sv.canisters.length) return { state, error: 'none' };
+  const canister = sv.canisters[index];
+  const got = scoopOne(state.cargo, state.holdSpace, canister);
+  if (!got) return { state, error: 'no-room' };
+  const rest = sv.canisters.filter((_, i) => i !== index);
+  const closed = rest.length === 0 ? resumeAfterSalvage(state) : state;
+  const next: GameState = {
+    ...closed,
+    cargo: got.cargo,
+    holdSpace: got.holdSpace,
+    salvage: rest.length > 0 ? { ...sv, canisters: rest, taken: sv.taken + 1, pausedAt: at } : null,
+    // Контейнер с контрабандой повышает правовой статус так же, как
+    // покупка на рынке: за груз отвечает командир, а не продавец.
+    legal: Math.min(255, state.legal + contrabandLevel(got.cargo) - contrabandLevel(state.cargo)),
+  };
+  return { state: next, error: 'none' };
+}
+
+/** Взять всё, что влезает, и закрыть подбор. */
+export function salvageTakeAll(state: GameState, at: number): { state: GameState; taken: number; left: number } {
+  const sv = state.salvage;
+  if (!sv) return { state, taken: 0, left: 0 };
+  const got = autoScoop(state.cargo, state.holdSpace, sv.canisters);
+  return {
+    taken: got.taken,
+    left: got.left,
+    state: {
+      ...resumeAfterSalvage(state),
+      cargo: got.cargo,
+      holdSpace: got.holdSpace,
+      legal: Math.min(255, state.legal + contrabandLevel(got.cargo) - contrabandLevel(state.cargo)),
+      salvage: null,
+    },
+  };
+}
+
+/** Закрыть подбор, ничего не взяв (или бросив остаток). */
+export function salvageClose(state: GameState): GameState {
+  if (!state.salvage) return state;
+  return { ...resumeAfterSalvage(state), salvage: null };
+}
+
+/**
+ * Выбросить товар из трюма, пока идёт подбор.
+ *
+ * В оригинале сброс груза — боевое действие (`dump`), которое иногда
+ * отпугивает пирата. Здесь это ещё и способ освободить место под более
+ * дорогой контейнер: трюм 20 тонн, а с Питона падает пять канистр.
+ */
+export function jettisonCargo(
+  state: GameState,
+  index: number,
+  amount = 1,
+): { state: GameState; dropped: number } {
+  if (index < 0 || index >= state.cargo.length) return { state, dropped: 0 };
+  const have = state.cargo[index];
+  const drop = Math.min(have, Math.max(0, Math.floor(amount)));
+  if (drop <= 0) return { state, dropped: 0 };
+  const cargo = state.cargo.slice();
+  cargo[index] -= drop;
+  return {
+    state: {
+      ...state,
+      cargo,
+      holdSpace: isTonneCargo(index) ? state.holdSpace + drop : state.holdSpace,
+    },
+    dropped: drop,
+  };
+}
+
 /** Передать бой автопилоту: доигрывает до конца. */
 export function combatAutoplay(
   state: GameState,
@@ -1002,12 +1990,47 @@ export function deserialize(json: string): GameState {
       legal: 0,
       encounter: null,
       combat: null,
+      stats: { ...ZERO_STATS },
+      cargoBasis: COMMODITIES.map(() => 0),
+      escapeRoute: [],
+      escapeStatus: -1,
     } as GameState;
-    if (migrated.flight) migrated.flight = { ...migrated.flight, pending: [] };
+    if (migrated.flight) migrated.flight = { ...migrated.flight, encounters: 0, lastEncounterAt: 0 };
     return migrated;
   }
-  if (data.version !== SAVE_VERSION) throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
+  if (data.version !== SAVE_VERSION && data.version !== 2) {
+    throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
+  }
   const state = data as GameState;
+  // Совместимость: в сохранениях до §70 статистики ещё не было.
+  // Без этого старый файл даст undefined там, где читается stats.kills.
+  if (!state.stats) state.stats = { ...ZERO_STATS };
+  if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
+  // Совместимость с сохранениями до §73: поля обломков тогда не было.
+  if (state.salvage === undefined) state.salvage = null;
+  /*
+   * Совместимость с сохранениями до §80: маршрута побега не было.
+   * `escapeStatus: -1` — признак «маршрута нет»: побег начнётся заново.
+   */
+  if (!Array.isArray(state.escapeRoute)) state.escapeRoute = [];
+  if (typeof state.escapeStatus !== 'number' || state.escapeStatus < 0) {
+    state.escapeStatus = state.escapeRoute.length > 0 ? state.legal : -1;
+  }
+  /*
+   * Совместимость с сохранениями до §76: у полёта был СПИСОК встреч
+   * (`pending`), а не счётчик. Без этого `encounters` остаётся undefined и
+   * первая же встреча превращается в NaN, «отравляя» полёт навсегда.
+   * Считаем, что в старом полёте встреч ещё не было, и отсчитываем от его
+   * начала.
+   */
+  if (state.flight && typeof state.flight.encounters !== 'number') {
+    const f = state.flight;
+    state.flight = {
+      ...f,
+      encounters: 0,
+      lastEncounterAt: typeof f.departAt === 'number' ? f.departAt : Date.now(),
+    };
+  }
   // Совместимость с сохранениями, сделанными до появления накопленного простоя.
   if (state.combat && typeof state.combat.pausedMs !== 'number') {
     state.combat = { ...state.combat, pausedMs: 0 };
@@ -1025,7 +2048,8 @@ export function deserialize(json: string): GameState {
       remainingBaseMs: total,
       elapsedBaseMs: 0,
       dueAt: f.departAt,
-      pending: f.pending.map((t) => Math.max(0, t - f.departAt)),
+      encounters: 0,
+      lastEncounterAt: f.departAt,
     };
   }
   return state;

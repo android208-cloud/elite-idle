@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Прототипы стыковки</title>
+<style>
+  :root { --g:#00ff66; --a:#ffaa00; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 18px; background:#050805; color:var(--g);
+    font-family:'Courier New',monospace; min-height:100dvh; }
+  h1 { font-size:19px; letter-spacing:1px; margin:0 0 6px; }
+  .sub { color:#585; font-size:12px; margin-bottom:22px; }
+  a.card { display:block; text-decoration:none; color:inherit; background:#0d1410;
+    border:1px solid #1e3a28; border-radius:10px; padding:16px; margin-bottom:14px; }
+  a.card:active { background:#12241a; border-color:var(--g); }
+  .t { font-size:16px; font-weight:bold; margin-bottom:6px; }
+  .d { font-size:12px; color:#8a9; line-height:1.55; }
+  .tag { display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px;
+    background:#1e3a28; color:#7f9; margin-left:6px; vertical-align:middle; }
+  .tag.new { background:#3a2a10; color:var(--a); }
+  .foot { margin-top:24px; font-size:11px; color:#454; line-height:1.7; }
+</style>
+</head>
+<body>
+<h1>ПРОТОТИПЫ СТЫКОВКИ</h1>
+<div class="sub">Выберите вариант для тестирования</div>
+
+<a class="card" href="standalone-docking-a.html?v=1794770408">
+  <div class="t">A · Полная 3D-проекция <span class="tag new">НОВЫЙ</span></div>
+  <div class="d">Настоящий Кориолис: кубооктаэдр из 12 вершин + прямоугольный шлюз 20×60.
+    Станция объёмная, створ виден в перспективе. Крен влияет на успех.</div>
+</a>
+
+<a class="card" href="standalone-docking-b.html?v=1794770408">
+  <div class="t">B · 2.5D <span class="tag new">НОВЫЙ</span></div>
+  <div class="d">Как ваш прототип, но с Кориолисом вместо восьмиугольника.
+    Плоская картинка, поворот по крену. Проще и ближе к исходным ощущениям.</div>
+</a>
+
+<a class="card" href="user-docking3-tune.html">
+  <div class="t">Ваш вариант + настройка <span class="tag new">⚙</span></div>
+  <div class="d">То же самое, но все параметры крутятся ползунками прямо во время
+    стыковки: скорость станции, импульсы крена/тяги/сближения, гашение, окно захвата.
+    Кнопка «ЭКСПОРТ» выдаёт строку настроек.</div>
+</a>
+
+<a class="card" href="user-docking3.html?v=1794770408">
+  <div class="t">Ваш отлаженный вариант <span class="tag new">3</span></div>
+  <div class="d">Магнитный захват синхронизации — тот, что вы отладили.
+    Работает как есть, без наших правок. Эталон ощущений.</div>
+</a>
+
+<a class="card" href="user-docking.html?v=1794770408">
+  <div class="t">Ваш исходный прототип <span class="tag">1</span></div>
+  <div class="d">Орбитальная стыковка с восьмиугольной станцией — для сравнения.</div>
+</a>
+
+<a class="card" href="docking.html?v=1794770408">
+  <div class="t">Старый прототип (черновик)</div>
+  <div class="d">Первая версия на стрелках, только для клавиатуры. Со ставками.</div>
+</a>
+
+<div class="foot">
+  Управление во всех: ▲◄►▼ — манёвр, ↺↻ — крен, ТЯГА/ТОРМ — сближение.<br>
+  Все кнопки работают на касание (мультитач).
+</div>
+</body>
+</html>

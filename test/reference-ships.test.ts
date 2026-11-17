@@ -68,9 +68,20 @@ describe('сверка кораблей с оригиналом (reference-ships
   }
 });
 
+/**
+ * §77: спасательная капсула убрана из игры (смертей нет, спасать нечего).
+ * В таблице PRXS оригинала она есть, поэтому сверку для неё пропускаем —
+ * осознанно и с объяснением, а не «забыли».
+ */
+const REMOVED_BY_DESIGN = new Set(['pod']);
+
 describe('сверка оборудования с PRXS (reference-ships)', () => {
   for (const [id, refPrice] of Object.entries(REFERENCE_EQUIPMENT)) {
     it(`${id}: цена = ${refPrice / 10} CR`, () => {
+      if (REMOVED_BY_DESIGN.has(id)) {
+        assert.equal(EQUIPMENT.find((x) => x.id === id), undefined, `${id} убран из игры по §77`);
+        return;
+      }
       const item = EQUIPMENT.find((x) => x.id === id);
       assert.ok(item, `Оборудование ${id} не найдено в EQUIPMENT`);
       assert.equal(item.price, refPrice, `${id}: цена должна быть ${refPrice}, получено ${item.price}`);

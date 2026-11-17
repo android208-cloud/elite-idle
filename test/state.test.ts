@@ -92,8 +92,12 @@ test('прыжок: топливо списывается, прибытие по
   const started = startJump(g, target, NOW, DEFAULT_SETTINGS);
   assert.equal(started.error, undefined);
   assert.equal(started.state.fuel, g.fuel - d);
-  assert.equal(started.state.flight?.arriveAt, NOW + DEFAULT_SETTINGS.baseJumpMs);
+  // Время в пути зависит от расстояния (§70), а не от фиксированных 15 минут.
+  assert.equal(started.state.flight?.arriveAt, NOW + jumpDuration(DEFAULT_SETTINGS, d));
 
+  // §76: полный бак на ×1 — 17 минут, поэтому окно досчёта берём от самого
+  // полёта, а не от старой константы: иначе тест проверял бы не прибытие,
+  // а собственную арифметику.
   // во время полёта торговать нельзя
   assert.equal(buy(started.state, FOOD, 1).amount, 0);
   assert.equal(startJump(started.state, target, NOW, DEFAULT_SETTINGS).error, 'in-flight');
@@ -103,8 +107,12 @@ test('прыжок: топливо списывается, прибытие по
   assert.equal(early.events.length, 0);
   assert.ok(early.state.flight);
 
-  // вовремя: прибытие
-  const done = advance(started.state, NOW + DEFAULT_SETTINGS.baseJumpMs);
+  // вовремя: прибытие.
+  // §76: встречи теперь идут по реальному времени, и за 17 минут пути их
+  // успевает случиться несколько. Тест про прибытие, поэтому встречи
+  // выключаем настройкой — иначе проверяем не то.
+  const noEncounters = { ...DEFAULT_SETTINGS, encounterRate: 0 };
+  const done = advance(started.state, NOW + jumpDuration(DEFAULT_SETTINGS, d), noEncounters);
   assert.equal(done.events.length, 1);
   assert.equal(done.events[0].type, 'arrived');
   assert.equal(done.state.system, target);
@@ -131,7 +139,12 @@ test('ошибки прыжка: та же система, слишком дал
 });
 
 test('темп: ×5 в пять раз быстрее', () => {
-  assert.equal(jumpDuration({ ...DEFAULT_SETTINGS, speed: 5, baseJumpMs: 900_000 }), 180_000);
+  // §76: базовое время относится к пути в MAX_FUEL, а не к «среднему» прыжку.
+  // Поэтому ожидание выводим из самой функции, а не из зашитого числа:
+  // проверяем ровно то, что обещает название теста — пятикратную разницу.
+  const one = jumpDuration({ ...DEFAULT_SETTINGS, speed: 1, baseJumpMs: 900_000 }, 7);
+  const five = jumpDuration({ ...DEFAULT_SETTINGS, speed: 5, baseJumpMs: 900_000 }, 7);
+  assert.equal(five, Math.round(one / 5));
 });
 
 test('детерминизм: одинаковое зерно даёт одинаковый рынок после прибытия', () => {
@@ -140,7 +153,8 @@ test('детерминизм: одинаковое зерно даёт один�
     const systems = systemsOf(1);
     const target = systems.findIndex((s, i) => i !== g.system && distance(systems[g.system], s) <= g.fuel);
     const s = startJump(g, target, NOW, DEFAULT_SETTINGS).state;
-    return advance(s, NOW + DEFAULT_SETTINGS.baseJumpMs).state;
+    // Запас с лихвой перекрывает любой прыжок: время теперь зависит от расстояния.
+    return advance(s, NOW + DEFAULT_SETTINGS.baseJumpMs * 4).state;
   };
   assert.deepEqual(run(), run());
 });

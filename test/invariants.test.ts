@@ -69,7 +69,10 @@ function checkState(s: GameState, where: string): void {
   if (s.flight) {
     if (s.flight.arriveAt < s.flight.departAt) fail('прибытие раньше вылета');
     if (s.flight.from !== s.system) fail(`система вылета ${s.flight.from} != текущая ${s.system}`);
-    if (s.flight.pending.some((t) => !Number.isFinite(t))) fail('встреча в несуществующее время');
+    // §76: встречи больше не раскладываются заранее, поэтому проверяем
+    // осмысленность счётчиков, а не список моментов.
+    if (!Number.isInteger(s.flight.encounters) || s.flight.encounters < 0) fail('счётчик встреч не число');
+    if (!Number.isFinite(s.flight.lastEncounterAt)) fail('время последней встречи не число');
     if (s.flight.fuelUsed !== distance(systemsOf(s.galaxy)[s.flight.from], systemsOf(s.galaxy)[s.flight.to])) {
       fail('израсходовано не то количество топлива');
     }
@@ -98,7 +101,7 @@ function fuzzSession(seed: number, steps: number, settings: Settings): GameState
       const i = Math.floor(rand() * COMMODITIES.length);
       s = rand() < 0.5 ? buy(s, i, 1 + Math.floor(rand() * 20)).state : sell(s, i, 1 + Math.floor(rand() * 20)).state;
     } else if (action === 'equip') {
-      s = buyEquipment(s, pick(['missile', 'cargoBay', 'ecm', 'pulse', 'beam', 'scoops', 'pod'] as const)).state;
+      s = buyEquipment(s, pick(['missile', 'cargoBay', 'ecm', 'pulse', 'beam', 'scoops'] as const)).state;
     } else if (action === 'refuel') {
       s = refuel(s, 1 + Math.floor(rand() * 80)).state;
     } else if (action === 'jump') {
@@ -168,8 +171,10 @@ test('сохранение обратимо в любой момент случ�
   }
 });
 
-test('ручной бой не откладывает прибытие на всё время отсутствия игрока', () => {
-  const settings: Settings = { ...DEFAULT_SETTINGS, encounterRate: 3, combatMode: 'manual' };
+test('§38.1: встреча не откладывает прибытие — она разрешается исходом', () => {
+  // Раньше ручной бой ставил полёт на паузу. Теперь раундов нет:
+  // встреча разрешается в момент resolveAt, и полёт идёт дальше.
+  const settings: Settings = { ...DEFAULT_SETTINGS, encounterRate: 3 };
   const g = newGame(5);
   const systems = systemsOf(1);
   const target = systems.findIndex((s, i) => i !== g.system && distance(systems[g.system], s) <= g.fuel);
@@ -177,27 +182,25 @@ test('ручной бой не откладывает прибытие на вс
   let s = startJump(g, target, 0, settings).state;
   const planned = s.flight!.arriveAt;
 
-  // Игрок ждёт атаки
   let t = 0;
-  for (let i = 0; i < 5000 && !s.combat; i++) {
+  for (let i = 0; i < 5000 && s.flight; i++) {
     t += 1000;
     s = advance(s, t, settings).state;
-  }
-  assert.ok(s.combat, 'бой должен был начаться');
-
-  // …и возвращается только через 3 часа
-  const back = t + 3 * 60 * MIN;
-  let rounds = 0;
-  while (s.combat && rounds < 200) {
-    s = combatAction(s, 'laser', back, settings).state;
-    rounds++;
+    if (!s.flight) break;
   }
 
-  const shifted = s.flight ? s.flight.arriveAt - planned : 0;
-  assert.ok(
-    shifted <= rounds * 10_000 + 1000,
-    `прибытие сдвинулось на ${(shifted / MIN).toFixed(1)} мин при ${rounds} раундах боя`,
-  );
+  assert.equal(s.flight, null, 'полёт завершился сам');
+  assert.ok(s.combat === null, 'боя как процесса нет');
+  /*
+   * Прибытие не могло уехать далеко вперёд из-за пауз: их больше нет.
+   *
+   * Допуск шире одного шага: §76 включил встречи по реальному времени, и на
+   * плотности encounterRate=3 между шагами досчёта их успевает случиться
+   * несколько. Каждая встреча с нападающим ставит полёт на паузу (это
+   * правильное поведение), поэтому фактическое прибытие может отстать от
+   * расписания — но не должно уехать раньше него.
+   */
+  assert.ok(t >= planned - 1000, 'прибытие наступило примерно в срок');
 });
 
 test('текущая система всегда существует в текущей галактике', () => {

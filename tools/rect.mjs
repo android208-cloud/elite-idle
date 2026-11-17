@@ -1,0 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { JSDOM, VirtualConsole } from 'jsdom';
+const html = readFileSync('/home/user/elite-idle/standalone/elite-idle.html','utf8');
+const dom = new JSDOM(html,{runScripts:'dangerously',pretendToBeVisual:true,url:'file:///d/g.html',virtualConsole:new VirtualConsole()});
+const {window}=dom;
+window.HTMLCanvasElement.prototype.getContext=()=>({setTransform(){},clearRect(){},beginPath(){},closePath(){},moveTo(){},lineTo(){},stroke(){},fill(){},arc(){},save(){},restore(){},setLineDash(){},strokeRect(){},fillText(){},measureText:t=>({width:t.length*6}),set lineWidth(v){},set strokeStyle(v){},set fillStyle(v){},set font(v){},set textAlign(v){},set textBaseline(v){},set lineJoin(v){}});
+Object.defineProperty(window.HTMLElement.prototype,'clientWidth',{get(){return 360;},configurable:true});
+window.requestAnimationFrame=cb=>setTimeout(()=>cb(Date.now()),16);
+window.cancelAnimationFrame=clearTimeout;
+await new Promise(r=>setTimeout(r,600));
+const tab=[...window.document.querySelectorAll('[data-action="tab"]')].find(t=>t.dataset.tab==='map');
+tab.dispatchEvent(new window.MouseEvent('click',{bubbles:true}));
+await new Promise(r=>setTimeout(r,200));
+const c=window.document.getElementById('map-local');
+const r=c.getBoundingClientRect();
+console.log('rect:', JSON.stringify({left:r.left,top:r.top,width:r.width,height:r.height}));
+console.log('canvas.clientWidth:', c.clientWidth, '| canvas.width:', c.width);
+process.exit(0);

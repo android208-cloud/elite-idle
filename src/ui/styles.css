@@ -38,6 +38,10 @@ main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
   transition: background .2s; }
 .nav-bar button.active { color: var(--on-surface); }
 .nav-bar button.active .pill { background: var(--primary-container); color: var(--on-primary-container); }
+/* Вкладка, недоступная в полёте: видна, но приглушена — чтобы было понятно,
+   что рынок существует и вернётся, когда сядешь, а не исчез из игры. */
+.nav-bar button.off { opacity: 0.38; }
+.nav-bar button.off .pill { background: none; }
 
 .card { background: var(--surface-2); border-radius: var(--radius); padding: 16px; margin: 10px 0; }
 .card h2 { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
@@ -67,7 +71,20 @@ main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 .price { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .muted { color: var(--on-variant); font-size: 13px; }
 
-canvas { width: 100%; border-radius: var(--radius); background: var(--surface); display: block; touch-action: manipulation; }
+/*
+ * touch-action: none, а не manipulation.
+ *
+ * `manipulation` отключает двойной тап-зум, но НЕ отменяет панораму.
+ * Холст карты на всю ширину: палец при тапе почти всегда сдвигается на
+ * несколько пикселей, браузер считает это началом прокрутки — и экран
+ * уезжает ровно в тот момент, когда игрок выбирает планету. Пользователь
+ * описал это как «экран сам скроллится».
+ *
+ * Прокрутка контейнера при этом остаётся: палец на самой карте её не
+ * двигает (карта — элемент выбора, а не лента), а за пределами карточки
+ * всё работает как обычно.
+ */
+canvas { width: 100%; border-radius: var(--radius); background: var(--surface); display: block; touch-action: none; }
 
 .log { list-style: none; margin: 0; padding: 0; }
 .log li { padding: 8px 0; border-bottom: 1px solid var(--outline); font-size: 14px; }
@@ -82,3 +99,128 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
 .card.danger { border-left: 4px solid var(--bad); }
 .alert { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: rgba(255, 138, 128, .15); color: var(--bad); font-weight: 500; }
 .progress.enemy > div { background: var(--bad); }
+
+/* Модель корабля: тёмный «стеклянный» подложка, чтобы линии читались */
+.ship-view {
+  padding: 10px 10px 6px;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(79, 216, 196, 0.08), transparent 70%),
+    var(--card, #101a18);
+  overflow: hidden;
+}
+.ship-view canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Модель встреченного корабля: внутри карточки-предупреждения,
+   на всю ширину, с отступом сверху — чтобы не липла к заголовку. */
+.enc-model {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 8px 0 2px;
+}
+
+/* Карты: холст на всю ширину карточки, подпись под ним */
+.map-card {
+  padding: 12px 12px 10px;
+}
+.map-card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--on-variant, #7b8b88);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.map-card canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: var(--surface-3, #0b1412);
+  touch-action: none;
+}
+.map-card .sub {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+/* Список систем в окрестностях: однозначный выбор вместо попадания
+   пальцем в точку на карте, где соседние звёзды бывают в 19 px */
+.system-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.system-list .btn {
+  padding: 7px 11px;
+  font-size: 13px;
+  border-radius: 999px;
+  background: var(--surface-3, #16211f);
+  color: var(--on-surface, #dde4e2);
+  border: 1px solid transparent;
+}
+.system-list .btn.active {
+  border-color: #ffd37a;
+  color: #ffd37a;
+}
+.system-list .btn:disabled {
+  opacity: 0.4;
+}
+.system-list .btn .muted {
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+/* Техуровень в списке систем: маленький значок, чтобы не спорил
+   с названием и расстоянием, но был виден сразу */
+.system-list .btn .tech {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(79, 216, 196, 0.14);
+  color: #4fd8c4;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.system-list .btn:disabled .tech {
+  background: rgba(255, 255, 255, 0.06);
+  color: #7b8b88;
+}
+
+/* Контрабанда в рынке: красная рамка и метка. Цвет не для красоты —
+   за такой груз растёт правовой статус при взлёте (см. BAD в оригинале) */
+.card.illegal {
+  border-left: 3px solid #e05c5c;
+}
+.chip.illegal {
+  background: rgba(224, 92, 92, 0.18);
+  color: #ff8a8a;
+  border: 1px solid rgba(224, 92, 92, 0.35);
+}
+
+/* Кликабельная карточка: «Пункт назначения» ведёт на карту.
+   Курсор и подсветка при нажатии — чтобы было видно, что блок живой,
+   а не просто украшение. На телефоне hover нет, поэтому основное —
+   реакция на нажатие. */
+.card.linkable {
+  cursor: pointer;
+  transition: background .15s, transform .06s;
+}
+.card.linkable:active {
+  background: var(--surface-3);
+  transform: scale(0.995);
+}
+.card.linkable:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+/* Кнопка внутри кликабельной карточки — не часть ссылки. */
+.card.linkable .btn {
+  cursor: pointer;
+}
