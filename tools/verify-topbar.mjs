@@ -1,14 +1,14 @@
 /**
- * §89: верхняя строка и иконки нижней строки.
+ * §91: шапка — заголовок слева, ОДНО значение справа, без подписи.
  *
- * Проверяем то, что видит игрок и что легко сломать молча:
- *  - в шапке три сегмента: корабль, место, время карьеры;
- *  - кредитов в шапке НЕТ (их место занято), но они есть на «Корабле»;
- *  - в полёте шапка показывает цель, а не станцию вылета;
- *  - иконки нижней строки — SVG, а не эмодзи, и их ровно пять.
+ * История: §89 свёл всё в три колонки, §90 сделал пару «подпись : значение»,
+ * и на экране получилось «Корабль» слева и «КОРАБЛЬ» справа — одно и то же
+ * дважды. §91 убрал подпись: заголовок уже говорит, где вы, а справа —
+ * что здесь важно.
  *
- * Эмодзи проверяем по диапазонам Unicode: если кто-то вернёт 🚀, тест
- * скажет об этом строкой, а не «на глаз».
+ * Проверяем по вкладкам, и на каждой — что значение верное и что оно НЕ
+ * дублирует заголовок. Плюс кегль: пользователь попросил, чтобы шрифт
+ * значения был того же размера, что у слова слева.
  */
 import { readFileSync } from 'node:fs';
 import { JSDOM, VirtualConsole } from 'jsdom';
@@ -28,70 +28,70 @@ await new Promise((r) => setTimeout(r, 400));
 const d = w.document;
 const click = (el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
 const flat = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+const info = () => flat(d.getElementById('top-info'));
+const title = () => flat(d.getElementById('title'));
+const go = async (name) => {
+  click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === name));
+  await new Promise((r) => setTimeout(r, 250));
+};
 
-// 1. Шапка: три сегмента
-const segs = [...d.querySelectorAll('#top-info .top-seg')];
-check('в шапке три сегмента', segs.length === 3, String(segs.length));
-const keys = segs.map((s) => s.querySelector('.top-key')?.textContent.trim());
-check('подписи сегментов', JSON.stringify(keys) === JSON.stringify(['Корабль', 'Карта', 'Журнал']), keys.join(' · '));
+// 1. Ни подписей, ни нескольких блоков — только текст
+check('в шапке нет подписи-надзаголовка', d.querySelectorAll('#top-info .top-key, #top-info .top-seg').length === 0,
+  String(d.querySelectorAll('#top-info .top-key, #top-info .top-seg').length));
+check('шапка не пустая', info().length > 0, info());
 
-// 2. Корабль назван
-check('корабль — Cobra Mk III', /Cobra Mk III/.test(flat(d.getElementById('top-info'))), flat(d.getElementById('top-info')));
+// 2. Значение не дублирует заголовок слева
+for (const tab of ['ship', 'map', 'market', 'hangar', 'log']) {
+  await go(tab);
+  const t = title().toLowerCase();
+  const v = info().toLowerCase();
+  check(`«${title()}»: значение не повторяет заголовок`, v !== t && v !== t + ' ', `заголовок «${title()}», справа «${info()}»`);
+}
 
-// 3. Планета нахождения
-const place = segs[1]?.querySelector('.top-val')?.textContent.trim() ?? '';
-check('карта показывает планету', /^[A-ZА-Я]/.test(place) && place.length > 2, place);
+// 3. Корабль — название
+await go('ship');
+check('«Корабль»: Cobra Mk III', info() === 'Cobra Mk III', info());
+check('«Корабль»: кредитов в шапке нет', !/CR/.test(info()), info());
+check('«Корабль»: деньги есть в карточке', /Деньги/.test(flat(d.getElementById('content'))));
 
-// 4. Время карьеры — не пустое и не «0 с»
-const career = segs[2]?.querySelector('.top-val')?.textContent.trim() ?? '';
-check('журнал показывает время карьеры', /(< 1 мин|\d+ (мин|ч))/.test(career), career);
+// 4. Рынок и ангар — кредиты
+await go('market');
+check('«Рынок»: кредиты', /^\d+\.\d CR$/.test(info()), info());
+check('«Рынок»: имени корабля нет', !/Cobra/.test(info()), info());
+await go('hangar');
+check('«Ангар»: кредиты', /^\d+\.\d CR$/.test(info()), info());
 
-// 5. Кредитов в шапке нет
-check('кредитов в шапке нет', !/CR/.test(flat(d.getElementById('top-info'))), flat(d.getElementById('top-info')));
+// 5. Карта — место
+await go('map');
+check('«Карта»: система', /^[A-ZА-Я]/.test(info()) && info().length > 2, info());
+check('«Карта»: кредитов нет', !/CR/.test(info()), info());
 
-// 6. Кредиты есть на «Корабле» (не потеряли деньги с экрана)
-const shipTab = [...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'ship');
-click(shipTab);
-await new Promise((r) => setTimeout(r, 250));
-check('кредиты видны на «Корабле»', /Деньги/.test(flat(d.getElementById('content'))) && /CR/.test(flat(d.getElementById('content'))));
+// 6. Журнал — время карьеры
+await go('log');
+check('«Журнал»: время карьеры', /(< 1 мин|\d+ (мин|ч))/.test(info()), info());
 
-// 7. Иконки — SVG, пять штук
+// 7. Кегль значения = кеглю заголовка (просьба пользователя)
+const fs = (el) => w.getComputedStyle(el).fontSize;
+check('кегль шапки равен кеглю заголовка', fs(d.getElementById('top-info')) === fs(d.getElementById('title')),
+  `${fs(d.getElementById('top-info'))} против ${fs(d.getElementById('title'))}`);
+check('кегль — 22px', fs(d.getElementById('top-info')) === '22px', fs(d.getElementById('top-info')));
+
+// 8. Иконки нижней строки
 const pills = [...d.querySelectorAll('.nav-bar .pill')];
 check('иконок пять', pills.length === 5, String(pills.length));
-check('все иконки — SVG', pills.every((p) => p.querySelector('svg')), pills.map((p) => (p.querySelector('svg') ? 'svg' : 'нет')).join(','));
-
-// 8. Эмодзи не осталось
+check('все иконки — SVG', pills.every((p) => p.querySelector('svg')));
+check('иконки наследуют цвет', pills.every((p) => p.querySelector('svg')?.getAttribute('stroke') === 'currentColor'));
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B00}-\u{2BFF}]/u;
 check('эмодзи в нижней строке нет', !EMOJI.test(d.getElementById('nav').innerHTML));
 
-// 9. SVG наследует цвет (currentColor), а не задаёт свой
-const svgs = pills.map((p) => p.querySelector('svg')).filter(Boolean);
-check('иконки наследуют цвет', svgs.every((s) => s.getAttribute('stroke') === 'currentColor'),
-  svgs.map((s) => s.getAttribute('stroke')).join(','));
-
-// 10. Иконка активной вкладки — внутри `.pill` активной кнопки
-const active = d.querySelector('.nav-bar button.active');
-check('активная вкладка имеет иконку', !!active?.querySelector('.pill svg'), active?.dataset.tab ?? 'нет');
-
-/*
- * 11. В полёте шапка показывает ЦЕЛЬ, а не станцию вылета.
- *
- * Через интерфейс это не проверить: системы на карте выбираются тапом по
- * канвасу, а тап в jsdom не срабатывает (нет раскладки). Правило живёт в
- * чистой функции `topSegments`, поэтому проверяем её — с настоящим
- * состоянием игры и подложенным полётом.
- */
+// 9. В полёте — цель (чистая функция: тап по канвасу в jsdom не работает)
 const core = await import('/home/user/elite-idle/src/core/state.ts');
-const { topSegments } = await import('/home/user/elite-idle/src/ui/top-bar.ts');
+const { topValue } = await import('/home/user/elite-idle/src/ui/top-bar.ts');
 const base = core.newGame(1);
-const flight = topSegments({ ...base, flight: { from: base.system, to: (base.system + 5) % 256, patrol: false } });
-const target = core.systemsOf(base.galaxy)[(base.system + 5) % 256].name;
-check('в полёте подпись меняется на «Курс»', flight[1].key === 'Курс', flight[1].key);
-check('в полёте показана цель', flight[1].value === target, `${flight[1].value} (ждали ${target})`);
-const docked = topSegments(base);
-check('на стоянке подпись «Карта»', docked[1].key === 'Карта', docked[1].key);
-check('на стоянке показана своя система',
-  docked[1].value === core.systemsOf(base.galaxy)[base.system].name, docked[1].value);
+const to = (base.system + 5) % 256;
+const target = core.systemsOf(base.galaxy)[to].name;
+check('в полёте показана цель',
+  topValue({ ...base, flight: { from: base.system, to, patrol: false } }, 'map') === target, target);
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad ? 1 : 0);

@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { newGame, serialize, deserialize } from '../src/core/state.ts';
-import { topSegments, fmtCareer, SHIP_NAME } from '../src/ui/top-bar.ts';
+import { topValue, fmtCareer, fmtCash, SHIP_NAME } from '../src/ui/top-bar.ts';
 
 test('время карьеры переживает сохранение', () => {
   const s = { ...newGame(1), careerMs: 5 * 3600_000, careerAt: 123456 };
@@ -46,27 +46,51 @@ test('fmtCareer: до часа — минуты, дальше — часы', () 
   assert.equal(fmtCareer(10 * 3600_000 + 30 * 60_000), '10 ч 30 мин');
 });
 
-test('шапка: три сегмента, корабль назван, кредитов нет', () => {
-  const segs = topSegments(newGame(1));
-  assert.equal(segs.length, 3);
-  assert.deepEqual(segs.map((s) => s.key), ['Корабль', 'Карта', 'Журнал']);
-  assert.equal(segs[0].value, SHIP_NAME);
-  // Кредиты из шапки убраны (§89): они есть на «Корабле», «Рынке», «Ангаре».
-  assert.ok(!segs.some((s) => /CR/.test(s.value)), 'кредитов в шапке быть не должно');
+test('§91: на каждой вкладке своё ЗНАЧЕНИЕ, без подписи', () => {
+  const s = { ...newGame(1), cash: 12345 };
+  assert.equal(topValue(s, 'ship'), SHIP_NAME);
+  // Рынок и ангар — деньги, и только они.
+  assert.equal(topValue(s, 'market'), '1234.5 CR');
+  assert.equal(topValue(s, 'hangar'), '1234.5 CR');
+  // Карта — место, журнал — время.
+  assert.match(topValue(s, 'map'), /^[A-ZА-Я]/);
+  assert.match(topValue(s, 'log'), /(< 1 мин|\d+ (мин|ч))/);
 });
 
-test('шапка в полёте показывает цель и подпись «Курс»', () => {
+test('§91: имя корабля не появляется там, где его не просили', () => {
+  const s = newGame(1);
+  for (const tab of ['map', 'market', 'hangar', 'log'] as const) {
+    assert.notEqual(topValue(s, tab), SHIP_NAME, `на «${tab}» не должно быть имени корабля`);
+  }
+});
+
+test('§91: кредиты не показываются на «Корабле» — они уже в карточке', () => {
+  const s = { ...newGame(1), cash: 99999 };
+  assert.ok(!/CR/.test(topValue(s, 'ship')), 'на «Корабле» деньги живут в карточке');
+});
+
+test('fmtCash: деньги в десятых долях кредита', () => {
+  assert.equal(fmtCash(0), '0.0 CR');
+  assert.equal(fmtCash(1000), '100.0 CR');
+  assert.equal(fmtCash(12345), '1234.5 CR');
+});
+
+test('шапка в полёте показывает цель', () => {
   const base = newGame(1);
   const to = (base.system + 3) % 256;
-  const segs = topSegments({ ...base, flight: { from: base.system, to, patrol: false } as never });
-  assert.equal(segs[1].key, 'Курс');
-  assert.notEqual(segs[1].value, topSegments(base)[1].value, 'цель отличается от стоянки');
+  assert.notEqual(topValue({ ...base, flight: { from: base.system, to, patrol: false } as never }, 'map'),
+    topValue(base, 'map'), 'цель отличается от стоянки');
 });
 
 test('патруль не меняет место: to === from', () => {
   const base = newGame(1);
-  const segs = topSegments({ ...base, flight: { from: base.system, to: base.system, patrol: true } as never });
-  assert.equal(segs[1].value, topSegments(base)[1].value);
-  // Подпись при этом «Курс»: корабль в полёте, пусть и внутри системы.
-  assert.equal(segs[1].key, 'Курс');
+  assert.equal(topValue({ ...base, flight: { from: base.system, to: base.system, patrol: true } as never }, 'map'),
+    topValue(base, 'map'));
+});
+
+test('§91: в бою и на обломках — место, а не кредиты', () => {
+  const base = { ...newGame(1), cash: 5000 };
+  const v = topValue(base, null);
+  assert.ok(!/CR/.test(v), 'в бою кредиты в шапке не нужны');
+  assert.equal(v, topValue(base, 'map'));
 });

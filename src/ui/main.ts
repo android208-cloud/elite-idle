@@ -57,7 +57,7 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
-import { topSegments, type TopSegment } from './top-bar.ts';
+import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
 
@@ -1687,18 +1687,17 @@ function tickCareer(state: GameState, now: number): GameState {
 }
 
 /**
- * §89: верхняя строка — не деньги, а «где я и на чём».
+ * §91: верхняя строка — одно значение, без подписи.
  *
- * Что показывать, решает `topSegments` (`top-bar.ts`): там это чистая
- * функция и её проверяет `verify-topbar` и тесты. Здесь только разметка.
+ * Заголовок экрана слева уже говорит, где вы («Корабль», «Рынок»...),
+ * поэтому подпись справа дублировала бы его — так и вышло в §90, где на
+ * экране стояло «Корабль» слева и «КОРАБЛЬ» справа. Осталось значение:
+ * слева ГДЕ, справа ЧТО здесь важно (см. `topValue` в `top-bar.ts`).
  */
-function topBar(state: GameState): void {
+function topBar(busy: boolean): void {
   const el = document.getElementById('top-info');
   if (!el) return;
-  el.innerHTML = topSegments(state)
-    .map((seg: TopSegment) =>
-      `<span class="top-seg"><span class="top-key">${seg.key}</span><span class="top-val">${seg.value}</span></span>`)
-    .join('');
+  el.textContent = topValue(state, busy ? null : tab);
 }
 
 function render(): void {
@@ -1740,7 +1739,7 @@ function render(): void {
     : inSalvage
       ? 'Обломки'
       : TABS.find((t) => t.id === tab)!.label;
-  topBar(state);
+  topBar(inCombat || inSalvage);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
     const off = blocked.includes(t.id);
