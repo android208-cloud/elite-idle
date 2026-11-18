@@ -19,6 +19,16 @@ import {
 } from './market.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import {
+  PILOT_HIRE_FEE,
+  PILOT_MIN_KILLS,
+  PILOT_REST_MS,
+  pilotName,
+  pilotRunIncome,
+  routeDistance,
+  routeProfit,
+  type Pilot,
+} from './fleet.ts';
+import {
   autoResolve,
   availableDecisions,
   bestLaserOf,
@@ -53,7 +63,12 @@ import {
 
 export { nextByte } from './rng.ts';
 
-export const SAVE_VERSION = 3;
+/**
+ * §105: версия 4 — появился флот (`pilots`, `nextPilotId`).
+ *
+ * Сохранения версий 2 и 3 читаются по-прежнему: флот в них пустой.
+ */
+export const SAVE_VERSION = 4;
 /**
  * Бак стартовой Кобры — опорная величина для расчёта времени прыжка.
  *
@@ -358,6 +373,16 @@ export interface GameState {
    */
   careerMs?: number;
   /**
+   * §105: пилоты, которые летают сами.
+   *
+   * Хранится только «кто, на чём и куда», а выручка рейса каждый раз
+   * считается из рынка (`routeProfit`). Так в сохранении нет производных
+   * чисел, которые могли бы разойтись с балансом.
+   */
+  pilots: Pilot[];
+  /** Счётчик для `Pilot.id`: он не должен переиспользоваться после увольнения. */
+  nextPilotId: number;
+  /**
    * Момент последнего начисления `careerMs` — чтобы считать разницу.
    * `0` = точки отсчёта нет: следующий тик только выставит её, не начислив
    * время, пока вкладка была закрыта.
@@ -454,7 +479,9 @@ export type GameEventType =
   /** §80: побег удался — статус чист. */
   | 'escape-clean'
   /** §98.1: посадка с контрабандой — доля статуса не применяется. */
-  | 'escape-blocked';
+  | 'escape-blocked'
+  /** §105: пилоты вернулись с рейсов и принесли деньги. */
+  | 'fleet';
 
 export interface GameEvent {
   type: GameEventType;
@@ -497,6 +524,8 @@ export function newGame(rngSeed: number): GameState {
     ship: { ...STARTER_SHIP },
     kills: 0,
     legal: 0,
+    pilots: [],
+    nextPilotId: 1,
     encounter: null,
     combat: null,
     salvage: null,
@@ -1160,6 +1189,192 @@ export function buyShip(state: GameState, id: ShipId): ShipResult {
       ship,
     },
   };
+}
+
+/* ---------- Флот (§105): пилоты, которые летают сами ---------- */
+
+export type PilotError =
+  /** Не на станции: нанимать и назначать маршруты можно только в ангаре. */
+  | 'in-flight'
+  /** Ранг ниже «Опытного» — пилоты не идут к новичкам. */
+  | 'rank'
+  /** Такой корабль на этой верфи не продаётся. */
+  | 'unavailable'
+  /** Не хватает на корабль и задаток. */
+  | 'cash'
+  /** Пилота с таким номером нет. */
+  | 'none'
+  /** Маршрут в ту же систему, откуда летает пилот. */
+  | 'self'
+  /** Система дальше, чем бак его корабля. */
+  | 'range'
+  /** Этой линией уже летает свой пилот: двое сбивают друг другу цену. */
+  | 'taken';
+
+export interface PilotResult {
+  state: GameState;
+  error?: PilotError;
+  pilot?: Pilot;
+}
+
+/**
+ * Длительность рейса: полёт туда-обратно плюс отдых.
+ *
+ * Расстояние берётся из настоящей формулы прыжка (`baseJumpDuration`),
+ * а не из «30 минут на все случаи»: пользователь попросил именно так.
+ * Отдых — константа `PILOT_REST_MS`, и он же главный тормоз экономики.
+ */
+export function pilotCycleMs(
+  state: GameState,
+  pilot: Pilot,
+  settings: Settings = DEFAULT_SETTINGS,
+): number {
+  if (!pilot.route) return 0;
+  const systems = systemsOf(state.galaxy);
+  const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
+  return 2 * flight + PILOT_REST_MS;
+}
+
+/** Выручка рейса пилота в десятых кредита. */
+export function pilotRouteProfit(state: GameState, pilot: Pilot): number {
+  if (!pilot.route) return 0;
+  const systems = systemsOf(state.galaxy);
+  return routeProfit(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold);
+}
+
+/**
+ * Наём. Пилот приходит без маршрута: сначала корабль, потом дело.
+ *
+ * Корабль покупается на этой же верфи по её правилам — то есть в бедной
+ * системе пилоту достанется только Аддер. Старый корабль игрока в зачёт
+ * не идёт: это отдельная покупка, а не обмен.
+ */
+export function hirePilot(state: GameState, id: ShipId, now: number): PilotResult {
+  if (state.flight) return { state, error: 'in-flight' };
+  if (state.kills < PILOT_MIN_KILLS) return { state, error: 'rank' };
+
+  const economy = currentSystem(state).economy;
+  if (!shipsForSale(economy).includes(id)) return { state, error: 'unavailable' };
+
+  const total = shipPrice(id) + PILOT_HIRE_FEE;
+  if (state.cash < total) return { state, error: 'cash' };
+
+  // Имя — из того же ГПСЧ, что и всё остальное: две строки таблицы имён.
+  const [a, rng1] = nextByte(state.rng);
+  const [b, rng2] = nextByte(rng1);
+  const pilot: Pilot = {
+    id: state.nextPilotId,
+    name: pilotName(a, b),
+    ship: id,
+    home: state.system,
+    route: null,
+    nextRunAt: 0,
+    runs: 0,
+  };
+
+  return {
+    pilot,
+    state: {
+      ...state,
+      cash: state.cash - total,
+      rng: rng2,
+      pilots: [...state.pilots, pilot],
+      nextPilotId: state.nextPilotId + 1,
+    },
+  };
+}
+
+/**
+ * Назначить маршрут. Пилот всегда летает из системы, где его наняли.
+ *
+ * Один маршрут — один пилот: второй на той же линии сбивает цену первым
+ * (это и есть потолок флота, о котором договорились).
+ */
+export function assignPilotRoute(
+  state: GameState,
+  pilotId: number,
+  to: number,
+  now: number,
+  settings: Settings = DEFAULT_SETTINGS,
+): PilotResult {
+  if (state.flight) return { state, error: 'in-flight' };
+
+  const pilot = state.pilots.find((p) => p.id === pilotId);
+  if (!pilot) return { state, error: 'none' };
+  if (to === pilot.home) return { state, error: 'self' };
+
+  const systems = systemsOf(state.galaxy);
+  if (!systems[to]) return { state, error: 'range' };
+  /*
+   * `distance` и `range` — в одних единицах (десятых светового года), как
+   * и бак: 70 = 7.0 св. г. Поэтому делить не на что.
+   */
+  const ly = distance(systems[pilot.home], systems[to]);
+  if (ly > SHIPS[pilot.ship].range) return { state, error: 'range' };
+
+  const taken = state.pilots.some(
+    (p) => p.id !== pilot.id && p.route?.from === pilot.home && p.route?.to === to,
+  );
+  if (taken) return { state, error: 'taken' };
+
+  const cycle = 2 * baseJumpDuration(ly, settings) + PILOT_REST_MS;
+  const next: Pilot = { ...pilot, route: { from: pilot.home, to }, nextRunAt: now + cycle };
+
+  return {
+    pilot: next,
+    state: { ...state, pilots: state.pilots.map((p) => (p.id === pilot.id ? next : p)) },
+  };
+}
+
+/**
+ * Досчёт рейсов флота.
+ *
+ * Пилоты летают независимо от того, чем занят игрок, поэтому начисление
+ * живёт в `advance` и работает с тем же `now`, что и полёт. Выручка рейса
+ * постоянна, поэтому месячное отсутствие — это умножение, а не цикл:
+ * `count = floor((now - nextRunAt) / cycle) + 1`.
+ */
+function accrueFleet(
+  state: GameState,
+  now: number,
+  settings: Settings,
+  events: GameEvent[],
+): GameState {
+  if (state.pilots.length === 0) return state;
+
+  const systems = systemsOf(state.galaxy);
+  let cash = state.cash;
+  let gained = 0;
+  let runs = 0;
+  let changed = false;
+
+  const pilots = state.pilots.map((p) => {
+    if (!p.route || now < p.nextRunAt) return p;
+    const flight = baseJumpDuration(routeDistance(systems, p.route), settings);
+    const cycle = 2 * flight + PILOT_REST_MS;
+    if (cycle <= 0) return p;
+
+    const count = Math.floor((now - p.nextRunAt) / cycle) + 1;
+    const profit = routeProfit(state.galaxy, systems, p.route, SHIPS[p.ship].hold);
+    // Доля зависит от номера пилота, а не от места в массиве: увольнение
+    // не должно менять ставку остальным.
+    const income = pilotRunIncome(profit, p.id - 1);
+
+    cash += income * count;
+    gained += income * count;
+    runs += count;
+    changed = true;
+    return { ...p, nextRunAt: p.nextRunAt + count * cycle, runs: p.runs + count };
+  });
+
+  if (!changed) return state;
+
+  events.push({
+    type: 'fleet',
+    at: now,
+    text: `Флот: ${runs} ${plural(runs, 'рейс', 'рейса', 'рейсов')}, ${(gained / 10).toFixed(1)} CR`,
+  });
+  return { ...state, cash, pilots };
 }
 
 /* ---------- Галактический гиперпрыжок ---------- */
@@ -2085,6 +2300,13 @@ export function advance(
   }
 
   /*
+   * §105: пилоты летают сами и не ждут игрока — досчитываем их рейсы до
+   * основного цикла. Место выбрано после пауз: если игра «стояла» на
+   * выборе в бою, флот всё равно не должен получить это время дважды.
+   */
+  s = accrueFleet(s, now, settings, events);
+
+  /*
    * Предел итераций — защита от вечного цикла, а не от длинного досчёта.
    *
    * §76 сделал встречи частыми: при encounterRate=100 и двух сутках
@@ -2418,7 +2640,7 @@ export function deserialize(json: string): GameState {
     if (migrated.flight) migrated.flight = { ...migrated.flight, encounters: 0, lastEncounterAt: 0 };
     return migrated;
   }
-  if (data.version !== SAVE_VERSION && data.version !== 2) {
+  if (data.version !== SAVE_VERSION && data.version !== 2 && data.version !== 3) {
     throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
   }
   const state = data as GameState;
@@ -2426,6 +2648,15 @@ export function deserialize(json: string): GameState {
   // Без этого старый файл даст undefined там, где читается stats.kills.
   if (!state.stats) state.stats = { ...ZERO_STATS };
   if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
+  /*
+   * §105: флот. В сохранениях до него полей нет — пустой ангар и счётчик
+   * с единицы. Проверяем независимо от версии: фикстуры проверок пишут
+   * `version: 3` уже после появления флота, и падать на них нельзя.
+   */
+  if (!Array.isArray(state.pilots)) state.pilots = [];
+  if (typeof state.nextPilotId !== 'number') {
+    state.nextPilotId = state.pilots.reduce((max, p) => Math.max(max, p.id), 0) + 1;
+  }
   /*
    * §102: модель корабля. В сохранениях до неё поля нет — все летали на
    * Кобре, поэтому именно она и подставляется. Без этого старый файл

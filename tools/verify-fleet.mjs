@@ -1,0 +1,185 @@
+/**
+ * §105: ФЛОТ — шаг 1 (торговые пилоты).
+ *
+ * Договорённости, которые проверяются здесь:
+ *   - до ранга «Опытный» карточки нет вовсе (недоступное скрыто, а не
+ *     подписано «заблокировано»);
+ *   - наём в два клика: первый спрашивает, второй покупает корабль и платит
+ *     задаток 500 CR;
+ *   - маршрут назначается из системы найма, в пределах бака корабля;
+ *   - один маршрут — один пилот;
+ *   - пилот летает сам: после загрузки сейва с прошедшим рейсом деньги
+ *     приходят, и в журнале есть строка «Флот: N рейсов».
+ */
+import { readFileSync } from 'node:fs';
+import { JSDOM, VirtualConsole } from 'jsdom';
+
+const html = readFileSync('/home/user/elite-idle/standalone/elite-idle.html', 'utf8');
+let ok = 0, bad = 0;
+const check = (name, cond, extra = '') => {
+  if (cond) { ok++; console.log('✅ ' + name + (extra ? ' · ' + extra : '')); }
+  else { bad++; console.log('❌ ' + name + (extra ? ' · ' + extra : '')); }
+};
+
+const LAVE = 7;
+/** REORTE — ближайший выгодный сосед LAVE: 4.4 св. года, 185.6 CR за рейс. */
+const REORTE = 39;
+
+function save({ kills = 128, cash = 200000, pilots = [], nextPilotId = 1 } = {}) {
+  const state = {
+    version: 4, galaxy: 1, system: LAVE, cash, fuel: 60, holdSpace: 8,
+    cargo: Array(17).fill(0),
+    market: Array(17).fill({ price: 100, quantity: 5 }),
+    rng: 1, flight: null,
+    ship: {
+      model: 'adder', laser: 'pulse', missiles: 1, ecm: true, energyBomb: true,
+      energyUnit: false, fuelScoops: true, dockingComputer: false,
+      galacticHyperdrive: false, cargoBayExtended: false,
+    },
+    kills, legal: 0, encounter: null, combat: null, salvage: null,
+    pilots, nextPilotId,
+    stats: { kills, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0, tradeProfit: 0 },
+    cargoBasis: Array(17).fill(0), cargoOrigin: [],
+    escapeRoute: [], escapeStatus: -1, careerMs: 0, careerAt: 0,
+  };
+  return { state: JSON.stringify(state), log: [], settings: {} };
+}
+
+function boot(saved) {
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://elite.test/',
+    virtualConsole: new VirtualConsole(),
+    beforeParse(w) {
+      w.HTMLCanvasElement.prototype.getContext = () => ({
+        setTransform(){}, clearRect(){}, beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){}, fill(){},
+        arc(){}, save(){}, restore(){}, setLineDash(){}, strokeRect(){}, fillText(){},
+        measureText: (t) => ({ width: String(t).length * 6 }),
+        set lineWidth(v){}, set strokeStyle(v){}, set fillStyle(v){}, set font(v){}, set textAlign(v){}, set textBaseline(v){}, set lineJoin(v){},
+      });
+      w.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
+      w.cancelAnimationFrame = clearTimeout;
+      w.localStorage.setItem('elite-idle-save-v1', JSON.stringify(saved));
+    },
+  });
+  return dom.window;
+}
+
+const tabBtn = (w, id) => [...w.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === id);
+const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+const content = (w) => w.document.getElementById('content').textContent.replace(/\s+/g, ' ');
+const byAction = (w, a, extra = {}) => [...w.document.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+const saved = (w) => JSON.parse(JSON.parse(w.localStorage.getItem('elite-idle-save-v1')).state);
+const log = (w) => JSON.parse(w.localStorage.getItem('elite-idle-save-v1')).log ?? [];
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function hangar(opts) {
+  const w = boot(save(opts));
+  await wait(900);
+  click(w, tabBtn(w, 'hangar'));
+  await wait(300);
+  return w;
+}
+
+/* ---------- Ранг: до «Опытного» флота нет ---------- */
+{
+  const w = await hangar({ kills: 64 });
+  const text = content(w);
+  check('«Слабый»/«Средний» не видит пилотов', !/Нанять пилота/.test(text));
+  check('и карточки «Пилоты» нет', !/Пилот летает маршрут сам/.test(text));
+  w.close();
+}
+
+/* ---------- «Опытный»: карточка есть ---------- */
+{
+  const w = await hangar();
+  const text = content(w);
+  check('с 128 убийств карточка «Пилоты» появляется', /Пилот летает маршрут сам/.test(text));
+  check('доля объяснена: три четверти вам', /три четверти выручки — вам/.test(text));
+  check('задаток назван: 500 CR', /задаток 500\.0 CR/.test(text));
+  check('правило «один маршрут — один пилот» сказано', /Один маршрут — один пилот/.test(text));
+  w.close();
+}
+
+/* ---------- Наём в два клика ---------- */
+{
+  const w = await hangar();
+  click(w, byAction(w, 'pilot-hire-open'));
+  await wait(200);
+  const text = content(w);
+  check('в бедной системе для пилота только Adder', /Adder/.test(text) && !/Python/.test(text));
+  check('цена пилота = корабль + задаток', /1500\.0 CR всего/.test(text));
+
+  const before = saved(w).cash;
+  click(w, byAction(w, 'pilot-hire-pick', { id: 'adder' }));
+  await wait(200);
+  check('первый клик только спрашивает', /Подтвердить/.test(content(w)));
+  check('и денег ещё не списал', saved(w).cash === before);
+
+  click(w, byAction(w, 'pilot-hire-confirm', { id: 'adder' }));
+  await wait(300);
+  const s1 = saved(w);
+  check('второй клик нанимает', s1.pilots.length === 1);
+  check('списано ровно 1 500 CR', before - s1.cash === 15000, `${(before - s1.cash) / 10} CR`);
+  check('пилот пришёл без маршрута', s1.pilots[0].route === null);
+  check('и сказано, что маршрут не задан', /Маршрут не задан/.test(content(w)));
+  check('сразу открыт список маршрутов', byAction(w, 'pilot-route-set') !== undefined);
+
+  /* ---------- Маршрут ---------- */
+  const opt = byAction(w, 'pilot-route-set', { to: REORTE });
+  check('в списке есть LAVE → REORTE', opt !== undefined);
+  click(w, opt);
+  await wait(300);
+  const s2 = saved(w);
+  check('маршрут записан', JSON.stringify(s2.pilots[0].route) === JSON.stringify({ from: LAVE, to: REORTE }));
+  const text2 = content(w);
+  check('карточка показывает маршрут', /LAVE → REORTE/.test(text2), text2.match(/LAVE → REORTE[^·]*/)?.[0] ?? '');
+  check('показана выручка рейса', /рейс 185\.6 CR/.test(text2));
+  check('и ваша доля', /вам 139\.2 CR/.test(text2));
+  check('и доход в час целыми кредитами', /49 CR\/ч/.test(text2));
+  check('и время до возвращения', /Вернётся через/.test(text2));
+  w.close();
+}
+
+/* ---------- Один маршрут — один пилот ---------- */
+{
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Вэл Кроу', ship: 'adder', home: LAVE,
+      route: { from: LAVE, to: REORTE }, nextRunAt: 0, runs: 0,
+    }],
+    nextPilotId: 2,
+  });
+  click(w, byAction(w, 'pilot-hire-open'));
+  await wait(200);
+  click(w, byAction(w, 'pilot-hire-pick', { id: 'adder' }));
+  await wait(200);
+  click(w, byAction(w, 'pilot-hire-confirm', { id: 'adder' }));
+  await wait(300);
+  const text = content(w);
+  check('второму пилоту занятый маршрут закрыт', /маршрут занят/.test(text));
+  check('но свободные маршруты остались', byAction(w, 'pilot-route-set') !== undefined);
+  w.close();
+}
+
+/* ---------- Пилот летает сам ---------- */
+{
+  const startedAt = Date.now();
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
+      route: { from: LAVE, to: REORTE },
+      // Половина суток назад пилот получил маршрут: часть рейсов уже была.
+      nextRunAt: startedAt - 12 * 3_600_000, runs: 0,
+    }],
+    nextPilotId: 2,
+  });
+  const s = saved(w);
+  check('рейсы начислились при загрузке', s.pilots[0].runs > 0, `${s.pilots[0].runs} рейсов`);
+  check('деньги пришли', s.cash > 200000, `+${((s.cash - 200000) / 10).toFixed(1)} CR`);
+  check('в журнале строка флота', log(w).some((l) => /^Флот: \d+ рейс/.test(l.text)));
+  w.close();
+}
+
+console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
+process.exit(bad > 0 ? 1 : 0);

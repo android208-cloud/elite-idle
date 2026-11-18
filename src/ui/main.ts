@@ -55,6 +55,11 @@ import {
   systemsOf,
   type EquipmentError,
   type ShipError,
+  hirePilot,
+  assignPilotRoute,
+  pilotCycleMs,
+  pilotRouteProfit,
+  type PilotError,
   type GameEvent,
   type GameState,
   type JumpError,
@@ -63,6 +68,15 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
+import {
+  formatSpan,
+  PILOT_HIRE_FEE,
+  PILOT_MIN_KILLS,
+  pilotRunIncome,
+  routeDistance,
+  routeProfit,
+  type Pilot,
+} from '../core/fleet.ts';
 import {
   maxFuel,
   maxMissiles,
@@ -99,6 +113,18 @@ let selected: number | null = null;
  * и при любом действии, кроме подтверждения.
  */
 let confirmShip: ShipId | null = null;
+
+/**
+ * §105: флот. Три состояния найма и открытый список маршрутов.
+ *
+ * `hireOpen` — показан ли список кораблей под кнопкой «Нанять пилота»;
+ * `hireShip` — выбранный корабль, ждущий подтверждения (наём списывает
+ * корабль и задаток сразу, поэтому подтверждение нужно);
+ * `routePilot` — чей список маршрутов раскрыт.
+ */
+let hireOpen = false;
+let hireShip: ShipId | null = null;
+let routePilot: number | null = null;
 
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
@@ -246,6 +272,18 @@ const SHIP_ERRORS: Record<ShipError, string> = {
   cash: 'Не хватает денег даже с зачётом старого корабля',
   owned: 'Это ваш корабль',
   cargo: 'Груз не влезет в трюм нового корабля — сначала продайте лишнее',
+};
+
+/** §105: почему не получилось нанять или назначить маршрут. */
+const PILOT_ERRORS: Record<PilotError, string> = {
+  'in-flight': 'Пилотами занимаются только на станции',
+  rank: 'Пилоты идут к опытным: нужен ранг «Опытный»',
+  unavailable: 'Такой корабль на этой верфи не продаётся',
+  cash: 'Не хватает на корабль и задаток',
+  none: 'Такого пилота нет',
+  self: 'Это его же система — летать некуда',
+  range: 'Далеко для его бака',
+  taken: 'Этой линией уже летает ваш пилот — они собьют друг другу цену',
 };
 
 const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
@@ -1617,6 +1655,7 @@ function hangarScreen(): string {
       <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
     ${shipyardCard()}
+    ${pilotsCard()}
     ${galacticCard()}`;
 }
 
@@ -1694,6 +1733,118 @@ function shipyardCard(): string {
    */
   return `<div class="card"><h2>Верфь</h2>
       <div class="sub">Зачёт вашего ${SHIPS[mine].name} — ${cr(tradeIn)}. Платится только разница.</div>
+      ${rows}</div>`;
+}
+
+/**
+ * ФЛОТ (§105): пилоты, которые летают сами.
+ *
+ * Шаг 1 — только торговцы. Правила, о которых договорились:
+ *   * нанимать можно с ранга «Опытный» (128 убийств), число пилотов не
+ *     ограничено — ограничение кошелёк;
+ *   * корабль покупается на этой же верфи (значит, в бедной системе
+ *     пилоту достанется только Аддер) плюс задаток 500 CR;
+ *   * маршрут — из системы, где наняли, в любую в пределах бака корабля;
+ *   * один маршрут — один пилот: двое сбивают друг другу цену. Это и есть
+ *     потолок флота: он растёт от разведанных маршрутов, а не от денег.
+ *
+ * До «Опытного» карточки нет вовсе: как и в рынке, недоступное скрыто, а
+ * не подписано «заблокировано».
+ */
+function pilotsCard(): string {
+  if (state.kills < PILOT_MIN_KILLS) return '';
+
+  const now = Date.now();
+  const systems = systemsOf(state.galaxy);
+  const docked = !state.flight;
+  const economy = currentSystem(state).economy;
+
+  const rows = state.pilots.map((p) => {
+    const cycle = pilotCycleMs(state, p);
+    const profit = pilotRouteProfit(state, p);
+    const income = pilotRunIncome(profit, p.id - 1);
+    // `income` — в десятых кредита, как вся экономика; в час показываем
+    // целые кредиты, иначе на экране было бы «490 CR/ч» вместо 49.
+    const perHour = cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0;
+
+    const line = p.route
+      ? `<div class="muted">${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))} · рейс ${cr(profit)} · вам ${cr(income)} (${perHour} CR/ч)</div>
+         <div class="muted">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}</div>`
+      : '<div class="muted">Маршрут не задан — корабль стоит в ангаре</div>';
+
+    const panel = routePilot === p.id ? pilotRoutePanel(p, systems) : '';
+
+    return `<div class="good-row" style="margin:10px 0"><div>
+        <div class="name">${p.name} · ${SHIPS[p.ship].name}</div>${line}</div>
+        <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить' : 'Маршрут'}</button>
+      </div>${panel}`;
+  }).join('');
+
+  let hire: string;
+  if (!hireOpen) {
+    hire = `<button class="btn tonal" data-action="pilot-hire-open" ${docked ? '' : 'disabled'}>Нанять пилота · задаток ${cr(PILOT_HIRE_FEE)}</button>`;
+  } else {
+    hire = shipsForSale(economy).map((id) => {
+      const price = shipPrice(id) + PILOT_HIRE_FEE;
+      const pick = `<button class="btn tonal" data-action="pilot-hire-pick" data-id="${id}" ${state.cash >= price ? '' : 'disabled'}>Нанять</button>`;
+      const action = hireShip === id
+        ? `<span class="row" style="gap:6px">
+            <button class="btn danger" data-action="pilot-hire-confirm" data-id="${id}">Подтвердить</button>
+            <button class="btn text" data-action="pilot-hire-cancel">Отмена</button>
+          </span>`
+        : pick;
+      const confirm = hireShip === id
+        ? `<div class="muted" style="margin-top:6px">Корабль ${cr(shipPrice(id))} и задаток ${cr(PILOT_HIRE_FEE)}. Пилот придёт без маршрута — назначите следом.</div>`
+        : '';
+      return `<div class="good-row" style="margin:10px 0"><div>
+          <div class="name">${SHIPS[id].name}</div>
+          <div class="muted">Трюм ${SHIPS[id].hold} т · ${cr(price)} всего</div>${confirm}</div>${action}</div>`;
+    }).join('');
+    hire = `${hire}<div class="row" style="margin-top:8px">
+        <button class="btn text" data-action="pilot-hire-close">Свернуть</button></div>`;
+  }
+
+  return `<div class="card"><h2>Пилоты</h2>
+      <div class="sub">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Рейс — настоящий перелёт туда и обратно плюс два часа отдыха. Один маршрут — один пилот.</div>
+      ${rows}
+      ${hire}</div>`;
+}
+
+/** Список маршрутов пилота: только то, куда хватает его бака. */
+function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
+  const spec = SHIPS[pilot.ship];
+  const options = systems
+    .map((sys, i) => ({ i, d: distance(systems[pilot.home], sys) }))
+    .filter((o) => o.i !== pilot.home && o.d <= spec.range)
+    .map((o) => {
+      const profit = routeProfit(state.galaxy, systems, { from: pilot.home, to: o.i }, spec.hold);
+      const cycle = pilotCycleMs(state, { ...pilot, route: { from: pilot.home, to: o.i } });
+      const income = pilotRunIncome(profit, pilot.id - 1);
+      return { ...o, profit, perHour: cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0 };
+    })
+    .sort((a, b) => b.profit - a.profit);
+
+  if (options.length === 0) {
+    return `<div class="muted" style="margin:6px 0 12px 4px">В радиусе бака нет ни одной системы — этому кораблю отсюда не улететь.</div>`;
+  }
+
+  const rows = options.map((o) => {
+    const taken = state.pilots.some(
+      (q) => q.id !== pilot.id && q.route?.from === pilot.home && q.route?.to === o.i,
+    );
+    const isCurrent = pilot.route?.to === o.i;
+    const action = isCurrent
+      ? '<span class="chip">летает здесь</span>'
+      : taken
+        ? '<span class="chip dear">маршрут занят</span>'
+        : `<button class="btn" data-action="pilot-route-set" data-i="${pilot.id}" data-to="${o.i}">Лететь</button>`;
+    return `<div class="good-row"><div>
+        <div class="name">${systems[o.i].name}</div>
+        <div class="muted">${ly(o.d)} · рейс ${cr(o.profit)} · ${o.perHour} CR/ч</div></div>${action}</div>`;
+  }).join('');
+
+  return `<div class="card" style="margin:8px 0 14px;background:rgba(255,255,255,0.03)">
+      <div class="sub">Маршрут из ${systems[pilot.home].name}. Показаны системы в пределах ${ly(spec.range)}.</div>
       ${rows}</div>`;
 }
 
@@ -2231,6 +2382,15 @@ function updateFlight(): void {
     }
     if (fuelText) fuelText.textContent = ly(state.fuel);
   }
+  /*
+   * §105: обратный отсчёт пилотов. Раньше он обновлялся только при полной
+   * перерисовке, то есть замирал на «2 ч 50 мин» и выглядел сломанным.
+   * Теперь тик правит только текст, не трогая разметку.
+   */
+  for (const el of document.querySelectorAll<HTMLElement>('[data-pilot-next]')) {
+    const pilot = state.pilots.find((p) => p.id === Number(el.dataset.pilotNext));
+    if (pilot) el.textContent = formatSpan(pilot.nextRunAt - now);
+  }
   const encEta = document.getElementById('enc-eta');
   if (state.encounter && encEta) encEta.textContent = fmtDur(state.encounter.resolveAt - now);
 }
@@ -2294,6 +2454,10 @@ function onAction(el: HTMLElement): void {
       tab = want;
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
+      // §105: то же для найма и открытого списка маршрутов.
+      hireOpen = false;
+      hireShip = null;
+      routePilot = null;
       break;
     }
     case 'go-map':
@@ -2376,6 +2540,58 @@ function onAction(el: HTMLElement): void {
       } else {
         state = r.state;
         addLog(`Куплен ${SHIPS[id].name} вместо ${was}. Доплата: ${cr(r.paid ?? 0)}`);
+      }
+      break;
+    }
+    case 'pilot-hire-open':
+      hireOpen = true;
+      hireShip = null;
+      break;
+    case 'pilot-hire-pick':
+      hireShip = el.dataset.id as ShipId;
+      break;
+    case 'pilot-hire-cancel':
+      hireShip = null;
+      hireOpen = false;
+      break;
+    case 'pilot-hire-confirm': {
+      const id = el.dataset.id as ShipId;
+      const r = hirePilot(state, id, Date.now());
+      hireShip = null;
+      hireOpen = false;
+      if (r.error) {
+        addLog(PILOT_ERRORS[r.error]);
+      } else {
+        state = r.state;
+        addLog(`Нанят пилот ${r.pilot!.name} · ${SHIPS[id].name}. Корабль и задаток: ${cr(shipPrice(id) + PILOT_HIRE_FEE)}`);
+        // Сразу открываем маршруты: нанятый без дела пилот — это просто
+        // потраченные деньги, и игрок должен увидеть следующий шаг.
+        routePilot = r.pilot!.id;
+      }
+      break;
+    }
+    case 'pilot-hire-close':
+      hireOpen = false;
+      hireShip = null;
+      break;
+    case 'pilot-route':
+      routePilot = routePilot === i ? null : i;
+      break;
+    case 'pilot-route-close':
+      routePilot = null;
+      hireOpen = false;
+      hireShip = null;
+      break;
+    case 'pilot-route-set': {
+      const to = Number(el.dataset.to);
+      const r = assignPilotRoute(state, i, to, Date.now());
+      if (r.error) {
+        addLog(PILOT_ERRORS[r.error]);
+      } else {
+        const systems = systemsOf(state.galaxy);
+        state = r.state;
+        addLog(`${r.pilot!.name} вышел на маршрут ${systems[r.pilot!.route!.from].name} → ${systems[to].name}`);
+        routePilot = null;
       }
       break;
     }
@@ -2705,6 +2921,10 @@ function structuralChange(prev: GameState, next: GameState): boolean {
     // последнего контейнера экран остался бы пустым.
     (next.salvage === null) !== (prev.salvage === null) ||
     (next.encounter === null) !== (prev.encounter === null) ||
+    // §105: пилот вернулся с рейса — деньги в шапке изменились, значит
+    // экран надо перестроить (иначе сумма обновится только к следующему
+    // событию). Рейсы редкие, так что это не «перерисовка каждую секунду».
+    next.pilots !== prev.pilots ||
     next.system !== prev.system ||
     next.flight?.to !== prev.flight?.to
   );

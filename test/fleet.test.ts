@@ -1,228 +1,238 @@
 /**
- * Парк кораблей и раскладка подписей на карте (§70).
+ * §105: ФЛОТ — пилоты, которые летают сами.
  *
- * Модели 12 кораблей, кроме Cobra Mk III, в игре появились впервые.
- * Здесь проверяется то, что можно проверить без глаз: индексы вершин
- * в рёбрах и гранях существуют, грани не вырождены, габариты
- * конечны. Как это выглядит — смотрит `tools/render-fleet.mjs`.
+ * Шаг 1: только торговые рейсы. Что здесь проверяется:
+ *   - наём только с ранга «Опытный» (128 убийств) и только с кораблём,
+ *     который продаётся на этой верфи, плюс задаток 500 CR;
+ *   - маршрут — из системы найма, в пределах бака корабля;
+ *   - один маршрут — один пилот (это и есть потолок флота);
+ *   - цикл = настоящий перелёт туда-обратно + 2 часа отдыха;
+ *   - выручка рейса считается по полке источника, четверть забирает пилот;
+ *   - досчёт переживает долгое отсутствие: 30 суток — это 253 рейса, а не
+ *     один, и не триста тысяч итераций.
+ *
+ * Числа взяты из настоящей галактики 1: LAVE(7) → REORTE(39), 4.4 св. года.
  */
-
-import { test } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { drawShipModel, FLEET, shipSpan } from '../src/ui/ship-model.ts';
-import { layoutLabels, placeSingle, type LabelItem } from '../src/ui/label-layout.ts';
-import { ENEMIES } from '../src/core/ships.ts';
+import {
+  assignPilotRoute,
+  deserialize,
+  hirePilot,
+  newGame,
+  pilotCycleMs,
+  pilotRouteProfit,
+  serialize,
+  systemsOf,
+  advance,
+  DEFAULT_SETTINGS,
+  type GameState,
+} from '../src/core/state.ts';
+import {
+  PILOT_HIRE_FEE,
+  PILOT_MIN_KILLS,
+  PILOT_REST_MS,
+  formatSpan,
+  pilotRunIncome,
+  pilotWageShare,
+  routeProfit,
+} from '../src/core/fleet.ts';
+import { distance } from '../src/core/galaxy.ts';
+import { SHIPS, shipPrice } from '../src/core/ships.ts';
 
-const IDS = Object.keys(FLEET);
+const LAVE = 7;
+const REORTE = 39;
+const HOUR = 3_600_000;
 
-test('в парке все 13 встречающихся кораблей', () => {
-  assert.equal(IDS.length, 13, `в парке: ${IDS.join(', ')}`);
-  for (const e of ENEMIES) {
-    assert.ok(FLEET[e.id], `у ${e.name} (${e.id}) нет модели`);
-  }
-});
+/** Игрок к «Опытному»: 128 убийств и деньги. */
+const veteran = (cash = 200_000): GameState => {
+  const s = newGame(1);
+  return { ...s, kills: PILOT_MIN_KILLS, cash, pilots: [], nextPilotId: 1 };
+};
 
-test('геометрия каждого корабля согласована', () => {
-  for (const id of IDS) {
-    const bp = FLEET[id];
-    const n = bp.verts.length;
-    assert.ok(n >= 4, `${id}: вершин ${n}`);
-    assert.ok(bp.edges.length >= 6, `${id}: рёбер ${bp.edges.length}`);
-    assert.ok(bp.faces.length >= 4, `${id}: граней ${bp.faces.length}`);
+const hired = (model: 'adder' | 'cobra3' = 'adder', cash = 200_000): GameState => {
+  const r = hirePilot(veteran(cash), model, 1_000_000);
+  assert.equal(r.error, undefined);
+  return r.state;
+};
 
-    for (const [a, b] of bp.edges) {
-      assert.ok(a >= 0 && a < n, `${id}: ребро ссылается на вершину ${a} из ${n}`);
-      assert.ok(b >= 0 && b < n, `${id}: ребро ссылается на вершину ${b} из ${n}`);
-      assert.notEqual(a, b, `${id}: ребро ${a}-${b} вырождено`);
-    }
-    for (const f of bp.faces) {
-      assert.ok(f.length >= 3, `${id}: грань из ${f.length} вершин`);
-      for (const i of f) assert.ok(i >= 0 && i < n, `${id}: грань ссылается на вершину ${i} из ${n}`);
-      assert.equal(new Set(f).size, f.length, `${id}: в грани повторяются вершины`);
-    }
-    // Каждая вершина должна быть хоть где-то задействована, иначе
-    // модель содержит мусор из исходника.
-    const used = new Set(bp.edges.flat());
-    assert.equal(used.size, n, `${id}: задействовано ${used.size} вершин из ${n}`);
-  }
-});
+describe('§105 наём', () => {
+  it('задаток и корабль списываются сразу', () => {
+    const s = veteran();
+    const r = hirePilot(s, 'adder', 1_000_000);
+    assert.equal(r.error, undefined);
+    assert.equal(s.cash - r.state.cash, shipPrice('adder') + PILOT_HIRE_FEE);
+    assert.equal(PILOT_HIRE_FEE, 5000, 'задаток — 500 CR');
+  });
 
-test('габариты: Cobra Mk III — эталон 256 единиц, Python крупнее всех', () => {
-  assert.equal(shipSpan(FLEET.cobra3), 256);
-  assert.equal(shipSpan(FLEET.adder), 80);
-  // Порядок размеров из оригинала: Adder — самый маленький, Python
-  // и Anaconda — самые крупные. Если извлекатель перепутает корабли,
-  // это сразу всплывёт.
-  assert.ok(shipSpan(FLEET.python) > shipSpan(FLEET.cobra3));
-  assert.ok(shipSpan(FLEET.anaconda) > shipSpan(FLEET.cobra3));
-  assert.ok(shipSpan(FLEET.adder) < shipSpan(FLEET.sidewinder));
-});
+  it('пилот приходит без маршрута: сначала корабль, потом дело', () => {
+    const r = hirePilot(veteran(), 'adder', 1_000_000);
+    assert.equal(r.state.pilots.length, 1);
+    assert.equal(r.state.pilots[0].route, null);
+    assert.equal(r.state.pilots[0].home, LAVE);
+    assert.equal(r.state.pilots[0].runs, 0);
+    assert.ok(r.pilot!.name.includes(' '), 'у пилота есть имя и фамилия');
+  });
 
-test('Cobra Mk III в парке совпадает с моделью из §69', () => {
-  // 28 вершин / 38 рёбер / 13 граней — числа из независимого разбора
-  // ZX-версии. Совпадение значит, что парсер BBC-исходников верен.
-  assert.equal(FLEET.cobra3.verts.length, 28);
-  assert.equal(FLEET.cobra3.edges.length, 38);
-  assert.equal(FLEET.cobra3.faces.length, 13);
-});
+  it('номер пилота не переиспользуется', () => {
+    let s = hired();
+    const r = hirePilot(s, 'adder', 1_000_000);
+    s = r.state;
+    assert.deepEqual(s.pilots.map((p) => p.id), [1, 2]);
+    assert.equal(s.nextPilotId, 3);
+  });
 
-test('каждый корабль парка рисуется без исключений', () => {
-  // Настоящий баг, пойманный этой проверкой: «нос» был жёстко привязан
-  // к вершинам 20 и 21 — у Cobra это кончик, а у Sidewinder (10 вершин)
-  // их нет, и рендер падал с «undefined.x». Падало 11 моделей из 13.
-  for (const id of IDS) {
-    const ops: string[] = [];
-    const ctx = new Proxy({} as CanvasRenderingContext2D, {
-      get(_t, key) {
-        if (key === 'measureText') return () => ({ width: 6 });
-        return (...args: unknown[]) => {
-          ops.push(String(key));
-          void args;
-        };
+  it('рангом ниже «Опытного» не нанимают', () => {
+    const s = { ...veteran(), kills: PILOT_MIN_KILLS - 1 };
+    assert.equal(hirePilot(s, 'adder', 1_000_000).error, 'rank');
+  });
+
+  it('корабль берётся из того, что продаёт эта верфь', () => {
+    // LAVE — экономика 5, на верфи только Аддер.
+    assert.equal(hirePilot(veteran(), 'python', 1_000_000).error, 'unavailable');
+  });
+
+  it('без денег на корабль и задаток — отказ', () => {
+    assert.equal(hirePilot(veteran(1000), 'adder', 1_000_000).error, 'cash');
+  });
+
+  it('в полёте не нанимают', () => {
+    const s = {
+      ...veteran(),
+      flight: {
+        from: LAVE, to: REORTE, dueAt: 2_000_000, arriveAt: 2_000_000,
+        remainingBaseMs: 1_000, encounters: 0, lastEncounterAt: 0, patrol: false,
+        patrolFuelUsed: 0,
       },
-      set() {
-        return true;
-      },
-    });
-    assert.doesNotThrow(
-      () => drawShipModel(ctx, { width: 300, height: 130, yaw: 0.7, ship: FLEET[id] }),
-      `${id}: рендер упал`,
+    } as unknown as GameState;
+    assert.equal(hirePilot(s, 'adder', 1_000_000).error, 'in-flight');
+  });
+});
+
+describe('§105 маршрут', () => {
+  it('ставится в пределах бака и от системы найма', () => {
+    const s = hired();
+    const r = assignPilotRoute(s, 1, REORTE, 1_000_000);
+    assert.equal(r.error, undefined);
+    assert.deepEqual(r.state.pilots[0].route, { from: LAVE, to: REORTE });
+    const ly = distance(systemsOf(1)[LAVE], systemsOf(1)[REORTE]);
+    assert.ok(ly <= SHIPS.adder.range, 'маршрут влезает в бак');
+  });
+
+  it('дальше бака — отказ', () => {
+    const s = hired();
+    const far = systemsOf(1).findIndex(
+      (sys, i) => i !== LAVE && distance(systemsOf(1)[LAVE], sys) > SHIPS.adder.range,
     );
-    // Силуэт плюс хотя бы три грани: корпус не пустой.
-    const fills = ops.filter((o) => o === 'fill').length;
-    assert.ok(fills >= 4, `${id}: заливок ${fills}, корпус пуст`);
-  }
+    assert.equal(assignPilotRoute(s, 1, far, 1_000_000).error, 'range');
+  });
+
+  it('в свою же систему — отказ', () => {
+    assert.equal(assignPilotRoute(hired(), 1, LAVE, 1_000_000).error, 'self');
+  });
+
+  it('один маршрут — один пилот', () => {
+    let s = hired();
+    s = { ...hirePilot(s, 'adder', 1_000_000).state };
+    s = assignPilotRoute(s, 1, REORTE, 1_000_000).state;
+    assert.equal(assignPilotRoute(s, 2, REORTE, 1_000_000).error, 'taken');
+  });
+
+  it('другой маршрут из того же порта — можно', () => {
+    let s = hired();
+    s = { ...hirePilot(s, 'adder', 1_000_000).state };
+    s = assignPilotRoute(s, 1, REORTE, 1_000_000).state;
+    const second = systemsOf(1)
+      .map((sys, i) => ({ i, d: distance(systemsOf(1)[LAVE], sys) }))
+      .filter((o) => o.i !== LAVE && o.i !== REORTE && o.d <= SHIPS.adder.range);
+    assert.ok(second.length > 0, 'у LAVE есть другие соседи');
+    assert.equal(assignPilotRoute(s, 2, second[0].i, 1_000_000).error, undefined);
+  });
 });
 
-/* ---------- Раскладка подписей ---------- */
+describe('§105 цикл и деньги', () => {
+  it('цикл — перелёт туда-обратно плюс два часа отдыха', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const cycle = pilotCycleMs(s, s.pilots[0]);
+    assert.ok(cycle > PILOT_REST_MS, 'полёт добавляется к отдыху');
+    assert.ok(cycle < PILOT_REST_MS + 2 * HOUR, 'полёт на 4.4 св. года — меньше часа в обе стороны');
+  });
 
-const item = (x: number, y: number, text: string, sub?: string): LabelItem => ({
-  x, y, text, sub, color: '#fff', subColor: '#aaa',
+  it('выручка рейса — по полке источника, Аддер грузит 8 тонн', () => {
+    const systems = systemsOf(1);
+    const profit = routeProfit(1, systems, { from: LAVE, to: REORTE }, SHIPS.adder.hold);
+    assert.equal(profit, 1856, '185.6 CR за рейс на LAVE → REORTE');
+    // Полка не пускает загрузить больше, чем есть.
+    const lots = routeProfit(1, systems, { from: LAVE, to: REORTE }, 500);
+    assert.ok(lots < 500 * 30 * 10, 'даже с безразмерным трюмом выручка ограничена полкой');
+  });
+
+  it('пилот забирает четверть, вам три четверти', () => {
+    assert.equal(pilotWageShare(0), 0.25);
+    assert.equal(pilotRunIncome(1856, 0), 1392, '139.2 CR из 185.6');
+  });
+
+  it('за сутки Аддер делает восемь рейсов', () => {
+    let s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const cash0 = s.cash;
+    const r = advance(s, 1_000_000 + 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.pilots[0].runs, 8);
+    assert.equal(r.state.cash - cash0, 8 * 1392);
+    assert.ok(r.events.some((e) => e.type === 'fleet'), 'в журнале есть строка флота');
+  });
+
+  it('месяц отсутствия досчитывается одним умножением', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const cash0 = s.cash;
+    const r = advance(s, 1_000_000 + 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    const runs = r.state.pilots[0].runs;
+    assert.ok(runs > 200 && runs < 300, `рейсов за 30 суток: ${runs}`);
+    assert.equal(r.state.cash - cash0, runs * 1392);
+  });
+
+  it('пилот без маршрута не приносит ничего', () => {
+    const s = hired();
+    const r = advance(s, 1_000_000 + 100 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.cash, s.cash);
+    assert.equal(r.state.pilots[0].runs, 0);
+  });
+
+  it('чужой рейс не сдвигает ваше время', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const half = advance(s, 1_000_000 + 1 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(half.state.pilots[0].runs, 0, 'за час пилот ещё не вернулся');
+  });
+
+  it('время показывается по-человечески', () => {
+    assert.equal(formatSpan(2 * HOUR + 50 * 60_000), '2 ч 50 мин');
+    assert.equal(formatSpan(8 * 60_000), '8 мин');
+    assert.equal(formatSpan(3 * HOUR), '3 ч');
+  });
 });
 
-test('подписи не налезают друг на друга и не уезжают за холст', () => {
-  // Тесно, как в окрестностях LAVE: 12 систем на 360×360.
-  const items = [
-    item(180, 180, 'LAVE', 'агро богатая · Т5'),
-    item(180, 120, 'REORTE', 'агро бедная · Т6'),
-    item(120, 200, 'DISO', 'агро средняя · Т8'),
-    item(150, 260, 'LEESTI', 'пром. бедная · Т11'),
-    item(40, 210, 'RIEDQUAT', 'пром. преим. · Т4'),
-    item(60, 150, 'USZAA', 'пром. средняя · Т8'),
-    item(200, 90, 'QUATOR', 'пром. преим. · Т7'),
-    item(120, 300, 'ORRERE', 'пром. преим. · Т6'),
-    item(330, 230, 'ZAONCE', 'агро бедная · Т12'),
-    item(320, 300, 'TIONISLA', 'агро средняя · Т12'),
-  ];
-  const sizes = items.map((it) => ({
-    tw: it.text.length * 6,
-    sw: it.sub ? it.sub.length * 5.2 : 0,
-  }));
-  const { placed, occupied } = layoutLabels(items, sizes, 360, 360);
+describe('§105 сохранение', () => {
+  it('пилоты переживают запись и чтение', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const back = deserialize(serialize(s));
+    assert.deepEqual(back.pilots, s.pilots);
+    assert.equal(back.nextPilotId, s.nextPilotId);
+  });
 
-  assert.ok(placed.length > 0, 'хоть что-то размещено');
+  it('сохранение без флота читается как пустой ангар', () => {
+    const s = hired();
+    const raw = JSON.parse(serialize(s));
+    delete raw.pilots;
+    delete raw.nextPilotId;
+    const back = deserialize(JSON.stringify(raw));
+    assert.deepEqual(back.pilots, []);
+    assert.equal(back.nextPilotId, 1);
+  });
 
-  // Ни одна пара прямоугольников не пересекается.
-  for (let i = 0; i < occupied.length; i++) {
-    for (let j = i + 1; j < occupied.length; j++) {
-      const a = occupied[i];
-      const b = occupied[j];
-      const clash = !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2);
-      assert.ok(!clash, `прямоугольники ${i} и ${j} пересекаются`);
-    }
-  }
-  // И всё внутри холста.
-  for (const b of occupied) {
-    assert.ok(b.x1 >= 0 && b.y1 >= 0 && b.x2 <= 360 && b.y2 <= 360, 'подпись уехала за холст');
-  }
-});
-
-test('раскладка не зависит от того, какая система выбрана', () => {
-  // Была регрессия: порядок раскладки задавал вызывающий код
-  // (текущая → выбранная → прочие), и при выборе подписи переезжали.
-  // Палец, только что попавший в название, оказывался над другой
-  // системой. Теперь порядок задаёт расстояние до центра — он от
-  // выбора не меняется.
-  const items = [
-    item(180, 180, 'LAVE', 'агро богатая · Т5'),
-    item(180, 120, 'REORTE', 'агро бедная · Т6'),
-    item(120, 200, 'DISO', 'агро средняя · Т8'),
-    item(150, 260, 'LEESTI', 'пром. бедная · Т11'),
-    item(60, 150, 'USZAA', 'пром. средняя · Т8'),
-    item(200, 90, 'QUATOR', 'пром. преим. · Т7'),
-  ];
-  const sizes = items.map((it) => ({ tw: it.text.length * 6, sw: it.sub ? it.sub.length * 5.2 : 0 }));
-  const a = layoutLabels(items, sizes, 360, 360);
-  // Меняем порядок входа — как если бы выбранной стала другая система.
-  const shuffled = [...items].reverse();
-  const b = layoutLabels(shuffled, shuffled.map((it) => ({ tw: it.text.length * 6, sw: it.sub ? it.sub.length * 5.2 : 0 })), 360, 360);
-  const posOf = (l: { placed: { item: LabelItem; cx: number; cy: number }[] }) =>
-    new Map(l.placed.map((p) => [p.item.text, `${Math.round(p.cx)},${Math.round(p.cy)}`]));
-  const pa = posOf(a);
-  const pb = posOf(b);
-  for (const [name, pos] of pa) {
-    if (!pb.has(name)) continue;
-    assert.equal(pb.get(name), pos, `${name} переехала при смене выбора`);
-  }
-});
-
-test('касание по подписи считается по её реальной строке', () => {
-  // Двухстрочная подпись занимает 22 px, однострочная — 10.
-  // Точные границы нужны потому, что соседние подписи стоят в
-  // нескольких пикселях и приблизительный прямоугольник уводит тап.
-  const items = [item(100, 100, 'RA'), item(140, 100, 'QUATOR')];
-  const sizes = [
-    { tw: 12, sw: 0 },
-    { tw: 36, sw: 0 },
-  ];
-  const { placed } = layoutLabels(items, sizes, 360, 200);
-  for (const p of placed) {
-    const h = p.box.y2 - p.box.y1;
-    assert.equal(h, 10, `высота области ${h} вместо 10 для однострочной`);
-  }
-});
-
-test('однострочная подпись находит место там, где двухстрочная не влезла', () => {
-  const taken = [{ x1: 100, y1: 100, x2: 260, y2: 130 }];
-  const spot = placeSingle(180, 115, 80, 360, taken);
-  assert.ok(spot, 'место должно найтись');
-  // Не поверх занятого прямоугольника.
-  const box = { x1: spot!.cx - 40, y1: spot!.cy - 5, x2: spot!.cx + 40, y2: spot!.cy + 5 };
-  assert.ok(
-    !(box.x2 >= 100 && box.x1 <= 260 && box.y2 >= 100 && box.y1 <= 130),
-    'подпись легла поверх занятого места',
-  );
-});
-
-test('если места нет вовсе — возвращается null, а не подпись поверх', () => {
-  const wall = [{ x1: -10, y1: -10, x2: 1000, y2: 1000 }];
-  assert.equal(placeSingle(180, 180, 90, 360, wall), null);
-});
-
-/* ---------- Формат длительности ---------- */
-
-/*
- * fmtDur — не экспортируется, но правило простое и важное: единицы
- * подписаны, нули не печатаются. Проверяем через собранную игру в
- * tools/verify-destination.mjs; здесь — чтобы зафиксировать решение
- * в тестах, дублируем правило как документ.
- */
-test('длительность печатается с подписью единиц', () => {
-  const fmt = (ms: number): string => {
-    const total = Math.max(0, Math.ceil(ms / 1000));
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const sec = total % 60;
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    if (h > 0) return m > 0 ? `${h} ч ${pad(m)} мин` : `${h} ч`;
-    if (m > 0) return sec > 0 ? `${m} мин ${pad(sec)} с` : `${m} мин`;
-    return `${sec} с`;
-  };
-  // Главное: «1 ч» вместо «1:00», которое читается как минута.
-  assert.equal(fmt(3600_000), '1 ч');
-  assert.equal(fmt(3661_000), '1 ч 01 мин');
-  assert.equal(fmt(15 * 60_000), '15 мин');
-  assert.equal(fmt(96_000), '1 мин 36 с');
-  assert.equal(fmt(42_000), '42 с');
-  assert.equal(fmt(0), '0 с');
+  it('счётчик восстанавливается по номерам пилотов', () => {
+    const s = hired();
+    const raw = JSON.parse(serialize(s));
+    delete raw.nextPilotId;
+    const back = deserialize(JSON.stringify(raw));
+    assert.equal(back.nextPilotId, 2);
+  });
 });
