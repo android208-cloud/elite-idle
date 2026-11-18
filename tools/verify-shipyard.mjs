@@ -163,5 +163,21 @@ async function hangar(opts) {
   w.close();
 }
 
+/* ---------- §106: в ангаре модель СВОЕГО корабля ---------- */
+{
+  const w = await hangar({ ship: { model: 'python' } });
+  const canvas = w.document.getElementById('ship-model');
+  check('ангар рисует модель своего корабля, а не Кобру',
+    canvas?.dataset.ship === 'python', canvas?.dataset.ship ?? 'нет канваса');
+  check('и подпись называет тот же корабль', /Python · ваш корабль в ангаре/.test(content(w)));
+  w.close();
+}
+{
+  const w = await hangar({ ship: { model: 'anaconda' } });
+  const canvas = w.document.getElementById('ship-model');
+  check('после смены корабля модель меняется', canvas?.dataset.ship === 'anaconda', canvas?.dataset.ship ?? '');
+  w.close();
+}
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad ? 1 : 0);

@@ -1640,7 +1640,7 @@ function hangarScreen(): string {
   const name = shipSpec(state.ship).name;
   const model = docked
     ? `<div class="card ship-view">
-      <canvas id="ship-model" aria-label="Модель корабля ${name}"></canvas>
+      <canvas id="ship-model" data-ship="${state.ship.model}" aria-label="Модель корабля ${name}"></canvas>
       <div class="sub" style="text-align:center">${name} · ваш корабль в ангаре</div>
     </div>`
     : '';
@@ -2284,7 +2284,17 @@ function drawShipFrame(now: number): void {
   // 24 секунды на оборот: медленно, чтобы не отвлекало от чтения цифр.
   shipModelAngle = (now / 24000) * Math.PI * 2;
 
-  drawShipModel(ctx, { width: w, height: h, yaw: shipModelAngle });
+  /*
+   * §106: в ангаре — модель ТОГО корабля, на котором летает игрок.
+   *
+   * Раньше `drawShipModel` вызывался без `ship`, а по умолчанию в нём
+   * зашита Кобра — и в ангаре всегда стояла она, даже когда игрок уже
+   * купил Питон и подпись честно говорила «Python · ваш корабль в ангаре».
+   * Модель берём из `data-ship`, чтобы её нельзя было рассинхронизировать
+   * с подписью: и то, и другое пишется из `state.ship.model`.
+   */
+  const bp = FLEET[canvas.dataset.ship ?? ''];
+  drawShipModel(ctx, { width: w, height: h, yaw: shipModelAngle, ship: bp });
   shipModelFrame = requestAnimationFrame(drawShipFrame);
 }
 
