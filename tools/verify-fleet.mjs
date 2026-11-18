@@ -134,10 +134,49 @@ async function hangar(opts) {
   check('маршрут записан', JSON.stringify(s2.pilots[0].route) === JSON.stringify({ from: LAVE, to: REORTE }));
   const text2 = content(w);
   check('карточка показывает маршрут', /LAVE → REORTE/.test(text2), text2.match(/LAVE → REORTE[^·]*/)?.[0] ?? '');
-  check('показана выручка рейса', /рейс 185\.6 CR/.test(text2));
-  check('и ваша доля', /вам 139\.2 CR/.test(text2));
-  check('и доход в час целыми кредитами', /49 CR\/ч/.test(text2));
+  // §107: торговец запрещёнку не берёт, поэтому его рейс — только законный
+  // груз: 51.2 CR выручки, 38.4 CR вам.
+  check('показана выручка рейса', /рейс 51\.2 CR/.test(text2), text2.match(/рейс [\d.]+ CR/)?.[0] ?? '');
+  check('и ваша доля', /вам 38\.4 CR/.test(text2));
+  check('и доход в час целыми кредитами', /14 CR\/ч/.test(text2));
   check('и время до возвращения', /Вернётся через/.test(text2));
+  w.close();
+}
+
+/* ---------- §107: роли ---------- */
+{
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
+      route: null, nextRunAt: 0, role: 'trader', runs: 0, failures: 0,
+    }],
+    nextPilotId: 2,
+  });
+  click(w, byAction(w, 'pilot-route', { i: 1 }));
+  await wait(250);
+  const trader = content(w);
+  check('роль видна до назначения', /Торговец/.test(trader) && /Пират/.test(trader) && /Контрабандист/.test(trader));
+  check('торговцу показан риск пиратов', /пираты \d/.test(trader));
+
+  click(w, byAction(w, 'pilot-role', { role: 'smuggler' }));
+  await wait(250);
+  const smuggler = content(w);
+  check('контрабандисту — досмотр', /досмотр \d/.test(smuggler));
+  check('и его рейс дороже торгового', /вам 139\.2 CR за рейс/.test(smuggler), smuggler.match(/вам [\d.]+ CR за рейс/)?.[0] ?? '');
+  check('предупреждение про запрещёнку', /запрещёнку/.test(smuggler));
+
+  click(w, byAction(w, 'pilot-role', { role: 'pirate' }));
+  await wait(250);
+  const pirate = content(w);
+  check('пирату — перехват и трепку', /перехват [\d.]+%/.test(pirate) && /трепка/.test(pirate));
+  check('и сказано про розыск', /\+2 к розыску/.test(pirate));
+  check('пиратский рейс дороже всех', /вам 181\.4 CR за рейс/.test(pirate), pirate.match(/вам [\d.]+ CR за рейс/)?.[0] ?? '');
+
+  click(w, byAction(w, 'pilot-route-set'));
+  await wait(350);
+  const s2 = saved(w);
+  check('роль записана вместе с маршрутом', s2.pilots[0].role === 'pirate');
+  check('в журнале сказано, что это пират', log(w).some((l) => /пират/.test(l.text)));
   w.close();
 }
 
@@ -146,7 +185,7 @@ async function hangar(opts) {
   const w = await hangar({
     pilots: [{
       id: 1, name: 'Вэл Кроу', ship: 'adder', home: LAVE,
-      route: { from: LAVE, to: REORTE }, nextRunAt: 0, runs: 0,
+      route: { from: LAVE, to: REORTE }, nextRunAt: 0, role: 'trader', runs: 0, failures: 0,
     }],
     nextPilotId: 2,
   });
@@ -170,7 +209,7 @@ async function hangar(opts) {
       id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
       route: { from: LAVE, to: REORTE },
       // Половина суток назад пилот получил маршрут: часть рейсов уже была.
-      nextRunAt: startedAt - 12 * 3_600_000, runs: 0,
+      nextRunAt: startedAt - 12 * 3_600_000, role: 'trader', runs: 0, failures: 0,
     }],
     nextPilotId: 2,
   });

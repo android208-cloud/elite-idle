@@ -31,6 +31,7 @@
  * растёт от числа разведанных маршрутов, а не от денег на счету.
  */
 
+import { isContraband } from './cargo-canisters.ts';
 import { distance, type StarSystem } from './galaxy.ts';
 import { generateMarket, TONNE_MAX_INDEX } from './market.ts';
 import type { ShipId } from './ships.ts';
@@ -72,6 +73,105 @@ export const PILOT_MAX_WAGE = 0.75;
  */
 export const PILOT_MIN_KILLS = 128;
 
+/* ---------- §107: роли пилота ---------- */
+
+/**
+ * Роль пилота. Шаг 2: три роли, полицейский — шаг 3.
+ *
+ * Роль — это не «профессия на всю жизнь»: она задаётся вместе с маршрутом
+ * и меняется там же. Один и тот же пилот может быть торговцем на спокойной
+ * линии и пиратом в анархии.
+ */
+export type PilotRole = 'trader' | 'smuggler' | 'pirate';
+
+export const PILOT_ROLE_NAMES: Record<PilotRole, string> = {
+  trader: 'Торговец',
+  smuggler: 'Контрабандист',
+  pirate: 'Пират',
+};
+
+/**
+ * Скупщик краденого берёт треть цены.
+ *
+ * Без этой доли пират был бы в восемь раз богаче торговца: он же забирает
+ * товар даром. Треть оставляет ему двукратный перевес — доходность,
+ * за которую стоит рисковать, но не ту, ради которой бросают торговлю.
+ */
+export const FENCE_SHARE = 0.3;
+
+/** Сколько розыска добавляет каждый удачный пиратский рейс. */
+export const PIRATE_LEGAL_PER_RUN = 2;
+
+/**
+ * Шанс, что добыча отобьётся: 4% на любом маршруте.
+ *
+ * Почему на любом: жертва вооружена сама, и в анархии полиции нет — если
+ * бы риск был только от полиции, анархия стала бы бесплатным станком.
+ * Итог трепки — ремонт, корабль и пилот целы.
+ */
+export const PIRATE_DAMAGE_CHANCE = 0.04;
+
+/** Ремонт после трепки — четверть цены корабля. */
+export const PIRATE_REPAIR_SHARE = 0.25;
+
+/**
+ * Шанс, что пирата возьмёт полиция — `надзор × 1.5%`.
+ *
+ * Здесь теряется всё: и корабль, и пилот. Поэтому в демократии пирату
+ * делать нечего, а его дом — анархия и феодализм.
+ */
+export const PIRATE_POLICE_CHANCE = 0.015;
+
+/** Досмотр контрабандиста: `надзор пункта назначения × 2%`. */
+export const SMUGGLER_INSPECT_CHANCE = 0.02;
+
+/** Штраф за конфискованную запрещёнку, в десятых кредита: 100 CR. */
+export const SMUGGLER_FINE = 1000;
+
+/** Сколько розыска даёт пойманная контрабанда. */
+export const SMUGGLER_LEGAL = 2;
+
+/**
+ * Нападение на торговца: `(7 − надзор) × 0.5%`.
+ *
+ * Это ответ на вопрос «зачем полиция торговцу»: в демократии пираты к
+ * торговцу не суются, в анархии — 3.5% за рейс.
+ */
+export const TRADER_RAID_CHANCE = 0.005;
+
+/** Надзор системы — строгость её правительства (0 — анархия, 7 — корпорация). */
+export const surveillanceOf = (system: StarSystem): number => system.government;
+
+/** Надзор маршрута: среднее двух концов. */
+export function laneSurveillance(systems: readonly StarSystem[], route: PilotRoute): number {
+  return (surveillanceOf(systems[route.from]) + surveillanceOf(systems[route.to])) / 2;
+}
+
+/** Шансы провала за один рейс — их видно в карточке ДО назначения. */
+export interface PilotRisk {
+  /** Пират: полиция взяла — корабль и пилот потеряны. */
+  police: number;
+  /** Пират: добыча отбилась — ремонт. */
+  damage: number;
+  /** Контрабандист: досмотр — запрещёнка и штраф. */
+  inspect: number;
+  /** Торговец: пираты отняли груз рейса. */
+  raid: number;
+}
+
+export function pilotRisk(
+  role: PilotRole,
+  lane: number,
+  destinationSurveillance: number,
+): PilotRisk {
+  return {
+    police: role === 'pirate' ? lane * PIRATE_POLICE_CHANCE : 0,
+    damage: role === 'pirate' ? PIRATE_DAMAGE_CHANCE : 0,
+    inspect: role === 'smuggler' ? destinationSurveillance * SMUGGLER_INSPECT_CHANCE : 0,
+    raid: role === 'trader' ? Math.max(0, 7 - lane) * TRADER_RAID_CHANCE : 0,
+  };
+}
+
 /** Маршрут пилота: откуда и куда. Оба конца — в его галактике. */
 export interface PilotRoute {
   from: number;
@@ -88,8 +188,12 @@ export interface Pilot {
   route: PilotRoute | null;
   /** Момент, когда пилот вернётся с грузом (следующий рейс). */
   nextRunAt: number;
-  /** Сколько рейсов сделано — для карточки. */
+  /** Роль: торговец, контрабандист или пират (§107). */
+  role: PilotRole;
+  /** Удачных рейсов — для карточки. */
   runs: number;
+  /** Провалов: досмотр, трепка, перехват, ограбление. */
+  failures: number;
 }
 
 /** Доля n-го пилота (нумерация с нуля). */
@@ -135,12 +239,19 @@ export function routeProfit(
   systems: readonly StarSystem[],
   route: PilotRoute,
   hold: number,
+  role: PilotRole = 'trader',
 ): number {
   const from = calmMarket(galaxy, systems, route.from);
   const to = calmMarket(galaxy, systems, route.to);
 
   const lines: { margin: number; qty: number }[] = [];
   for (let i = 0; i <= TONNE_MAX_INDEX; i++) {
+    /*
+     * §107: торговец запрещёнку не берёт вообще — решение пользователя.
+     * Раньше маршрут считался по всем товарам сразу, и «торговец» тихо
+     * возил рабов, стоило им оказаться выгодными. Теперь роль на входе.
+     */
+    if (role === 'trader' && isContraband(i)) continue;
     // Маржа в десятых кредита за тонну — сразу в тех же единицах, что и цена.
     const margin = to[i].price - from[i].price;
     if (margin > 0 && from[i].quantity > 0) lines.push({ margin, qty: from[i].quantity });
@@ -156,6 +267,25 @@ export function routeProfit(
     profit += tonnes * line.margin;
   }
   return profit;
+}
+
+/**
+ * Добыча пирата: чужой товар, продаётся скупщику за треть.
+ *
+ * Пират не покупает груз, а берёт — поэтому его выручка считается не от
+ * маржи, а от продажной цены в пункте назначения. Полку он не уважает:
+ * обирает корабли, а не магазин.
+ */
+export function pirateLoot(
+  galaxy: number,
+  systems: readonly StarSystem[],
+  route: PilotRoute,
+  hold: number,
+): number {
+  const to = calmMarket(galaxy, systems, route.to);
+  let best = 0;
+  for (let i = 0; i <= TONNE_MAX_INDEX; i++) best = Math.max(best, to[i].price);
+  return Math.round(hold * best * FENCE_SHARE);
 }
 
 /** Расстояние маршрута в световых годах. */

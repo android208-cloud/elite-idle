@@ -29,13 +29,18 @@ import {
   type GameState,
 } from '../src/core/state.ts';
 import {
+  FENCE_SHARE,
   PILOT_HIRE_FEE,
   PILOT_MIN_KILLS,
   PILOT_REST_MS,
   formatSpan,
+  laneSurveillance,
+  pirateLoot,
+  pilotRisk,
   pilotRunIncome,
   pilotWageShare,
   routeProfit,
+  surveillanceOf,
 } from '../src/core/fleet.ts';
 import { distance } from '../src/core/galaxy.ts';
 import { SHIPS, shipPrice } from '../src/core/ships.ts';
@@ -161,7 +166,7 @@ describe('§105 цикл и деньги', () => {
   it('выручка рейса — по полке источника, Аддер грузит 8 тонн', () => {
     const systems = systemsOf(1);
     const profit = routeProfit(1, systems, { from: LAVE, to: REORTE }, SHIPS.adder.hold);
-    assert.equal(profit, 1856, '185.6 CR за рейс на LAVE → REORTE');
+    assert.equal(profit, 512, '51.2 CR законным грузом на LAVE → REORTE');
     // Полка не пускает загрузить больше, чем есть.
     const lots = routeProfit(1, systems, { from: LAVE, to: REORTE }, 500);
     assert.ok(lots < 500 * 30 * 10, 'даже с безразмерным трюмом выручка ограничена полкой');
@@ -169,15 +174,18 @@ describe('§105 цикл и деньги', () => {
 
   it('пилот забирает четверть, вам три четверти', () => {
     assert.equal(pilotWageShare(0), 0.25);
-    assert.equal(pilotRunIncome(1856, 0), 1392, '139.2 CR из 185.6');
+    assert.equal(pilotRunIncome(512, 0), 384, '28.8 CR из 51.2');
   });
 
   it('за сутки Аддер делает восемь рейсов', () => {
-    let s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
     const cash0 = s.cash;
     const r = advance(s, 1_000_000 + 24 * HOUR, DEFAULT_SETTINGS);
-    assert.equal(r.state.pilots[0].runs, 8);
-    assert.equal(r.state.cash - cash0, 8 * 1392);
+    const [p] = r.state.pilots;
+    // §107: часть рейсов может отнять пират, поэтому считаем не удачу, а
+    // инвариант: всего рейсов ровно по циклу, а деньги — по удачным.
+    assert.equal(p.runs + p.failures, 8);
+    assert.equal(r.state.cash - cash0, p.runs * 384);
     assert.ok(r.events.some((e) => e.type === 'fleet'), 'в журнале есть строка флота');
   });
 
@@ -185,9 +193,9 @@ describe('§105 цикл и деньги', () => {
     const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
     const cash0 = s.cash;
     const r = advance(s, 1_000_000 + 30 * 24 * HOUR, DEFAULT_SETTINGS);
-    const runs = r.state.pilots[0].runs;
-    assert.ok(runs > 200 && runs < 300, `рейсов за 30 суток: ${runs}`);
-    assert.equal(r.state.cash - cash0, runs * 1392);
+    const [p] = r.state.pilots;
+    assert.ok(p.runs > 200 && p.runs + p.failures < 300, `рейсов за 30 суток: ${p.runs + p.failures}`);
+    assert.equal(r.state.cash - cash0, p.runs * 384);
   });
 
   it('пилот без маршрута не приносит ничего', () => {
@@ -234,5 +242,135 @@ describe('§105 сохранение', () => {
     delete raw.nextPilotId;
     const back = deserialize(JSON.stringify(raw));
     assert.equal(back.nextPilotId, 2);
+  });
+});
+
+/* ---------- §107: роли ---------- */
+
+/** Пилот, поставленный на маршрут напрямую — без верфи и без ГПСЧ найма. */
+const onRoute = (
+  from: number,
+  to: number,
+  role: 'trader' | 'smuggler' | 'pirate',
+  over: Partial<GameState['pilots'][number]> = {},
+): GameState => ({
+  ...veteran(),
+  system: from,
+  pilots: [{
+    id: 1, name: 'Тест Пилот', ship: 'adder', home: from, route: { from, to },
+    nextRunAt: 0, role, runs: 0, failures: 0, ...over,
+  }],
+  nextPilotId: 2,
+});
+
+/** Анархия: RETILA(20) → RIRAES(148), 3.0 св. года, надзор 0. */
+const ANARCHY = { from: 20, to: 148 };
+/** Корпорация: QUBE(1) → QUQUOR(40), 5.6 св. года, надзор 7. */
+const POLICE = { from: 1, to: 40 };
+/** LAVE(7) → REORTE(39), диктатура на обоих концах, надзор 3. */
+const DICTATORS = { from: LAVE, to: REORTE };
+
+describe('§107 роли: что везёт и сколько зарабатывает', () => {
+  it('торговец запрещёнку не берёт вовсе', () => {
+    const systems = systemsOf(1);
+    const trader = routeProfit(1, systems, DICTATORS, 8, 'trader');
+    const smuggler = routeProfit(1, systems, DICTATORS, 8, 'smuggler');
+    assert.equal(trader, 512);
+    assert.equal(smuggler, 1856, 'с запрещёнкой — 185.6 CR');
+    assert.ok(smuggler > trader * 3, 'на этой линии запрещёнка даёт втрое больше');
+  });
+
+  it('пират берёт чужое: треть продажной стоимости полного трюма', () => {
+    const loot = pirateLoot(1, systemsOf(1), DICTATORS, SHIPS.adder.hold);
+    assert.equal(loot, 2419, '241.9 CR со скупщика');
+    assert.ok(loot > routeProfit(1, systemsOf(1), DICTATORS, 8, 'smuggler'), 'грабёж выгоднее торговли');
+  });
+
+  it('скупщик берёт треть — иначе пират был бы в восемь раз богаче', () => {
+    assert.equal(FENCE_SHARE, 0.3);
+    const sell = pirateLoot(1, systemsOf(1), DICTATORS, 8) / FENCE_SHARE;
+    assert.ok(sell > 8000, 'полный трюм стоит около 806 CR');
+  });
+});
+
+describe('§107 полиция — это правительство системы', () => {
+  it('надзор системы — индекс правительства', () => {
+    assert.equal(surveillanceOf(systemsOf(1)[1]), 7, 'QUBE — корпорация');
+    assert.equal(surveillanceOf(systemsOf(1)[20]), 0, 'RETILA — анархия');
+  });
+
+  it('надзор линии — среднее двух концов', () => {
+    assert.equal(laneSurveillance(systemsOf(1), ANARCHY), 0);
+    assert.equal(laneSurveillance(systemsOf(1), POLICE), 7);
+    assert.equal(laneSurveillance(systemsOf(1), DICTATORS), 3);
+  });
+
+  it('в анархии торговца грабят чаще, а пирата полиция не ловит', () => {
+    const systems = systemsOf(1);
+    const trader = pilotRisk('trader', laneSurveillance(systems, ANARCHY), 0);
+    const pirate = pilotRisk('pirate', laneSurveillance(systems, ANARCHY), 0);
+    assert.equal(trader.raid, 0.035, '3.5% за рейс');
+    assert.equal(pirate.police, 0, 'полиции нет');
+    assert.equal(pirate.damage, 0.04, 'но добыча может отбиться');
+  });
+
+  it('в корпоративной системе пирату не жить', () => {
+    const risk = pilotRisk('pirate', laneSurveillance(systemsOf(1), POLICE), 7);
+    assert.ok(Math.abs(risk.police - 0.105) < 1e-9, '10.5% перехвата за рейс');
+  });
+
+  it('досмотр контрабандиста зависит от пункта назначения', () => {
+    assert.ok(Math.abs(pilotRisk('smuggler', 3, 3).inspect - 0.06) < 1e-9, '6% в диктатуре');
+    assert.ok(Math.abs(pilotRisk('smuggler', 0, 7).inspect - 0.14) < 1e-9, '14% в корпорации');
+  });
+});
+
+describe('§107 что из этого следует в игре', () => {
+  it('пират повышает розыск: +2 за каждый удачный рейс', () => {
+    const s = onRoute(ANARCHY.from, ANARCHY.to, 'pirate');
+    const r = advance(s, 10 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    assert.ok(p.runs > 0, 'рейсы были');
+    assert.equal(r.state.legal, p.runs * 2);
+  });
+
+  it('торговец розыск не поднимает никогда', () => {
+    const s = onRoute(ANARCHY.from, ANARCHY.to, 'trader');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.legal, 0);
+  });
+
+  it('контрабандиста ловят на досмотре: штраф и розыск', () => {
+    const s = onRoute(DICTATORS.from, DICTATORS.to, 'smuggler');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    assert.ok(p.failures > 0, 'досмотры случались');
+    assert.ok(r.state.legal > 0, 'розыск вырос');
+    // На досмотре теряется запрещёнка: за удачный рейс платят 139.2 CR,
+    // за пойманный — только законную часть (38.4) минус штраф 100 CR.
+    const cash0 = s.cash;
+    assert.equal(r.state.cash - cash0, p.runs * 1392 + p.failures * (384 - 1000));
+  });
+
+  it('пирата в полицейской системе в конце концов берут', () => {
+    const s = onRoute(POLICE.from, POLICE.to, 'pirate');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.pilots.length, 0, 'корабль и пилот потеряны');
+    assert.ok(r.events.some((e) => /попался полиции/.test(e.text)));
+  });
+
+  it('в анархии пират живёт: корабль цел, розыск растёт', () => {
+    const s = onRoute(ANARCHY.from, ANARCHY.to, 'pirate');
+    const r = advance(s, 3 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.pilots.length, 1);
+    assert.ok(r.state.legal >= 0);
+  });
+
+  it('смена роли на маршруте записывается и сбрасывает провалы', () => {
+    const s = onRoute(DICTATORS.from, DICTATORS.to, 'trader', { failures: 5, runs: 9 });
+    const r = assignPilotRoute(s, 1, REORTE, 1_000_000, 'pirate');
+    assert.equal(r.error, undefined);
+    assert.equal(r.state.pilots[0].role, 'pirate');
+    assert.equal(r.state.pilots[0].failures, 0, 'провалы торговца к пирату не переходят');
   });
 });

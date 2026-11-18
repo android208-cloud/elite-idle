@@ -22,11 +22,21 @@ import {
   PILOT_HIRE_FEE,
   PILOT_MIN_KILLS,
   PILOT_REST_MS,
+  PIRATE_DAMAGE_CHANCE,
+  PIRATE_LEGAL_PER_RUN,
+  PIRATE_REPAIR_SHARE,
+  SMUGGLER_FINE,
+  SMUGGLER_LEGAL,
+  laneSurveillance,
+  pirateLoot,
   pilotName,
+  pilotRisk,
   pilotRunIncome,
   routeDistance,
   routeProfit,
+  surveillanceOf,
   type Pilot,
+  type PilotRole,
 } from './fleet.ts';
 import {
   autoResolve,
@@ -1269,7 +1279,10 @@ export function hirePilot(state: GameState, id: ShipId, now: number): PilotResul
     home: state.system,
     route: null,
     nextRunAt: 0,
+    // Роль задаётся вместе с маршрутом: по умолчанию — торговец.
+    role: 'trader',
     runs: 0,
+    failures: 0,
   };
 
   return {
@@ -1295,6 +1308,7 @@ export function assignPilotRoute(
   pilotId: number,
   to: number,
   now: number,
+  role: PilotRole = 'trader',
   settings: Settings = DEFAULT_SETTINGS,
 ): PilotResult {
   if (state.flight) return { state, error: 'in-flight' };
@@ -1318,7 +1332,18 @@ export function assignPilotRoute(
   if (taken) return { state, error: 'taken' };
 
   const cycle = 2 * baseJumpDuration(ly, settings) + PILOT_REST_MS;
-  const next: Pilot = { ...pilot, route: { from: pilot.home, to }, nextRunAt: now + cycle };
+  /*
+   * Роль ставится вместе с маршрутом: пират — это выбор, а не состояние,
+   * в которое попадаешь случайно. Смена роли сбрасывает счётчик провалов:
+   * у торговца и пирата они означают разное.
+   */
+  const next: Pilot = {
+    ...pilot,
+    route: { from: pilot.home, to },
+    role,
+    failures: role === pilot.role ? pilot.failures : 0,
+    nextRunAt: now + cycle,
+  };
 
   return {
     pilot: next,
@@ -1344,37 +1369,134 @@ function accrueFleet(
 
   const systems = systemsOf(state.galaxy);
   let cash = state.cash;
+  let legal = state.legal;
+  let rng = state.rng;
   let gained = 0;
-  let runs = 0;
+  let done = 0;
   let changed = false;
+  const notes: string[] = [];
+  const kept: Pilot[] = [];
 
-  const pilots = state.pilots.map((p) => {
-    if (!p.route || now < p.nextRunAt) return p;
-    const flight = baseJumpDuration(routeDistance(systems, p.route), settings);
+  /** Следующее случайное число 0..1 — тот же ГПСЧ, что у мира. */
+  const draw = (): number => {
+    const [value, next] = nextFloat(rng);
+    rng = next;
+    return value;
+  };
+
+  for (const pilot of state.pilots) {
+    if (!pilot.route || now < pilot.nextRunAt) {
+      kept.push(pilot);
+      continue;
+    }
+
+    const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
     const cycle = 2 * flight + PILOT_REST_MS;
-    if (cycle <= 0) return p;
+    if (cycle <= 0) {
+      kept.push(pilot);
+      continue;
+    }
 
-    const count = Math.floor((now - p.nextRunAt) / cycle) + 1;
-    const profit = routeProfit(state.galaxy, systems, p.route, SHIPS[p.ship].hold);
-    // Доля зависит от номера пилота, а не от места в массиве: увольнение
-    // не должно менять ставку остальным.
-    const income = pilotRunIncome(profit, p.id - 1);
+    const count = Math.floor((now - pilot.nextRunAt) / cycle) + 1;
+    const spec = SHIPS[pilot.ship];
+    const lane = laneSurveillance(systems, pilot.route);
+    const risk = pilotRisk(pilot.role, lane, surveillanceOf(systems[pilot.route.to]));
+    const wage = pilot.id - 1;
 
-    cash += income * count;
-    gained += income * count;
-    runs += count;
+    /*
+     * Выручка рейса считается один раз: и у торговца, и у контрабандиста,
+     * и у пирата она от рейса к рейсу одна и та же. Дальше крутится только
+     * кубик — риск и есть единственное, что меняет сумму.
+     */
+    const gross = pilot.role === 'pirate'
+      ? pirateLoot(state.galaxy, systems, pilot.route, spec.hold)
+      : routeProfit(state.galaxy, systems, pilot.route, spec.hold, pilot.role);
+    // У контрабандиста при досмотре отнимают только запрещёнку — законный
+    // груз доезжает (§107, решение пользователя).
+    const legalOnly = pilot.role === 'smuggler'
+      ? routeProfit(state.galaxy, systems, pilot.route, spec.hold, 'trader')
+      : gross;
+
+    let runs = 0;
+    let failures = 0;
+    let lost = false;
+
+    for (let i = 0; i < count; i++) {
+      if (pilot.role === 'pirate') {
+        if (draw() < risk.police) {
+          failures++;
+          lost = true;
+          break;
+        }
+        if (draw() < risk.damage) {
+          failures++;
+          cash -= Math.round(shipPrice(pilot.ship) * PIRATE_REPAIR_SHARE);
+          continue;
+        }
+        runs++;
+        gained += pilotRunIncome(gross, wage);
+        legal = Math.min(255, legal + PIRATE_LEGAL_PER_RUN);
+        continue;
+      }
+
+      if (pilot.role === 'smuggler') {
+        if (draw() < risk.inspect) {
+          failures++;
+          gained += pilotRunIncome(legalOnly, wage);
+          cash -= SMUGGLER_FINE;
+          legal = Math.min(255, legal + SMUGGLER_LEGAL);
+          continue;
+        }
+        runs++;
+        gained += pilotRunIncome(gross, wage);
+        continue;
+      }
+
+      // Торговец: единственный риск — пираты на линии.
+      if (draw() < risk.raid) {
+        failures++;
+        continue;
+      }
+      runs++;
+      gained += pilotRunIncome(gross, wage);
+    }
+
+    done += runs;
     changed = true;
-    return { ...p, nextRunAt: p.nextRunAt + count * cycle, runs: p.runs + count };
-  });
+
+    if (lost) {
+      notes.push(`${pilot.name} попался полиции: корабль и пилот потеряны (${(shipPrice(pilot.ship) / 10).toFixed(1)} CR)`);
+      continue;
+    }
+
+    if (failures > 0) {
+      const why = pilot.role === 'pirate' ? 'трепка' : pilot.role === 'smuggler' ? 'досмотр' : 'ограблен';
+      notes.push(`${pilot.name}: ${failures} ${plural(failures, 'провал', 'провала', 'провалов')} (${why})`);
+    }
+
+    kept.push({
+      ...pilot,
+      nextRunAt: pilot.nextRunAt + count * cycle,
+      runs: pilot.runs + runs,
+      failures: pilot.failures + failures,
+    });
+  }
 
   if (!changed) return state;
 
-  events.push({
-    type: 'fleet',
-    at: now,
-    text: `Флот: ${runs} ${plural(runs, 'рейс', 'рейса', 'рейсов')}, ${(gained / 10).toFixed(1)} CR`,
-  });
-  return { ...state, cash, pilots };
+  // Сумма приходит одной строкой; подробности — по одной на пилота и не
+  // больше пяти: при месячном отсутствии журнал не должен превращаться в
+  // простыню.
+  for (const note of notes.slice(0, 5)) events.push({ type: 'fleet', at: now, text: note });
+  if (done > 0) {
+    events.push({
+      type: 'fleet',
+      at: now,
+      text: `Флот: ${done} ${plural(done, 'рейс', 'рейса', 'рейсов')}, ${(gained / 10).toFixed(1)} CR`,
+    });
+  }
+
+  return { ...state, cash: cash + gained, legal, rng, pilots: kept };
 }
 
 /* ---------- Галактический гиперпрыжок ---------- */
@@ -2654,6 +2776,12 @@ export function deserialize(json: string): GameState {
    * `version: 3` уже после появления флота, и падать на них нельзя.
    */
   if (!Array.isArray(state.pilots)) state.pilots = [];
+  // §107: в сохранениях шага 1 роли и счётчика провалов нет.
+  state.pilots = state.pilots.map((p) => ({
+    ...p,
+    role: p.role ?? 'trader',
+    failures: p.failures ?? 0,
+  }));
   if (typeof state.nextPilotId !== 'number') {
     state.nextPilotId = state.pilots.reduce((max, p) => Math.max(max, p.id), 0) + 1;
   }

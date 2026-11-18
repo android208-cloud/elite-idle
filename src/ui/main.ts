@@ -70,12 +70,19 @@ import {
 } from '../core/state.ts';
 import {
   formatSpan,
+  laneSurveillance,
+  PIRATE_LEGAL_PER_RUN,
   PILOT_HIRE_FEE,
   PILOT_MIN_KILLS,
+  pirateLoot,
+  pilotRisk,
   pilotRunIncome,
+  PILOT_ROLE_NAMES,
   routeDistance,
   routeProfit,
+  surveillanceOf,
   type Pilot,
+  type PilotRole,
 } from '../core/fleet.ts';
 import {
   maxFuel,
@@ -125,6 +132,8 @@ let confirmShip: ShipId | null = null;
 let hireOpen = false;
 let hireShip: ShipId | null = null;
 let routePilot: number | null = null;
+/** §107: какую роль показывать в открытом списке маршрутов. */
+let routeRole: PilotRole = 'trader';
 
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
@@ -1768,14 +1777,15 @@ function pilotsCard(): string {
     const perHour = cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0;
 
     const line = p.route
-      ? `<div class="muted">${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))} · рейс ${cr(profit)} · вам ${cr(income)} (${perHour} CR/ч)</div>
-         <div class="muted">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}</div>`
+      ? `<div class="muted">${PILOT_ROLE_NAMES[p.role]} · ${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))}</div>
+         <div class="muted">рейс ${cr(profit)} · вам ${cr(income)} (${perHour} CR/ч) · ${risksLine(p.role, p, systems)}</div>
+         <div class="muted">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
       : '<div class="muted">Маршрут не задан — корабль стоит в ангаре</div>';
 
     const panel = routePilot === p.id ? pilotRoutePanel(p, systems) : '';
 
     return `<div class="good-row" style="margin:10px 0"><div>
-        <div class="name">${p.name} · ${SHIPS[p.ship].name}</div>${line}</div>
+        <div class="name">${p.name} · ${SHIPS[p.ship].name}${p.route ? ` · ${PILOT_ROLE_NAMES[p.role].toLowerCase()}` : ''}</div>${line}</div>
         <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить' : 'Маршрут'}</button>
       </div>${panel}`;
   }).join('');
@@ -1810,19 +1820,48 @@ function pilotsCard(): string {
       ${hire}</div>`;
 }
 
-/** Список маршрутов пилота: только то, куда хватает его бака. */
+/**
+ * Список маршрутов пилота: только то, куда хватает его бака.
+ *
+ * §107: вместе с маршрутом выбирается РОЛЬ. Считается всё сразу по трём
+ * ролям — игрок переключает их и видит, как меняются деньги и риск, не
+ * уходя с экрана. Риск показан до назначения: попадать в беду, о которой
+ * не предупредили, — против правил этой игры (§97).
+ */
 function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
   const spec = SHIPS[pilot.ship];
+  const role = routeRole;
+
+  const roles = (Object.keys(PILOT_ROLE_NAMES) as PilotRole[]).map((id) => {
+    const active = id === role;
+    return `<button class="btn ${active ? 'tonal' : 'text'}" data-action="pilot-role" data-role="${id}">${PILOT_ROLE_NAMES[id]}</button>`;
+  }).join('');
+
+  const hint = role === 'pirate'
+    ? `Каждый рейс: +${PIRATE_LEGAL_PER_RUN} к розыску. Перехват — корабль и пилот потеряны, трепка — ремонт.`
+    : role === 'smuggler'
+      ? 'Возит законный груз и запрещёнку. Досмотр: запрещёнка конфискована, штраф 100 CR, +2 к розыску.'
+      : 'Запрещёнку не берёт вовсе. Риск — пираты на линии.';
+
   const options = systems
     .map((sys, i) => ({ i, d: distance(systems[pilot.home], sys) }))
     .filter((o) => o.i !== pilot.home && o.d <= spec.range)
     .map((o) => {
-      const profit = routeProfit(state.galaxy, systems, { from: pilot.home, to: o.i }, spec.hold);
-      const cycle = pilotCycleMs(state, { ...pilot, route: { from: pilot.home, to: o.i } });
-      const income = pilotRunIncome(profit, pilot.id - 1);
-      return { ...o, profit, perHour: cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0 };
+      const route = { from: pilot.home, to: o.i };
+      const gross = role === 'pirate'
+        ? pirateLoot(state.galaxy, systems, route, spec.hold)
+        : routeProfit(state.galaxy, systems, route, spec.hold, role);
+      const cycle = pilotCycleMs(state, { ...pilot, route });
+      const income = pilotRunIncome(gross, pilot.id - 1);
+      const risk = pilotRisk(role, laneSurveillance(systems, route), surveillanceOf(systems[o.i]));
+      return {
+        ...o,
+        perHour: cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0,
+        income,
+        risk,
+      };
     })
-    .sort((a, b) => b.profit - a.profit);
+    .sort((a, b) => b.perHour - a.perHour);
 
   if (options.length === 0) {
     return `<div class="muted" style="margin:6px 0 12px 4px">В радиусе бака нет ни одной системы — этому кораблю отсюда не улететь.</div>`;
@@ -1832,20 +1871,43 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
     const taken = state.pilots.some(
       (q) => q.id !== pilot.id && q.route?.from === pilot.home && q.route?.to === o.i,
     );
-    const isCurrent = pilot.route?.to === o.i;
+    const isCurrent = pilot.route?.to === o.i && pilot.role === role;
     const action = isCurrent
       ? '<span class="chip">летает здесь</span>'
       : taken
         ? '<span class="chip dear">маршрут занят</span>'
-        : `<button class="btn" data-action="pilot-route-set" data-i="${pilot.id}" data-to="${o.i}">Лететь</button>`;
+        : `<button class="btn" data-action="pilot-route-set" data-i="${pilot.id}" data-to="${o.i}" data-role="${role}">Лететь</button>`;
     return `<div class="good-row"><div>
         <div class="name">${systems[o.i].name}</div>
-        <div class="muted">${ly(o.d)} · рейс ${cr(o.profit)} · ${o.perHour} CR/ч</div></div>${action}</div>`;
+        <div class="muted">${ly(o.d)} · вам ${cr(o.income)} за рейс · ${o.perHour} CR/ч</div>
+        <div class="muted">${riskLabel(role, o.risk)}</div></div>${action}</div>`;
   }).join('');
 
   return `<div class="card" style="margin:8px 0 14px;background:rgba(255,255,255,0.03)">
-      <div class="sub">Маршрут из ${systems[pilot.home].name}. Показаны системы в пределах ${ly(spec.range)}.</div>
+      <div class="sub">Маршрут из ${systems[pilot.home].name}, в пределах ${ly(spec.range)}.</div>
+      <div class="row" style="gap:6px;margin:6px 0 10px">${roles}</div>
+      <div class="sub" style="color:var(--dim)">${hint}</div>
       ${rows}</div>`;
+}
+
+/** Шанс в процентах: «2%», «4.5%», «0.5%». */
+function pct(x: number): string {
+  const v = x * 100;
+  return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)}%`;
+}
+
+/** Риски роли одной строкой — то, что игрок читает ПЕРЕД назначением. */
+function riskLabel(role: PilotRole, risk: ReturnType<typeof pilotRisk>): string {
+  if (role === 'pirate') return `перехват ${pct(risk.police)} · трепка ${pct(risk.damage)}`;
+  if (role === 'smuggler') return risk.inspect > 0 ? `досмотр ${pct(risk.inspect)}` : 'досмотр маловероятен';
+  return risk.raid > 0 ? `пираты ${pct(risk.raid)}` : 'линия спокойная';
+}
+
+/** Риски пилота по уже назначенному маршруту. */
+function risksLine(role: PilotRole, pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
+  if (!pilot.route) return '';
+  const risk = pilotRisk(role, laneSurveillance(systems, pilot.route), surveillanceOf(systems[pilot.route.to]));
+  return riskLabel(role, risk);
 }
 
 /**
@@ -2468,6 +2530,7 @@ function onAction(el: HTMLElement): void {
       hireOpen = false;
       hireShip = null;
       routePilot = null;
+      routeRole = 'trader';
       break;
     }
     case 'go-map':
@@ -2584,9 +2647,20 @@ function onAction(el: HTMLElement): void {
       hireOpen = false;
       hireShip = null;
       break;
-    case 'pilot-route':
-      routePilot = routePilot === i ? null : i;
+    case 'pilot-role':
+      routeRole = (el.dataset.role as PilotRole) ?? 'trader';
       break;
+    case 'pilot-route': {
+      if (routePilot === i) {
+        routePilot = null;
+        break;
+      }
+      routePilot = i;
+      // Открывая список, показываем ту роль, которой пилот летает сейчас.
+      const pilot = state.pilots.find((p) => p.id === i);
+      routeRole = pilot?.role ?? 'trader';
+      break;
+    }
     case 'pilot-route-close':
       routePilot = null;
       hireOpen = false;
@@ -2594,13 +2668,20 @@ function onAction(el: HTMLElement): void {
       break;
     case 'pilot-route-set': {
       const to = Number(el.dataset.to);
-      const r = assignPilotRoute(state, i, to, Date.now());
+      const role = (el.dataset.role as PilotRole) ?? 'trader';
+      const r = assignPilotRoute(state, i, to, Date.now(), role);
       if (r.error) {
         addLog(PILOT_ERRORS[r.error]);
       } else {
         const systems = systemsOf(state.galaxy);
         state = r.state;
-        addLog(`${r.pilot!.name} вышел на маршрут ${systems[r.pilot!.route!.from].name} → ${systems[to].name}`);
+        /*
+         * §107: момент, который должен остаться в журнале. Наём пирата —
+         * это решение с последствиями (розыск, потеря корабля), и он не
+         * должен появляться молча.
+         */
+        const legal = role === 'pirate' ? ' Пират: каждый рейс +2 к розыску.' : '';
+        addLog(`${r.pilot!.name} (${PILOT_ROLE_NAMES[role].toLowerCase()}) вышел на маршрут ${systems[r.pilot!.route!.from].name} → ${systems[to].name}.${legal}`);
         routePilot = null;
       }
       break;
