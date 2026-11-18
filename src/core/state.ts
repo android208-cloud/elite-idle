@@ -37,8 +37,11 @@ import {
   equipmentAvailable,
   holdCapacity,
   HOLD_BASE,
+  maxFuel,
   maxMissiles,
+  shipSpec,
   patrolMissilesRequired,
+  LEGACY_COBRA_SHIP,
   STARTER_SHIP,
   type EquipmentId,
   type PlayerShip,
@@ -47,12 +50,29 @@ import {
 export { nextByte } from './rng.ts';
 
 export const SAVE_VERSION = 3;
+/**
+ * Бак стартовой Кобры — опорная величина для расчёта времени прыжка.
+ *
+ * С §102.3 бак стал свойством корабля (`maxFuel`), но именно 70 остаётся
+ * точкой калибровки: «полный бак на ×200 — десять секунд» (§71). Если
+ * считать время от бака текущего корабля, Аддер ездил бы быстрее всех
+ * просто из-за маленького бака.
+ */
 export const MAX_FUEL = 70;
 /** Цена топлива: 0.2 CR за световой год, т. е. 2 десятых кредита за десятую св. года */
 export const FUEL_COST_PER_UNIT = 2;
 export const START_SYSTEM_LAVE = 7;
-export const START_CASH = 1000;
-export const START_HOLD = HOLD_BASE;
+/**
+ * Стартовые деньги — 500 CR, как у командира NEWCOME в Elite-A
+ * (`elite-loader.asm`: `EQUD &88130000`). В оригинале было 100.
+ * Пятьсот нужны потому, что на голом Аддере с 8 т надо ещё купить лазер.
+ *
+ * ВНИМАНИЕ: деньги в игре хранятся в десятых долях кредита, поэтому здесь
+ * 5000, а не 500. Ошибка на порядок тут уже случалась: в интерфейсе
+ * появлялось «50.0 CR».
+ */
+export const START_CASH = 5000;
+export const START_HOLD = holdCapacity(STARTER_SHIP);
 /** Прибавка к правовому статусу за убийство полицейского */
 export const POLICE_KILL_LEGAL = 64;
 
@@ -463,7 +483,7 @@ export function newGame(rngSeed: number): GameState {
     galaxy: 1,
     system: START_SYSTEM_LAVE,
     cash: START_CASH,
-    fuel: MAX_FUEL,
+    fuel: maxFuel(STARTER_SHIP),
     holdSpace: START_HOLD,
     cargo: COMMODITIES.map(() => 0),
     cargoOrigin: [],
@@ -603,7 +623,12 @@ export function sell(state: GameState, index: number, amount: number): TradeResu
 /** Заправка (в десятых долях св. года): не больше, чем влезает и чем хватает денег. */
 export function refuel(state: GameState, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
-  const t = Math.min(MAX_FUEL - state.fuel, Math.floor(amount), Math.floor(state.cash / FUEL_COST_PER_UNIT));
+  // §102.3: бак — свойство корабля, а не общая константа.
+  const t = Math.min(
+    maxFuel(state.ship) - state.fuel,
+    Math.floor(amount),
+    Math.floor(state.cash / FUEL_COST_PER_UNIT),
+  );
   if (t <= 0) return { state, amount: 0 };
   return {
     amount: t,
@@ -613,7 +638,7 @@ export function refuel(state: GameState, amount: number): TradeResult {
 
 /* ---------- Оборудование ---------- */
 
-export type EquipmentError = 'in-flight' | 'tech' | 'cash' | 'owned' | 'full';
+export type EquipmentError = 'in-flight' | 'tech' | 'cash' | 'owned' | 'full' | 'model';
 
 export interface EquipmentResult {
   state: GameState;
@@ -656,6 +681,14 @@ export function buyEquipment(state: GameState, id: EquipmentId): EquipmentResult
   if (!equipmentAvailable(item, currentSystem(state).techLevel)) return { state, error: 'tech' };
   if (owns(state.ship, id)) return { state, error: id === 'missile' ? 'full' : 'owned' };
   if (state.cash < item.price) return { state, error: 'cash' };
+  /*
+   * §102.3: большой трюм — апгрейд Кобры, а не любого корабля.
+   * У Аддера 8 т и расширения нет; без этой проверки игрок платил 400 CR
+   * и не получал ничего.
+   */
+  if (id === 'cargoBay' && shipSpec(state.ship).holdExtended === null) {
+    return { state, error: 'model' };
+  }
 
   const ship: PlayerShip = { ...state.ship };
   let holdSpace = state.holdSpace;
@@ -2292,7 +2325,7 @@ export function deserialize(json: string): GameState {
       ...newGame(data.rng ?? 1),
       ...data,
       version: SAVE_VERSION,
-      ship: { ...STARTER_SHIP },
+      ship: { ...LEGACY_COBRA_SHIP },
       kills: 0,
       legal: 0,
       encounter: null,
@@ -2318,7 +2351,10 @@ export function deserialize(json: string): GameState {
    * Кобре, поэтому именно она и подставляется. Без этого старый файл
    * падал бы на первом же `holdCapacity`.
    */
-  if (!state.ship.model) state.ship.model = 'cobra3';
+  if (!state.ship.model) {
+    state.ship.model = 'cobra3';
+    // Лазер и ракеты в таких сохранениях уже записаны — трогаем только модель.
+  }
   /*
    * §89: время карьеры. В сохранениях до §89 поля нет — начинаем с нуля.
    * `careerAt` НЕ трогаем: сохранение обязано читаться обратно байт в байт

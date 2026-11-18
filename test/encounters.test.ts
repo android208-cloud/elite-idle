@@ -18,7 +18,13 @@ import {
 } from '../src/core/state.ts';
 import { autoCombat, canDo, combatRound, startCombat } from '../src/core/combat.ts';
 import { distance } from '../src/core/galaxy.ts';
-import { legalLabel, rankOf, STARTER_SHIP } from '../src/core/ships.ts';
+import { legalLabel, LEGACY_COBRA_SHIP, rankOf, STARTER_SHIP } from '../src/core/ships.ts';
+
+/**
+ * §102.3: стартовый корабль — голый Аддер без лазера. Проверки боя писались
+ * про вооружённую Кобру, поэтому здесь она и берётся явно.
+ */
+const COBRA = LEGACY_COBRA_SHIP;
 
 const NOW = 10_000_000;
 const MIN = 60_000;
@@ -49,7 +55,7 @@ test('баланс: стартовый корабль почти всегда п
   const rate = (enemy: string): number => {
     let died = 0;
     for (let seed = 1; seed <= 300; seed++) {
-      if (autoCombat(startCombat(enemy, STARTER_SHIP, 0, seed)).outcome === 'died') died++;
+      if (autoCombat(startCombat(enemy, COBRA, 0, seed)).outcome === 'died') died++;
     }
     return died / 300;
   };
@@ -86,7 +92,7 @@ test('§77: капсулы в бою больше нет', () => {
 });
 
 test('ракета противника без ECM наносит урон', () => {
-  const c = { ...startCombat('python', STARTER_SHIP, 0, 7), incomingMissile: true };
+  const c = { ...startCombat('python', COBRA, 0, 7), incomingMissile: true };
   const r = combatRound(c, 'laser');
   assert.equal(r.incomingMissile, false);
   assert.ok(r.log.some((l) => l.includes('Ракета противника попала')));
@@ -309,7 +315,8 @@ test('оборудование: нужен технологический уро
 });
 
 test('ракеты: максимум 4, увеличенный трюм добавляет 15 т', () => {
-  let g: GameState = { ...newGame(1), cash: 10 ** 7 };
+  // Пределы Кобры: у стартового Аддера один слот и нет расширения трюма.
+  let g: GameState = { ...newGame(1), cash: 10 ** 7, ship: { ...COBRA }, holdSpace: 20 };
   g = buyEquipment(g, 'missile').state;
   assert.equal(g.ship.missiles, 4);
   assert.equal(buyEquipment(g, 'missile').error, 'full');

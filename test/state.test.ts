@@ -16,6 +16,7 @@ import {
   MAX_FUEL,
   START_SYSTEM_LAVE,
 } from '../src/core/state.ts';
+import { maxFuel } from '../src/core/ships.ts';
 import { distance } from '../src/core/galaxy.ts';
 
 /** Встречи отключены: в этом файле проверяется только торговля и полёт */
@@ -26,27 +27,36 @@ const GOLD = 13;
 const GEMS = 15;
 const NOW = 1_000_000;
 
-test('старт: Lave, 100 CR, 7.0 св. года топлива, трюм 20 т', () => {
+/*
+ * §102.3: старт взят из Elite-A — командир NEWCOME на голом Аддере.
+ * `elite-loader.asm`: CASH = 500, QQ14 = 60 (6.0 ly), cmdr_type = 0 (Adder),
+ * LASER = 0, NOMSL = 0. Лазера и ракет нет вовсе: «minimal equipment».
+ */
+test('старт: Lave, 500 CR, 6.0 св. года, трюм 8 т, голый Аддер', () => {
   const g = newGame(1);
   assert.equal(currentSystem(g).name, 'LAVE');
   assert.equal(g.system, START_SYSTEM_LAVE);
-  assert.equal(g.cash, 1000);
-  assert.equal(g.fuel, 70);
-  assert.equal(g.holdSpace, 20);
+  assert.equal(g.cash, 5000, '500 CR в десятых долях');
+  assert.equal(g.fuel, 60);
+  assert.equal(g.holdSpace, 8);
+  assert.equal(g.ship.model, 'adder');
+  assert.equal(g.ship.laser, 'none');
+  assert.equal(g.ship.missiles, 0);
 });
 
 test('покупка: ограничена количеством, деньгами и трюмом', () => {
   const g = newGame(1);
   const price = g.market[FOOD].price;
   const r = buy(g, FOOD, 1000);
-  const expected = Math.min(g.market[FOOD].quantity, 20, Math.floor(1000 / price));
+  const hold = g.holdSpace;
+  const expected = Math.min(g.market[FOOD].quantity, hold, Math.floor(g.cash / price));
   assert.equal(r.amount, expected);
-  assert.equal(r.state.cash, 1000 - expected * price);
-  assert.equal(r.state.holdSpace, 20 - expected);
+  assert.equal(r.state.cash, g.cash - expected * price);
+  assert.equal(r.state.holdSpace, hold - expected);
   assert.equal(r.state.cargo[FOOD], expected);
   assert.equal(r.state.market[FOOD].quantity, g.market[FOOD].quantity - expected);
   // исходное состояние не изменилось
-  assert.equal(g.cash, 1000);
+  assert.equal(g.cash, 5000, '500 CR в десятых долях');
 });
 
 test('покупка и продажа: туда-обратно не меняет трюм, деньги возвращаются целиком', () => {
@@ -61,9 +71,9 @@ test('золото и камни не занимают места в трюме 
   let g = newGame(1);
   g = { ...g, cash: 1_000_000, market: g.market.map((m, i) => (i === GOLD || i === GEMS ? { ...m, quantity: 10 } : m)) };
   const r1 = buy(g, GOLD, 5);
-  assert.equal(r1.state.holdSpace, 20);
+  assert.equal(r1.state.holdSpace, g.holdSpace);
   const r2 = buy(r1.state, GEMS, 5);
-  assert.equal(r2.state.holdSpace, 20);
+  assert.equal(r2.state.holdSpace, g.holdSpace);
 });
 
 test('нельзя продать больше, чем есть', () => {
@@ -72,10 +82,14 @@ test('нельзя продать больше, чем есть', () => {
 });
 
 test('заправка: не больше бака и не больше денег', () => {
-  let g = { ...newGame(1), fuel: 30 };
+  // §102.3: бак — свойство корабля. У стартового Аддера он 60 (6.0 ly).
+  const base = newGame(1);
+  const tank = maxFuel(base.ship);
+  assert.equal(tank, 60);
+  let g = { ...base, fuel: 30, cash: 1000 };
   const r = refuel(g, 1000);
-  assert.equal(r.amount, MAX_FUEL - 30);
-  assert.equal(r.state.cash, 1000 - 40 * 2);
+  assert.equal(r.amount, tank - 30);
+  assert.equal(r.state.cash, 1000 - (tank - 30) * 2);
   g = { ...g, cash: 10 };
   assert.equal(refuel(g, 1000).amount, 5);
 });

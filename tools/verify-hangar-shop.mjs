@@ -70,6 +70,43 @@ async function openHangar(system, ship) {
   return w;
 }
 
+/* ---------- Новая игра: голый Аддер из Elite-A (§102.3) ---------- */
+{
+  const fresh = new JSDOM(html, {
+    runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://elite.test/',
+    virtualConsole: new VirtualConsole(),
+    beforeParse(w) {
+      w.HTMLCanvasElement.prototype.getContext = () => ({
+        setTransform(){}, clearRect(){}, beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){}, fill(){},
+        arc(){}, save(){}, restore(){}, setLineDash(){}, strokeRect(){}, fillText(){},
+        measureText: (t) => ({ width: String(t).length * 6 }),
+        set lineWidth(v){}, set strokeStyle(v){}, set fillStyle(v){}, set font(v){}, set textAlign(v){}, set textBaseline(v){}, set lineJoin(v){},
+      });
+      w.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
+      w.cancelAnimationFrame = clearTimeout;
+    },
+  });
+  const fw = fresh.window;
+  await new Promise((r) => setTimeout(r, 900));
+  const start = content(fw);
+  check('новая игра: корабль — Аддер', /Adder/.test(start) && !/Cobra/.test(start));
+  check('новая игра: ракеты показаны как «0 из 1»', /Ракеты: 0 из 1/.test(start));
+  check('новая игра: трюм 8 т', /0 \/ 8/.test(start), start.match(/0 \/ \d+/)?.[0] ?? 'нет');
+  check('новая игра: топливо 6.0', /Топливо6\.0 св\. г\./.test(start.replace(/\s+/g, ' ')));
+  check('новая игра: денег 500 CR', /500\.0 CR/.test(start.replace(/\s+/g, ' ')),
+    start.replace(/\s+/g, ' ').match(/\d+\.\d CR/)?.[0] ?? 'нет');
+  check('новая игра: лазера нет', /Лазер: нет/.test(start));
+  check('новая игра: патруль закрыт — ракет нет', /Не полный боекомплект: 0 из 1/.test(start));
+  click(fw, tabBtn(fw, 'hangar'));
+  await new Promise((r) => setTimeout(r, 250));
+  const fh = content(fw);
+  check('в ангаре Аддер', /Adder · ваш корабль в ангаре/.test(fh));
+  check('в ангаре бак 6.0 из 6.0', /6\.0 св\. г\. из 6\.0/.test(fh.replace(/\s+/g, ' ')));
+  check('большого трюма для Аддера нет', !/Увеличенный трюм/.test(fh));
+  check('лазер купить можно — это первое дело', /Импульсный лазер/.test(fh));
+  fw.close();
+}
+
 /* ---------- LAVE, техуровень 5: доступны предметы №2..№8 ---------- */
 const lave = await openHangar(7, {});
 const laveText = content(lave);

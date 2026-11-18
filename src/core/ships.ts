@@ -125,7 +125,8 @@ export const HOLD_EXTENDED = 35;
  */
 export const MAX_MISSILES = 4;
 
-export type ShipId = 'cobra3' | 'ferdelance' | 'python' | 'asp' | 'anaconda';
+
+export type ShipId = 'adder' | 'cobra3' | 'ferdelance' | 'python' | 'asp' | 'anaconda';
 
 export interface ShipSpec {
   id: ShipId;
@@ -138,16 +139,19 @@ export interface ShipSpec {
   missiles: number;
   /** Прочность корпуса (поле Shields из new_details) */
   shields: number;
+  /** Бак, в десятых светового года: 60 = 6.0 ly (поле Hyperspace range) */
+  range: number;
   /** Позиция в таблице new_ships, 1 — самый дешёвый */
   rank: number;
 }
 
 export const SHIPS: Record<ShipId, ShipSpec> = {
-  cobra3:     { id: 'cobra3',     name: 'Cobra Mk III', hold: HOLD_BASE,     holdExtended: HOLD_EXTENDED, missiles: 4,  shields: 7,  rank: 8 },
-  ferdelance: { id: 'ferdelance', name: 'Fer-de-Lance', hold: 9,             holdExtended: null,          missiles: 3,  shields: 8,  rank: 9 },
-  python:     { id: 'python',     name: 'Python',       hold: 106,           holdExtended: null,          missiles: 4,  shields: 11, rank: 12 },
-  asp:        { id: 'asp',        name: 'Asp Mk II',    hold: 6,             holdExtended: null,          missiles: 1,  shields: 10, rank: 14 },
-  anaconda:   { id: 'anaconda',   name: 'Anaconda',     hold: 253,           holdExtended: null,          missiles: 16, shields: 13, rank: 15 },
+  adder:      { id: 'adder',      name: 'Adder',        hold: 8,             holdExtended: null,          missiles: 1,  shields: 4,  range: 60,  rank: 1 },
+  cobra3:     { id: 'cobra3',     name: 'Cobra Mk III', hold: HOLD_BASE,     holdExtended: HOLD_EXTENDED, missiles: 4,  shields: 7,  range: 70,  rank: 8 },
+  ferdelance: { id: 'ferdelance', name: 'Fer-de-Lance', hold: 9,             holdExtended: null,          missiles: 3,  shields: 8,  range: 85,  rank: 9 },
+  python:     { id: 'python',     name: 'Python',       hold: 106,           holdExtended: null,          missiles: 4,  shields: 11, range: 80,  rank: 12 },
+  asp:        { id: 'asp',        name: 'Asp Mk II',    hold: 6,             holdExtended: null,          missiles: 1,  shields: 10, range: 125, rank: 14 },
+  anaconda:   { id: 'anaconda',   name: 'Anaconda',     hold: 253,           holdExtended: null,          missiles: 16, shields: 13, range: 100, rank: 15 },
 };
 
 /** Характеристики корабля игрока. */
@@ -155,6 +159,16 @@ export const shipSpec = (ship: PlayerShip): ShipSpec => SHIPS[ship.model];
 
 /** Сколько ракет влезает в ЭТОТ корабль (§102: у Аспа один слот). */
 export const maxMissiles = (ship: PlayerShip): number => shipSpec(ship).missiles;
+
+/**
+ * Бак ЭТОГО корабля, в десятых св. года (§102.3).
+ *
+ * До этого топливо было общей константой MAX_FUEL = 70. В Elite-A бак —
+ * свойство модели: Аддер 6.0 ly (самый короткий прыжок в игре), Асп 12.5 ly
+ * (самый длинный). Без этого стартовый Аддер обещал бы 6 св. лет, а летал
+ * на семи, как Кобра.
+ */
+export const maxFuel = (ship: PlayerShip): number => shipSpec(ship).range;
 
 /** Сколько ракет нужно для патруля: полный боекомплект корабля (§102). */
 export const patrolMissilesRequired = (ship: PlayerShip): number => maxMissiles(ship);
@@ -174,10 +188,21 @@ export interface PlayerShip {
 }
 
 /** Cobra Mk III с завода: один импульсный лазер и три ракеты. */
+/*
+ * СТАРТОВЫЙ КОРАБЛЬ (§102.3).
+ *
+ * В Elite 1984 выдавали Кобру с импульсным лазером и тремя ракетами.
+ * В Elite-A — голый Аддер: `cmdr_type = 0`, `LASER = 0`, `NOMSL = 0`.
+ * Проверено по `elite-loader.asm`, блок default commander.
+ *
+ * Мы берём вариант Elite-A: он и делает лестницу кораблей осмысленной.
+ * Кобра перестаёт быть данностью и становится первой покупкой, а покупка
+ * лазера — первым действием в игре.
+ */
 export const STARTER_SHIP: Readonly<PlayerShip> = {
-  model: 'cobra3',
-  laser: 'pulse',
-  missiles: 3,
+  model: 'adder',
+  laser: 'none',
+  missiles: 0,
   ecm: false,
   energyBomb: false,
   energyUnit: false,
@@ -193,6 +218,20 @@ export const STARTER_SHIP: Readonly<PlayerShip> = {
  * До §102 трюм зависел только от «расширен» ли он. Теперь — от модели:
  * у Питона 106 т, у Аспа 6 т, и расширение бывает только у Кобры.
  */
+/**
+ * Корабль из сохранений до §102.3.
+ *
+ * Тогда все летали на Кобре с импульсным лазером и тремя ракетами, и в файле
+ * модели не было. Подставлять такому игроку Аддера нельзя: он потерял бы
+ * корабль, которого не продавал.
+ */
+export const LEGACY_COBRA_SHIP: Readonly<PlayerShip> = {
+  ...STARTER_SHIP,
+  model: 'cobra3',
+  laser: 'pulse',
+  missiles: 3,
+};
+
 export const holdCapacity = (ship: PlayerShip): number => {
   const spec = SHIPS[ship.model];
   return ship.cargoBayExtended && spec.holdExtended !== null ? spec.holdExtended : spec.hold;

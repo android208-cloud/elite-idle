@@ -14,7 +14,35 @@ import { buildGalaxy } from '../src/core/galaxy.ts';
 const systems = buildGalaxy(1);
 const html = readFileSync('/home/user/elite-idle/standalone/elite-idle.html', 'utf8');
 const vc = new VirtualConsole();
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true, url: 'file:///d/t.html', virtualConsole: vc });
+
+/*
+ * §102.3: стартовый корабль стал Аддером с баком 6.0 ly, и радиус карты у
+ * него меньше — часть подписей из проверки пропала бы просто потому, что
+ * эти системы дальше шести световых лет. Проверка здесь про подписи, а не
+ * про стартовый бак, поэтому берём Кобру с её 7.0 ly.
+ */
+function save() {
+  const state = {
+    version: 3, galaxy: 1, system: 7, cash: 1000, fuel: 70, holdSpace: 20,
+    cargo: Array(17).fill(0), market: Array(17).fill({ price: 100, quantity: 5 }),
+    rng: 1, flight: null,
+    ship: { model: 'cobra3', laser: 'pulse', missiles: 3, ecm: false, energyBomb: false,
+            energyUnit: false, fuelScoops: false, dockingComputer: false,
+            galacticHyperdrive: false, cargoBayExtended: false },
+    kills: 5, legal: 0, encounter: null, combat: null, salvage: null,
+    stats: { kills: 5, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0, tradeProfit: 0 },
+    cargoBasis: Array(17).fill(0), cargoOrigin: [],
+    escapeRoute: [], escapeStatus: -1, careerMs: 0, careerAt: 0,
+  };
+  return { state: JSON.stringify(state), log: [], settings: {} };
+}
+
+const dom = new JSDOM(html, {
+  runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://elite.test/', virtualConsole: vc,
+  beforeParse(w) {
+    w.localStorage.setItem('elite-idle-save-v1', JSON.stringify(save()));
+  },
+});
 const { window } = dom;
 
 /** Что нарисовано на холсте: fillText перехватываем. */

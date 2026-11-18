@@ -52,6 +52,16 @@ import {
 } from '../src/core/market.ts';
 import { HOLD_BASE, HOLD_EXTENDED, holdCapacity } from '../src/core/ships.ts';
 
+/**
+ * §102.3: стартовый корабль стал Аддером на 8 т. Все эти проверки — про
+ * формулу `tnpr` с эталонными 20 т, поэтому игра здесь явно строится на
+ * Кобре: иначе они мерили бы не то.
+ */
+const cobraGame = (seed = 1): GameState => {
+  const g = newGame(seed);
+  return { ...g, holdSpace: HOLD_BASE, ship: { ...g.ship, model: 'cobra3' } };
+};
+
 /** Товар с гарантированно большим запасом на рынке и дешёвой ценой. */
 function withMarket(state: GameState, index: number, quantity = 1000, price = 1): GameState {
   return {
@@ -81,13 +91,13 @@ describe('tnpr: граница веток', () => {
 
 describe('tnpr: ветка тоннажных товаров', () => {
   it('еда ограничена свободным местом трюма, а не количеством на рынке', () => {
-    const g = withMarket(newGame(1), 0, 1000, 1);
+    const g = withMarket(cobraGame(1), 0, 1000, 1);
     assert.equal(buy(g, 0, 1000).amount, HOLD_BASE);
   });
 
   it('расширенный трюм поднимает планку до 35 т', () => {
     // Согласованное состояние: ёмкость 35 и свободно все 35
-    const base = newGame(1);
+    const base = cobraGame(1);
     const g = withMarket(
       { ...base, ship: { ...base.ship, cargoBayExtended: true }, holdSpace: HOLD_EXTENDED },
       0,
@@ -99,7 +109,7 @@ describe('tnpr: ветка тоннажных товаров', () => {
   });
 
   it('занятое место уменьшает доступное', () => {
-    const g = withMarket({ ...newGame(1), holdSpace: 15, cargo: newGame(1).cargo.map((_, i) => (i === 0 ? 5 : 0)) }, 1);
+    const g = withMarket({ ...cobraGame(1), holdSpace: 15, cargo: cobraGame(1).cargo.map((_, i) => (i === 0 ? 5 : 0)) }, 1);
     assert.equal(buy(g, 1, 1000).amount, 15);
   });
 });
@@ -107,7 +117,7 @@ describe('tnpr: ветка тоннажных товаров', () => {
 describe('tnpr: ветка индивидуального лимита (200)', () => {
   it('золото, платина, камни и артефакты не ограничены тоннажем', () => {
     for (const i of [13, 14, 15, 16]) {
-      const g = withMarket(newGame(1), i, 1000, 1);
+      const g = withMarket(cobraGame(1), i, 1000, 1);
       const bought = buy(g, i, 1000);
       assert.equal(bought.amount, INDIVIDUAL_ITEM_LIMIT, `индекс ${i}`);
       // Тоннаж не тронут: эти товары не занимают место в трюме по tnpr
@@ -117,7 +127,7 @@ describe('tnpr: ветка индивидуального лимита (200)', (
   });
 
   it('200 — предел на каждый вид отдельно, а не на все вместе', () => {
-    let g = withMarket(newGame(1), 13, 1000, 1);
+    let g = withMarket(cobraGame(1), 13, 1000, 1);
     g = buy(g, 13, 200).state;
     assert.equal(g.cargo[13], 200);
     // Второй вид не упирается в лимит первого
@@ -128,7 +138,7 @@ describe('tnpr: ветка индивидуального лимита (200)', (
   });
 
   it('докупка сверх 200 не проходит', () => {
-    let g = withMarket(newGame(1), 13, 1000, 1);
+    let g = withMarket(cobraGame(1), 13, 1000, 1);
     g = buy(g, 13, 150).state;
     assert.equal(cargoRoom(g, 13), 50);
     assert.equal(buy(g, 13, 100).amount, 50);
@@ -138,7 +148,7 @@ describe('tnpr: ветка индивидуального лимита (200)', (
   });
 
   it('продажа освобождает лимит', () => {
-    let g = withMarket(newGame(1), 13, 1000, 1);
+    let g = withMarket(cobraGame(1), 13, 1000, 1);
     g = buy(g, 13, 200).state;
     g = sell(g, 13, 50).state;
     assert.equal(g.cargo[13], 150);
@@ -148,7 +158,7 @@ describe('tnpr: ветка индивидуального лимита (200)', (
 
 describe('tnpr: тоннаж не путается с единицей измерения', () => {
   it('артефакты в тоннах, но места в трюме не занимают и тоннаж не меняют', () => {
-    let g = withMarket(newGame(1), ALIEN_ITEMS_INDEX, 1000, 1);
+    let g = withMarket(cobraGame(1), ALIEN_ITEMS_INDEX, 1000, 1);
     g = buy(g, ALIEN_ITEMS_INDEX, 50).state;
     assert.equal(g.cargo[ALIEN_ITEMS_INDEX], 50);
     assert.equal(g.holdSpace, HOLD_BASE);
@@ -158,7 +168,7 @@ describe('tnpr: тоннаж не путается с единицей изме�
   });
 
   it('смешанный трюм: тоннажные считаются по месту, остальные — по 200', () => {
-    let g = withMarket(newGame(1), 0, 1000, 1);
+    let g = withMarket(cobraGame(1), 0, 1000, 1);
     g = buy(g, 0, 10).state; // 10 т еды
     assert.equal(cargoTons(g), 10);
     assert.equal(g.holdSpace, 10);

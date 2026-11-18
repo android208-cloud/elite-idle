@@ -31,7 +31,18 @@ import { systemsOf } from '../src/core/state.ts';
 const NOW = 1_000_000;
 const MIN = 60_000;
 
-const armed = (over: Partial<PlayerShip> = {}): PlayerShip => ({ ...STARTER_SHIP, missiles: 4, ...over });
+/*
+ * §102.3: стартовый корабль — голый Аддер (8 т, один слот ракет, без лазера).
+ * Патрульные проверки писались про Кобру: четыре ракеты, «полный
+ * боекомплект» = 4. Поэтому здесь явно строится Кобра, а не STARTER_SHIP.
+ */
+const armed = (over: Partial<PlayerShip> = {}): PlayerShip => ({
+  ...STARTER_SHIP,
+  model: 'cobra3',
+  laser: 'pulse',
+  missiles: 4,
+  ...over,
+});
 
 /** Гоняет патруль до конца, отдавая все события. */
 function runPatrol(state: GameState, settings = DEFAULT_SETTINGS) {

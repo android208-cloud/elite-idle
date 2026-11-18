@@ -61,7 +61,7 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
-import { patrolMissilesRequired, shipSpec } from '../core/ships.ts';
+import { maxFuel, maxMissiles, patrolMissilesRequired, shipSpec } from '../core/ships.ts';
 import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
@@ -223,6 +223,7 @@ const JUMP_ERRORS: Record<JumpError, string> = {
 
 const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
   'in-flight': 'Покупки возможны только на станции',
+  model: 'На этот корабль такое не ставится',
   tech: 'Технологический уровень системы слишком низкий',
   cash: 'Не хватает денег',
   owned: 'Уже установлено',
@@ -368,6 +369,8 @@ function systemInfo(index: number): string {
 
 function flightCard(): string {
   const f = state.flight;
+  // §102.3: бак — свойство корабля.
+  const tank = maxFuel(state.ship);
   if (!f) {
     return `<div class="card"><h2>На станции ${currentSystem(state).name}</h2>
       <div class="sub">${systemInfo(state.system)}</div></div>`;
@@ -402,8 +405,8 @@ function flightCard(): string {
         ${stat('Встреч', String(f.encounters))}
         ${stat('Израсходовано', `${f.patrolFuelUsed ?? 0} ед.`)}
       </div>
-      ${bar(state.fuel, MAX_FUEL, '', 'flight-fuel')}
-      <div class="sub">Топливо <span id="flight-fuel-text">${ly(state.fuel)}</span> из ${ly(MAX_FUEL)}</div></div>${enc}`;
+      ${bar(state.fuel, tank, '', 'flight-fuel')}
+      <div class="sub">Топливо <span id="flight-fuel-text">${ly(state.fuel)}</span> из ${ly(tank)}</div></div>${enc}`;
   }
   const systems = systemsOf(state.galaxy);
   const enc = state.encounter ? encounterCard() : '';
@@ -498,7 +501,15 @@ function encounterCard(): string {
 
 function equipmentSummary(): string {
   const s = state.ship;
-  const parts = [`Лазер: ${LASER_NAMES[s.laser]}`, `Ракеты: ${s.missiles}`];
+  /*
+   * §102.3: с появлением разных кораблей модель — часть снаряжения, а не
+   * украшение. Раньше её негде было увидеть, кроме ангара.
+   */
+  const parts = [
+    shipSpec(s).name,
+    `Лазер: ${LASER_NAMES[s.laser]}`,
+    `Ракеты: ${s.missiles} из ${maxMissiles(s)}`,
+  ];
   if (s.ecm) parts.push('ECM');
   if (s.energyBomb) parts.push('Энергобомба');
   if (s.energyUnit) parts.push('Энергоблок');
@@ -1535,6 +1546,11 @@ function equipmentRows(): string {
      * предложение, а состояние, его прятать нельзя.
      */
     if (!available && !have) return '';
+    /*
+     * §102.3: большой трюм ставится только на Кобру. У Аддера его нет, и
+     * продавать за 400 CR апгрейд, который ничего не меняет, нельзя.
+     */
+    if (item.id === 'cargoBay' && shipSpec(state.ship).holdExtended === null) return '';
     let note = equipmentNote(item);
     if (item.id === 'missile') {
       note += ` · сейчас ${state.ship.missiles} из ${patrolMissilesRequired(state.ship)}`;
@@ -1551,7 +1567,8 @@ function equipmentRows(): string {
 
 function hangarScreen(): string {
   const docked = !state.flight;
-  const missing = MAX_FUEL - state.fuel;
+  const tank = maxFuel(state.ship);
+  const missing = tank - state.fuel;
   // Модель корабля живёт в ангаре: это место про сам корабль, а экран
   // «Корабль» — про полёт и груз. В пути модель не рисуем: в ангаре
   // корабля нет, он улетел.
@@ -1563,8 +1580,8 @@ function hangarScreen(): string {
     </div>`
     : '';
   return `${model}<div class="card"><h2>Топливо</h2>
-      <div class="sub">${ly(state.fuel)} из ${ly(MAX_FUEL)} · цена 0.2 CR за св. год</div>
-      <div class="progress"><div style="width:${(state.fuel / MAX_FUEL) * 100}%"></div></div>
+      <div class="sub">${ly(state.fuel)} из ${ly(tank)} · цена 0.2 CR за св. год</div>
+      <div class="progress"><div style="width:${(state.fuel / tank) * 100}%"></div></div>
       <div class="row">
         <button class="btn tonal" data-action="refuel" data-n="10" ${docked && missing > 0 ? '' : 'disabled'}>+1.0</button>
         <button class="btn" data-action="refuel" data-n="${missing}" ${docked && missing > 0 ? '' : 'disabled'}>Полный бак</button>
@@ -2103,7 +2120,10 @@ function updateFlight(): void {
   if (f?.patrol) {
     const fuelBar = document.getElementById('flight-fuel');
     const fuelText = document.getElementById('flight-fuel-text');
-    if (fuelBar) fuelBar.style.width = `${Math.max(0, Math.min(100, (state.fuel / MAX_FUEL) * 100)).toFixed(1)}%`;
+    if (fuelBar) {
+      const tank = maxFuel(state.ship);
+      fuelBar.style.width = `${Math.max(0, Math.min(100, (state.fuel / tank) * 100)).toFixed(1)}%`;
+    }
     if (fuelText) fuelText.textContent = ly(state.fuel);
   }
   const encEta = document.getElementById('enc-eta');

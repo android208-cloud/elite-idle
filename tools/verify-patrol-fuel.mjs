@@ -46,6 +46,18 @@ const check = (name, cond, extra = '') => {
 const base = make(null);
 await new Promise((r) => setTimeout(r, 900));
 const template = JSON.parse(base.window.localStorage.getItem('elite-idle-save-v1'));
+/*
+ * §102.3: стартовый корабль стал Аддером — один слот ракет, бак 6.0 ly.
+ * Эти проверки писались про Кобру (4 ракеты, 7.0 ly), поэтому в шаблоне
+ * явно ставим её: иначе «3 ракеты» уже полный боекомплект, а полоска
+ * топлива считается от другого бака.
+ */
+{
+  const st = JSON.parse(template.state);
+  st.ship.model = 'cobra3';
+  st.holdSpace = 20;
+  template.state = JSON.stringify(st);
+}
 
 /** Патруль с заданными статусом/трюмом/топливом. */
 async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {

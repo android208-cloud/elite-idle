@@ -25,6 +25,7 @@ import {
   type PlayerShip,
 } from '../src/core/ships.ts';
 import { canBeat, hasBossKit, isWeak, toughnessOf } from '../src/core/one-decision.ts';
+import { buyEquipment, newGame } from '../src/core/state.ts';
 import { enemyById } from '../src/core/ships.ts';
 
 const ship = (model: keyof typeof SHIPS, extra: Partial<PlayerShip> = {}): PlayerShip => ({
@@ -134,6 +135,25 @@ describe('§102 ступенчатый гейт', () => {
     const asp = enemyById('asp');
     assert.equal(canBeat(asp, fullKit, 'pulse', 'anaconda'), false);
     assert.equal(canBeat(asp, fullKit, 'military', 'anaconda'), true);
+  });
+});
+
+describe('§102.3 большой трюм — только для Кобры', () => {
+  it('Аддеру большой трюм не продаётся', () => {
+    const g = { ...newGame(1), cash: 100000 };
+    assert.equal(buyEquipment(g, 'cargoBay').error, 'model');
+  });
+
+  it('Кобре — продаётся и добавляет 15 т', () => {
+    const g = {
+      ...newGame(1),
+      cash: 100000,
+      holdSpace: 20,
+      ship: { ...newGame(1).ship, model: 'cobra3' as const, cargoBayExtended: false },
+    };
+    const r = buyEquipment(g, 'cargoBay');
+    assert.equal(r.error, undefined);
+    assert.equal(r.state.holdSpace, 35);
   });
 });
 
