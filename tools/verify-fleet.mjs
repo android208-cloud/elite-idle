@@ -180,6 +180,36 @@ async function hangar(opts) {
   w.close();
 }
 
+/* ---------- §108: полицейский ---------- */
+{
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Нина Ларк', ship: 'adder', home: LAVE,
+      route: null, nextRunAt: 0, role: 'trader', runs: 0, failures: 0,
+    }],
+    nextPilotId: 2,
+  });
+  click(w, byAction(w, 'pilot-route', { i: 1 }));
+  await wait(250);
+  click(w, byAction(w, 'pilot-role', { role: 'police' }));
+  await wait(250);
+  const text = content(w);
+  check('роль полицейского есть', /Полицейский/.test(text));
+  check('показан риск гибели и трепки', /гибель \d+% · трепка 4%/.test(text), text.match(/гибель[^·]*·[^ ]*/)?.[0] ?? '');
+  check('сказано про надзор и награды', /надзору/.test(text) && /награды/.test(text));
+  check('своя система доступна для дежурства', byAction(w, 'pilot-route-set', { to: LAVE }) !== undefined);
+
+  click(w, byAction(w, 'pilot-route-set', { to: LAVE }));
+  await wait(350);
+  const s2 = saved(w);
+  check('полицейский встал в свою же систему',
+    s2.pilots[0].role === 'police' && s2.pilots[0].route.from === LAVE && s2.pilots[0].route.to === LAVE,
+    JSON.stringify(s2.pilots[0].route));
+  check('в карточке это «патруль», а не LAVE → LAVE', /патруль LAVE/.test(content(w)));
+  check('в журнале назван полицейским', log(w).some((l) => /полицейский/i.test(l.text)));
+  w.close();
+}
+
 /* ---------- Один маршрут — один пилот ---------- */
 {
   const w = await hangar({

@@ -82,13 +82,51 @@ export const PILOT_MIN_KILLS = 128;
  * и меняется там же. Один и тот же пилот может быть торговцем на спокойной
  * линии и пиратом в анархии.
  */
-export type PilotRole = 'trader' | 'smuggler' | 'pirate';
+export type PilotRole = 'trader' | 'smuggler' | 'pirate' | 'police';
 
 export const PILOT_ROLE_NAMES: Record<PilotRole, string> = {
   trader: 'Торговец',
   smuggler: 'Контрабандист',
   pirate: 'Пират',
+  police: 'Полицейский',
 };
+
+/**
+ * §108: полицейский — шаг 3.
+ *
+ * Его дело не маршрут, а СИСТЕМА: он в ней дежурит. Отсюда два следствия,
+ * и оба важны:
+ *
+ *   1. Надзор системы растёт на `POLICE_SURVEILLANCE_BONUS`. Через те же
+ *      формулы, что уже работают (§107), это значит: вашим торговцам
+ *      спокойнее, вашим контрабандистам — досмотры, вашим пиратам —
+ *      перехват. То есть полицейский закрывает систему для ваших же
+ *      пиратов, и это не баг, а выбор игрока.
+ *
+ *   2. Налёт на ваш торговый рейс, у которого один из концов под охраной,
+ *      отбивается с шансом `POLICE_INTERCEPT`. Именно это и делает
+ *      полицейского полезным: +2 надзора на линии — это всего полпроцента
+ *      риска, а отбитый налёт — половина потерь.
+ *
+ * Платит ему не торговля, а награды: чем беззаконнее система, тем больше
+ * там добычи. Поэтому патруль в анархии — самые большие деньги и самый
+ * большой риск, а в демократии — почти ничего и почти безопасно.
+ */
+export const POLICE_SURVEILLANCE_BONUS = 2;
+
+/** Награда за рейс: база плюс надбавка за каждый пункт беззакония. */
+export const POLICE_BOUNTY_BASE = 400;
+export const POLICE_BOUNTY_PER_LAWLESS = 200;
+
+/** Погиб в бою с пиратами: `(7 − надзор) × 1%` за рейс. */
+export const POLICE_DEATH_CHANCE = 0.01;
+
+/** Потрёпан в бою: 4%, ремонт — четверть цены корабля. */
+export const POLICE_DAMAGE_CHANCE = 0.04;
+export const POLICE_REPAIR_SHARE = 0.25;
+
+/** Шанс, что охрана отобьёт налёт на торговца (на каждый конец маршрута). */
+export const POLICE_INTERCEPT = 0.5;
 
 /**
  * Скупщик краденого берёт треть цены.
@@ -147,6 +185,16 @@ export function laneSurveillance(systems: readonly StarSystem[], route: PilotRou
   return (surveillanceOf(systems[route.from]) + surveillanceOf(systems[route.to])) / 2;
 }
 
+/**
+ * Награда полицейскому за рейс — в десятых кредита.
+ *
+ * Считается по правительству патрулируемой системы, а не по маршруту:
+ * полицейский не торгует, он ловит. В анархии добычи больше всего.
+ */
+export function policeBounty(government: number): number {
+  return POLICE_BOUNTY_BASE + POLICE_BOUNTY_PER_LAWLESS * (7 - government);
+}
+
 /** Шансы провала за один рейс — их видно в карточке ДО назначения. */
 export interface PilotRisk {
   /** Пират: полиция взяла — корабль и пилот потеряны. */
@@ -157,6 +205,10 @@ export interface PilotRisk {
   inspect: number;
   /** Торговец: пираты отняли груз рейса. */
   raid: number;
+  /** Полицейский: погиб в бою. */
+  death: number;
+  /** Полицейский: потрёпан, нужен ремонт. */
+  beaten: number;
 }
 
 export function pilotRisk(
@@ -169,6 +221,10 @@ export function pilotRisk(
     damage: role === 'pirate' ? PIRATE_DAMAGE_CHANCE : 0,
     inspect: role === 'smuggler' ? destinationSurveillance * SMUGGLER_INSPECT_CHANCE : 0,
     raid: role === 'trader' ? Math.max(0, 7 - lane) * TRADER_RAID_CHANCE : 0,
+    // Полицейский воюет не с торговцами, а с пиратами — и потому рискует
+    // ровно там, где их много.
+    death: role === 'police' ? Math.max(0, 7 - destinationSurveillance) * POLICE_DEATH_CHANCE : 0,
+    beaten: role === 'police' ? POLICE_DAMAGE_CHANCE : 0,
   };
 }
 

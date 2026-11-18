@@ -26,6 +26,7 @@ import {
   systemsOf,
   advance,
   DEFAULT_SETTINGS,
+  surveillanceMap,
   type GameState,
 } from '../src/core/state.ts';
 import {
@@ -37,6 +38,7 @@ import {
   laneSurveillance,
   pirateLoot,
   pilotRisk,
+  policeBounty,
   pilotRunIncome,
   pilotWageShare,
   routeProfit,
@@ -251,7 +253,7 @@ describe('§105 сохранение', () => {
 const onRoute = (
   from: number,
   to: number,
-  role: 'trader' | 'smuggler' | 'pirate',
+  role: 'trader' | 'smuggler' | 'pirate' | 'police',
   over: Partial<GameState['pilots'][number]> = {},
 ): GameState => ({
   ...veteran(),
@@ -372,5 +374,85 @@ describe('§107 что из этого следует в игре', () => {
     assert.equal(r.error, undefined);
     assert.equal(r.state.pilots[0].role, 'pirate');
     assert.equal(r.state.pilots[0].failures, 0, 'провалы торговца к пирату не переходят');
+  });
+});
+
+/* ---------- §108: полицейский ---------- */
+
+describe('§108 полицейский', () => {
+  it('дежурит в системе, в том числе в своей', () => {
+    const s = onRoute(ANARCHY.from, ANARCHY.from, 'police');
+    const r = assignPilotRoute(s, 1, ANARCHY.from, 1_000_000, 'police');
+    assert.equal(r.error, undefined, 'своя система — законное место дежурства');
+    assert.deepEqual(r.state.pilots[0].route, { from: ANARCHY.from, to: ANARCHY.from });
+  });
+
+  it('торговцу в свою систему по-прежнему нельзя', () => {
+    const s = onRoute(ANARCHY.from, ANARCHY.to, 'trader');
+    assert.equal(assignPilotRoute(s, 1, ANARCHY.from, 1_000_000, 'trader').error, 'self');
+  });
+
+  it('надзор растёт на 2 и упирается в 7', () => {
+    const base = veteran();
+    const withPolice = (system: number, count: number): GameState => ({
+      ...base,
+      pilots: Array.from({ length: count }, (_, i) => ({
+        id: i + 1, name: `P${i}`, ship: 'adder' as const, home: system,
+        route: { from: system, to: system }, nextRunAt: Infinity,
+        role: 'police' as const, runs: 0, failures: 0,
+      })),
+      nextPilotId: count + 1,
+    });
+    // RETILA — анархия (0): один полицейский даёт 2, три дали бы 6.
+    assert.equal(surveillanceMap(withPolice(ANARCHY.from, 1))[ANARCHY.from], 2);
+    assert.equal(surveillanceMap(withPolice(ANARCHY.from, 3))[ANARCHY.from], 6);
+    // QUBE — корпорация (7): добавлять некуда.
+    assert.equal(surveillanceMap(withPolice(POLICE.from, 2))[POLICE.from], 7);
+  });
+
+  it('награда — за беззаконие, а не за торговлю', () => {
+    assert.equal(policeBounty(0), 1800, '180 CR в анархии');
+    assert.equal(policeBounty(3), 1200, '120 CR в диктатуре');
+    assert.equal(policeBounty(7), 400, '40 CR в корпорации');
+  });
+
+  it('полицейский закрывает систему вашим же пиратам', () => {
+    const systems = systemsOf(1);
+    const clean = laneSurveillance(systems, ANARCHY);
+    const watched = surveillanceMap(onRoute(ANARCHY.from, ANARCHY.from, 'police'));
+    const lane = (watched[ANARCHY.from] + watched[ANARCHY.to]) / 2;
+    assert.equal(clean, 0, 'без охраны надзора нет');
+    assert.ok(lane >= 1, 'с охраной линия уже под наблюдением');
+    assert.ok(
+      pilotRisk('pirate', lane, 2).police > pilotRisk('pirate', clean, 0).police,
+      'пирату в такой системе опаснее',
+    );
+  });
+
+  it('в анархии полицейский гибнет, в корпорации — нет', () => {
+    const deadly = advance(onRoute(ANARCHY.from, ANARCHY.from, 'police'), 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(deadly.state.pilots.length, 0, 'семь процентов за рейс не пережить');
+    assert.ok(deadly.events.some((e) => /погиб в бою с пиратами/.test(e.text)));
+
+    const safe = advance(onRoute(POLICE.from, POLICE.from, 'police'), 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(safe.state.pilots.length, 1, 'в корпорации гибели нет вовсе');
+    assert.ok(safe.state.pilots[0].runs > 200);
+  });
+
+  it('полицейский розыск не поднимает', () => {
+    const r = advance(onRoute(POLICE.from, POLICE.from, 'police'), 10 * 24 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.legal, 0);
+  });
+
+  it('полицейский приносит деньги, а не товар', () => {
+    const s = onRoute(POLICE.from, POLICE.from, 'police');
+    const cash0 = s.cash;
+    const r = advance(s, 24 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    /*
+     * Награда 40 CR, пилоту четверть: 30 CR за рейс. Провал — это трепка:
+     * ремонт в четверть цены Аддера (250 CR), поэтому считаем и его.
+     */
+    assert.equal(r.state.cash - cash0, p.runs * 300 - p.failures * 2500);
   });
 });

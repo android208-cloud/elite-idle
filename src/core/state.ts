@@ -25,10 +25,14 @@ import {
   PIRATE_DAMAGE_CHANCE,
   PIRATE_LEGAL_PER_RUN,
   PIRATE_REPAIR_SHARE,
+  POLICE_INTERCEPT,
+  POLICE_REPAIR_SHARE,
+  POLICE_SURVEILLANCE_BONUS,
   SMUGGLER_FINE,
   SMUGGLER_LEGAL,
   laneSurveillance,
   pirateLoot,
+  policeBounty,
   pilotName,
   pilotRisk,
   pilotRunIncome,
@@ -1245,11 +1249,37 @@ export function pilotCycleMs(
   return 2 * flight + PILOT_REST_MS;
 }
 
+/**
+ * §108: надзор всех систем с учётом ваших полицейских.
+ *
+ * Возвращает массив длиной в галактику; база — правительство системы,
+ * плюс `POLICE_SURVEILLANCE_BONUS` за каждого дежурного. Потолок — 7
+ * (корпорация): в системе, где и так строго, полиция ничего не добавляет,
+ * и это честно — там и без неё не балуются.
+ *
+ * Экспортируется, чтобы карточка показывала игроку ТЕ ЖЕ риски, по которым
+ * потом считает `accrueFleet`. Двух источников правды тут быть не должно.
+ */
+export function surveillanceMap(state: GameState): number[] {
+  const systems = systemsOf(state.galaxy);
+  const map = systems.map((sys) => sys.government);
+  for (const pilot of state.pilots) {
+    if (pilot.role !== 'police' || !pilot.route) continue;
+    map[pilot.route.to] = Math.min(7, map[pilot.route.to] + POLICE_SURVEILLANCE_BONUS);
+  }
+  return map;
+}
+
 /** Выручка рейса пилота в десятых кредита. */
 export function pilotRouteProfit(state: GameState, pilot: Pilot): number {
   if (!pilot.route) return 0;
   const systems = systemsOf(state.galaxy);
-  return routeProfit(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold);
+  // §108: полицейскому платят наградой за патруль, а не торговой маржой.
+  if (pilot.role === 'police') return policeBounty(systems[pilot.route.to].government);
+  if (pilot.role === 'pirate') {
+    return pirateLoot(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold);
+  }
+  return routeProfit(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold, pilot.role);
 }
 
 /**
@@ -1315,7 +1345,11 @@ export function assignPilotRoute(
 
   const pilot = state.pilots.find((p) => p.id === pilotId);
   if (!pilot) return { state, error: 'none' };
-  if (to === pilot.home) return { state, error: 'self' };
+  /*
+   * §108: полицейскому «маршрут» — это место дежурства, и своя система
+   * для него законное место. Торговцу же летать в свою систему некуда.
+   */
+  if (to === pilot.home && role !== 'police') return { state, error: 'self' };
 
   const systems = systemsOf(state.galaxy);
   if (!systems[to]) return { state, error: 'range' };
@@ -1368,6 +1402,16 @@ function accrueFleet(
   if (state.pilots.length === 0) return state;
 
   const systems = systemsOf(state.galaxy);
+  /*
+   * §108: надзор считается ОДИН раз на весь досчёт — с учётом ваших
+   * полицейских. Так торговец, стоящий в той же системе, что и дежурный,
+   * получает защиту в том же тике, а не со следующего.
+   */
+  const surv = surveillanceMap(state);
+  const guarded = new Set<number>();
+  for (const other of state.pilots) {
+    if (other.role === 'police' && other.route) guarded.add(other.route.to);
+  }
   let cash = state.cash;
   let legal = state.legal;
   let rng = state.rng;
@@ -1399,8 +1443,17 @@ function accrueFleet(
 
     const count = Math.floor((now - pilot.nextRunAt) / cycle) + 1;
     const spec = SHIPS[pilot.ship];
-    const lane = laneSurveillance(systems, pilot.route);
-    const risk = pilotRisk(pilot.role, lane, surveillanceOf(systems[pilot.route.to]));
+    const lane = (surv[pilot.route.from] + surv[pilot.route.to]) / 2;
+    /*
+     * §108: полицейский рискует по БЕЗЗАКОНИЮ системы, а не по надзору с
+     * его же участием — иначе он сам себе снижал бы риск, просто встав на
+     * дежурство. И карточка, и досчёт считают одинаково.
+     */
+    const risk = pilotRisk(
+      pilot.role,
+      lane,
+      pilot.role === 'police' ? systems[pilot.route.to].government : surv[pilot.route.to],
+    );
     const wage = pilot.id - 1;
 
     /*
@@ -1410,7 +1463,9 @@ function accrueFleet(
      */
     const gross = pilot.role === 'pirate'
       ? pirateLoot(state.galaxy, systems, pilot.route, spec.hold)
-      : routeProfit(state.galaxy, systems, pilot.route, spec.hold, pilot.role);
+      : pilot.role === 'police'
+        ? policeBounty(systems[pilot.route.to].government)
+        : routeProfit(state.galaxy, systems, pilot.route, spec.hold, pilot.role);
     // У контрабандиста при досмотре отнимают только запрещёнку — законный
     // груз доезжает (§107, решение пользователя).
     const legalOnly = pilot.role === 'smuggler'
@@ -1439,6 +1494,22 @@ function accrueFleet(
         continue;
       }
 
+      if (pilot.role === 'police') {
+        if (draw() < risk.death) {
+          failures++;
+          lost = true;
+          break;
+        }
+        if (draw() < risk.beaten) {
+          failures++;
+          cash -= Math.round(shipPrice(pilot.ship) * POLICE_REPAIR_SHARE);
+          continue;
+        }
+        runs++;
+        gained += pilotRunIncome(gross, wage);
+        continue;
+      }
+
       if (pilot.role === 'smuggler') {
         if (draw() < risk.inspect) {
           failures++;
@@ -1452,8 +1523,18 @@ function accrueFleet(
         continue;
       }
 
-      // Торговец: единственный риск — пираты на линии.
+      /*
+       * Торговец: единственный риск — пираты на линии. Но если один из
+       * концов маршрута под охраной вашего полицейского, налёт может быть
+       * отбит (§108) — и тогда рейс проходит как обычный.
+       */
       if (draw() < risk.raid) {
+        const watched = guarded.has(pilot.route.from) || guarded.has(pilot.route.to);
+        if (watched && draw() < POLICE_INTERCEPT) {
+          runs++;
+          gained += pilotRunIncome(gross, wage);
+          continue;
+        }
         failures++;
         continue;
       }
@@ -1465,12 +1546,17 @@ function accrueFleet(
     changed = true;
 
     if (lost) {
-      notes.push(`${pilot.name} попался полиции: корабль и пилот потеряны (${(shipPrice(pilot.ship) / 10).toFixed(1)} CR)`);
+      notes.push(pilot.role === 'police'
+        ? `${pilot.name} погиб в бою с пиратами (${(shipPrice(pilot.ship) / 10).toFixed(1)} CR)`
+        : `${pilot.name} попался полиции: корабль и пилот потеряны (${(shipPrice(pilot.ship) / 10).toFixed(1)} CR)`);
       continue;
     }
 
     if (failures > 0) {
-      const why = pilot.role === 'pirate' ? 'трепка' : pilot.role === 'smuggler' ? 'досмотр' : 'ограблен';
+      const why = pilot.role === 'pirate' ? 'трепка'
+        : pilot.role === 'smuggler' ? 'досмотр'
+          : pilot.role === 'police' ? 'потрёпан'
+            : 'ограблен';
       notes.push(`${pilot.name}: ${failures} ${plural(failures, 'провал', 'провала', 'провалов')} (${why})`);
     }
 

@@ -59,6 +59,7 @@ import {
   assignPilotRoute,
   pilotCycleMs,
   pilotRouteProfit,
+  surveillanceMap,
   type PilotError,
   type GameEvent,
   type GameState,
@@ -72,9 +73,11 @@ import {
   formatSpan,
   laneSurveillance,
   PIRATE_LEGAL_PER_RUN,
+  policeBounty,
   PILOT_HIRE_FEE,
   PILOT_MIN_KILLS,
   pirateLoot,
+  POLICE_SURVEILLANCE_BONUS,
   pilotRisk,
   pilotRunIncome,
   PILOT_ROLE_NAMES,
@@ -1776,8 +1779,20 @@ function pilotsCard(): string {
     // целые кредиты, иначе на экране было бы «490 CR/ч» вместо 49.
     const perHour = cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0;
 
+    /*
+     * §108: у полицейского не маршрут, а место дежурства — «LAVE → LAVE»
+     * читалось бы как ошибка. Строка собирается ТОЛЬКО при наличии
+     * маршрута: обращение к p.route до проверки роняло рендер у пилота,
+     * который ещё стоит в ангаре.
+     */
+    const where = p.route
+      ? (p.role === 'police'
+        ? `${PILOT_ROLE_NAMES[p.role]} · патруль ${systems[p.route.to].name}`
+        : `${PILOT_ROLE_NAMES[p.role]} · ${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))}`)
+      : '';
+
     const line = p.route
-      ? `<div class="muted">${PILOT_ROLE_NAMES[p.role]} · ${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))}</div>
+      ? `<div class="muted">${where}</div>
          <div class="muted">рейс ${cr(profit)} · вам ${cr(income)} (${perHour} CR/ч) · ${risksLine(p.role, p, systems)}</div>
          <div class="muted">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
       : '<div class="muted">Маршрут не задан — корабль стоит в ангаре</div>';
@@ -1841,19 +1856,34 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
     ? `Каждый рейс: +${PIRATE_LEGAL_PER_RUN} к розыску. Перехват — корабль и пилот потеряны, трепка — ремонт.`
     : role === 'smuggler'
       ? 'Возит законный груз и запрещёнку. Досмотр: запрещёнка конфискована, штраф 100 CR, +2 к розыску.'
-      : 'Запрещёнку не берёт вовсе. Риск — пираты на линии.';
+      : role === 'police'
+        ? `Дежурит в системе: +${POLICE_SURVEILLANCE_BONUS} к надзору — вашим торговцам спокойнее, вашим пиратам и контрабандистам здесь тесно. Плата — награды за поимку.`
+        : 'Запрещёнку не берёт вовсе. Риск — пираты на линии.';
+
+  // Надзор с учётом дежурных: риски, которые видит игрок, и риски, по
+  // которым считает `accrueFleet`, берутся из одной карты.
+  const surv = surveillanceMap(state);
 
   const options = systems
     .map((sys, i) => ({ i, d: distance(systems[pilot.home], sys) }))
-    .filter((o) => o.i !== pilot.home && o.d <= spec.range)
+    // Полицейскому своя система — законное место дежурства.
+    .filter((o) => (role === 'police' || o.i !== pilot.home) && o.d <= spec.range)
     .map((o) => {
       const route = { from: pilot.home, to: o.i };
       const gross = role === 'pirate'
         ? pirateLoot(state.galaxy, systems, route, spec.hold)
-        : routeProfit(state.galaxy, systems, route, spec.hold, role);
+        : role === 'police'
+          ? policeBounty(systems[o.i].government)
+          : routeProfit(state.galaxy, systems, route, spec.hold, role);
       const cycle = pilotCycleMs(state, { ...pilot, route });
       const income = pilotRunIncome(gross, pilot.id - 1);
-      const risk = pilotRisk(role, laneSurveillance(systems, route), surveillanceOf(systems[o.i]));
+      // Полицейский рискует по беззаконию системы, а не по надзору с его же
+      // участием — ровно так же считает и `accrueFleet`.
+      const risk = pilotRisk(
+        role,
+        (surv[route.from] + surv[route.to]) / 2,
+        role === 'police' ? systems[o.i].government : surv[o.i],
+      );
       return {
         ...o,
         perHour: cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0,
@@ -1879,7 +1909,7 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
         : `<button class="btn" data-action="pilot-route-set" data-i="${pilot.id}" data-to="${o.i}" data-role="${role}">Лететь</button>`;
     return `<div class="good-row"><div>
         <div class="name">${systems[o.i].name}</div>
-        <div class="muted">${ly(o.d)} · вам ${cr(o.income)} за рейс · ${o.perHour} CR/ч</div>
+        <div class="muted">${role === 'police' ? '' : `${ly(o.d)} · `}вам ${cr(o.income)} за рейс · ${o.perHour} CR/ч</div>
         <div class="muted">${riskLabel(role, o.risk)}</div></div>${action}</div>`;
   }).join('');
 
@@ -1900,13 +1930,19 @@ function pct(x: number): string {
 function riskLabel(role: PilotRole, risk: ReturnType<typeof pilotRisk>): string {
   if (role === 'pirate') return `перехват ${pct(risk.police)} · трепка ${pct(risk.damage)}`;
   if (role === 'smuggler') return risk.inspect > 0 ? `досмотр ${pct(risk.inspect)}` : 'досмотр маловероятен';
+  if (role === 'police') return `гибель ${pct(risk.death)} · трепка ${pct(risk.beaten)}`;
   return risk.raid > 0 ? `пираты ${pct(risk.raid)}` : 'линия спокойная';
 }
 
 /** Риски пилота по уже назначенному маршруту. */
 function risksLine(role: PilotRole, pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
   if (!pilot.route) return '';
-  const risk = pilotRisk(role, laneSurveillance(systems, pilot.route), surveillanceOf(systems[pilot.route.to]));
+  const surv = surveillanceMap(state);
+  const risk = pilotRisk(
+    role,
+    (surv[pilot.route.from] + surv[pilot.route.to]) / 2,
+    role === 'police' ? systems[pilot.route.to].government : surv[pilot.route.to],
+  );
   return riskLabel(role, risk);
 }
 
