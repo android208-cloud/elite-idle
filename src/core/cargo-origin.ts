@@ -185,6 +185,19 @@ export function untrackedContraband(manifest: CargoManifest, cargo: readonly num
   return missing;
 }
 
+/**
+ * §100.1: стоимость всего трюма по рынку текущей системы.
+ *
+ * Считается по всем товарам, а не только по запрещённым: в полёте это
+ * единственный способ понять, чего стоит груз, — продать некому, но
+ * выбросить иногда надо именно дорогое.
+ */
+export function holdValue(cargo: readonly number[], market: readonly { price: number }[]): number {
+  let sum = 0;
+  for (let i = 0; i < cargo.length; i++) sum += (cargo[i] ?? 0) * (market[i]?.price ?? 0);
+  return sum;
+}
+
 /** Позиции манифеста с положительным остатком — «что лежит сейчас». */
 export function cargoManifest(state: { cargo: number[]; cargoOrigin?: CargoManifest }): CargoManifest {
   return reconcile(state.cargoOrigin ?? EMPTY_MANIFEST, state.cargo);

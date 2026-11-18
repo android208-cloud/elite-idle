@@ -91,7 +91,9 @@ check('трюм показывает товар из трюма', /Еда/.test(
 check('пустых позиций в списке нет', !/Текстиль/.test(holdText()));
 check('в трюме есть кнопки сброса', !!wf.document.querySelector('[data-action="dropAll"]'));
 const topInfo = () => wf.document.getElementById('top-info')?.textContent ?? '';
-check('в шапке трюма — загрузка, а не деньги', /\d+ \/ \d+ т/.test(topInfo()), topInfo().trim());
+// §100.1: в шапке — стоимость трюма, а не тонны.
+check('в шапке трюма — стоимость груза', /^\d+\.\d CR$/.test(topInfo().trim()), topInfo().trim());
+check('тонн в шапке нет', !/ т/.test(topInfo()));
 
 click(wf, tabBtn(wf, 'hangar'));
 await new Promise((r) => setTimeout(r, 200));

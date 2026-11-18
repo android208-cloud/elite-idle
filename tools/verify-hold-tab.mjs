@@ -96,14 +96,15 @@ check('в карточке есть метка цены', !!goodsCard?.querySele
 check('строка «В наличии · В трюме» как на рынке', /В наличии: \d+ т · В трюме: 2 т/.test(goodsCard?.textContent ?? ''));
 check('цена справа тем же классом', !!goodsCard?.querySelector('.price'));
 /*
- * §100: пользователь спросил «цену за всё количество?». Ответ должен быть
- * виден на экране, а не только в объяснении: цена за единицу — крупно,
- * стоимость всего запаса — мелким под ней.
+ * §100.1: одна цена — за весь запас, одной строкой.
+ *
+ * В фикстуре цена 100 десятых = 10.0 CR за единицу, груза 2 т, значит
+ * крупная цифра — 20.0 CR. Второй строки быть не должно.
  */
 const priceBlock = goodsCard?.querySelector('.price');
-// В фикстуре цена 100 десятых = 10.0 CR, груза 2 т.
-check('крупная цена — за единицу', /^10\.0 CR/.test(priceBlock?.textContent.trim() ?? ''), priceBlock?.textContent.trim() ?? '');
-check('мелким — стоимость всего запаса', /2 т = 20\.0 CR/.test(priceBlock?.textContent ?? ''), priceBlock?.textContent.trim() ?? '');
+check('цена — за весь запас', priceBlock?.textContent.trim() === '20.0 CR', priceBlock?.textContent.trim() ?? '');
+check('вторая строка цены убрана', (priceBlock?.children.length ?? 0) === 0);
+check('цена за единицу осталась в подписи', /10\.0 CR\/т/.test(goodsCard?.textContent ?? ''));
 const row = goodsCard?.querySelector('.row');
 const btns = [...(row?.querySelectorAll('button') ?? [])];
 check('«−1» первая кнопка', btns[0]?.textContent.trim() === '−1', btns[0]?.textContent.trim() ?? '');

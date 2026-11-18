@@ -99,7 +99,15 @@ test('§98: в полёте вкладка рынка показывает гр�
   const base = { ...newGame(1), cash: 12345 };
   const base2 = { ...base, cargo: base.cargo.map((n, i) => (i === 0 ? 3 : n)), holdSpace: 17 };
   assert.equal(topValue(base2, 'market'), '1234.5 CR', 'на станции — деньги, как было');
-  // В полёте — «3 / 20 т»: занято и всего.
+  /*
+   * §100.1: в полёте — СТОИМОСТЬ трюма, а не тонны.
+   *
+   * Тонны и так видны в полоске на экране, а сколько стоит груз — нет.
+   * В base2 три тонны «Еды» по цене рынка; сколько именно, считаем по
+   * состоянию, а не зашиваем число: рынок зависит от системы.
+   */
   const flying = { ...base2, flight: { from: base.system, to: base.system, patrol: true } as never };
-  assert.equal(topValue(flying, 'market'), '3 / 20 т');
+  const expected = `${((3 * base2.market[0].price) / 10).toFixed(1)} CR`;
+  assert.equal(topValue(flying, 'market'), expected);
+  assert.ok(!/ т$/.test(topValue(flying, 'market')), 'тонн в шапке трюма больше нет');
 });

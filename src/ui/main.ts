@@ -15,7 +15,7 @@ import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/comba
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES, isTonneCargo } from '../core/market.ts';
 import { isContraband } from '../core/cargo-canisters.ts';
-import { cargoManifest, handoverLine, contrabandValue, contrabandGoods, untrackedContraband } from '../core/cargo-origin.ts';
+import { cargoManifest, handoverLine, contrabandValue, contrabandGoods, untrackedContraband, holdValue } from '../core/cargo-origin.ts';
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
@@ -1425,19 +1425,21 @@ function holdScreen(): string {
      * делают, хуже их отсутствия.
      */
     /*
-     * §100: цена — за ОДНУ единицу, как на рынке, но в трюме это читалось
-     * двусмысленно: пользователь прямо спросил «цену товара у нас за всё
-     * количество?». На рынке вопрос не возникает — там покупают поштучно,
-     * а в трюме рядом стоит количество, и цифра выглядит как «за всё».
+     * §100.1: в трюме цена — ЗА ВЕСЬ ЗАПАС, одной строкой.
      *
-     * Поэтому большая цифра остаётся прежней (цена за единицу, тот же
-     * класс `.price`, то же место), а под ней мелким — сколько стоит весь
-     * запас. Так карточка остаётся копией рыночной, но вопроса больше нет.
+     * Сначала (в §99) здесь была рыночная цена за единицу, потом (§100) к
+     * ней добавилась мелкая строка со стоимостью всего запаса. Пользователь
+     * попросил иначе: «сделай одну цену за всё, в две строки не надо».
+     *
+     * Логика его права: на рынке спрашивают «почём», потому что покупают
+     * поштучно; в трюме спрашивают «сколько у меня», потому что груз уже
+     * свой. Поэтому крупная цифра — стоимость всего запаса, а цена за
+     * единицу остаётся в подписи рядом с ценой станции.
      */
     return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
         <div><div class="name">${c.name} ${priceChip(i)}</div>
-          <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${have} ${UNITS[c.unit]}</div></div>
-        <div class="price">${cr(m.price)}<div class="muted">${have} ${UNITS[c.unit]} = ${cr(m.price * have)}</div></div></div>
+          <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${have} ${UNITS[c.unit]} · ${cr(m.price)}/${UNITS[c.unit]}</div></div>
+        <div class="price">${cr(m.price * have)}</div></div>
       <div class="row" style="margin-top:10px">
         <button class="btn tonal" data-action="drop1" data-i="${i}">−1</button>
         <span class="spacer"></span>
