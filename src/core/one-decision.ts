@@ -20,7 +20,14 @@
  */
 
 import { LASER_POWER, LASER_RATE, MAX_ENERGY, MAX_SHIELDS } from './combat.ts';
-import { enemyById, type EnemyType, type LaserType } from './ships.ts';
+import {
+  enemyById,
+  SHIPS,
+  type EnemyType,
+  type LaserType,
+  type PlayerShip,
+  type ShipId,
+} from './ships.ts';
 import { ALIEN_ITEMS_INDEX } from './market.ts';
 
 /** Что игрок может сделать при встрече. */
@@ -74,10 +81,33 @@ export function roundsToDie(enemyLaser: number): number {
  * Какую долю запаса игрока сожжёт бой с этим врагом лучшим лазером.
  * 0.4 = сорок процентов щитов и энергии.
  */
-export function damageShare(enemy: EnemyType, laser: LaserType): number {
+export function damageShare(
+  enemy: EnemyType,
+  laser: LaserType,
+  toughness: number = MAX_SHIELDS + MAX_ENERGY,
+): number {
   const rounds = roundsToKill(enemy.energy, laser);
   if (!Number.isFinite(rounds)) return Number.POSITIVE_INFINITY;
-  return (rounds * enemy.laser) / (MAX_SHIELDS + MAX_ENERGY);
+  return (rounds * enemy.laser) / toughness;
+}
+
+/**
+ * ПРОЧНОСТЬ КОРАБЛЯ ИГРОКА (§102).
+ *
+ * До §102 все летали на одной Кобре, и запас щита с энергией был общей
+ * константой `MAX_SHIELDS + MAX_ENERGY` = 383. Теперь корабли разные, и
+ * держать эту константу в знаменателе `damageShare` нельзя: он превращался
+ * в фильтр «какой корабль можешь бить», хотя задумывался как «сколько боя
+ * выдержишь».
+ *
+ * Прочность берём из Elite-A (`new_details`, поле Shields): у Кобры 7,
+ * у Фер-де-Ланса 8, у Аспа 10, у Питона 11, у Анаконды 13. Масштабируем
+ * относительно Кобры, чтобы числа §39.1 остались прежними: Кобра = 383.
+ */
+export function toughnessOf(ship: PlayerShip): number {
+  const spec = SHIPS[ship.model];
+  const base = SHIPS.cobra3.shields;
+  return Math.round(((MAX_SHIELDS + MAX_ENERGY) * spec.shields) / base);
 }
 
 /**
@@ -128,9 +158,36 @@ export function needsMissile(enemy: EnemyType): boolean {
   return BIG_SHIPS.has(enemy.id);
 }
 
-/** Хватает ли снаряжения на Python или Анаконду. */
-export function hasBossKit(kit: BossKit): boolean {
-  return kit.militaryLaser && kit.ecm && kit.energyBomb && kit.missiles > 0;
+/**
+ * Хватает ли снаряжения на Python или Анаконду — с учётом корабля (§102).
+ *
+ * До §102 набор был один на всех: военный лазер + ECM + бомба + ракета.
+ * Он и был костылём: все летали на Кобре с одинаковыми 383 очками, и
+ * Питона нельзя было взять иначе как «предметами».
+ *
+ * С §102 снаряжение требуется ступенями по классу корабля:
+ *
+ *   Кобра Mk III        — полный набор (как было, §78);
+ *   Питон, Асп, ФдЛ     — военный лазер + ECM + ракета, бомба не нужна;
+ *   Анаконда            — военный лазер + ракета.
+ *
+ * Почему не «ничего не надо» на Анаконде: прочность корпуса растёт всего в
+ * 1.86 раза (13 щитов против 7), и без лазера с ракетой Питон всё равно
+ * остаётся непобедимым в расчёте. Почему не «всё как на Кобре»: требовать
+ * бомбу от корабля за 130 000 — наказывать за прогресс.
+ */
+export function hasBossKit(kit: BossKit, model: ShipId = 'cobra3'): boolean {
+  const laser = kit.militaryLaser && kit.missiles > 0;
+  switch (model) {
+    case 'anaconda':
+      return laser;
+    case 'python':
+    case 'asp':
+    case 'ferdelance':
+      return laser && kit.ecm;
+    default:
+      return laser && kit.ecm && kit.energyBomb;
+  }
 }
 
 /**
@@ -145,8 +202,13 @@ export function hasBossKit(kit: BossKit): boolean {
  * пираты. Поэтому `pirate` больше не обязательное условие — его проверяет
  * вызывающая сторона, которая знает режим.
  */
-export function canBeat(enemy: EnemyType, kit: BossKit, bestLaser: LaserType): boolean {
-  if (BIG_SHIPS.has(enemy.id)) return hasBossKit(kit);
+export function canBeat(
+  enemy: EnemyType,
+  kit: BossKit,
+  bestLaser: LaserType,
+  model: ShipId = 'cobra3',
+): boolean {
+  if (BIG_SHIPS.has(enemy.id)) return hasBossKit(kit, model);
   if (enemy.id === 'asp' || enemy.id === 'cobra3' || enemy.id === 'ferdelance') {
     return bestLaser === 'military';
   }
@@ -160,8 +222,13 @@ export function canBeat(enemy: EnemyType, kit: BossKit, bestLaser: LaserType): b
  * более. Но грабёж разрешён отдельным решением: торговца можно атаковать,
  * зная, что это преступление.
  */
-export function canRaid(enemy: EnemyType, kit: BossKit, bestLaser: LaserType): boolean {
-  return canBeat(enemy, kit, bestLaser);
+export function canRaid(
+  enemy: EnemyType,
+  kit: BossKit,
+  bestLaser: LaserType,
+  model: ShipId = 'cobra3',
+): boolean {
+  return canBeat(enemy, kit, bestLaser, model);
 }
 
 /** Криминальный ли статус: с него патруль превращается в пиратство. */
@@ -175,9 +242,13 @@ export function isCriminal(legal: number): boolean {
  * Нейтральный (не враждебный) корабль слабым не считается никогда:
  * нападать на него — отдельное преступление, а не бой.
  */
-export function isWeak(enemy: EnemyType, bestLaser: LaserType): boolean {
+export function isWeak(
+  enemy: EnemyType,
+  bestLaser: LaserType,
+  toughness: number = MAX_SHIELDS + MAX_ENERGY,
+): boolean {
   if (!enemy.pirate) return false;
-  return damageShare(enemy, bestLaser) < WEAK_DAMAGE_SHARE;
+  return damageShare(enemy, bestLaser, toughness) < WEAK_DAMAGE_SHARE;
 }
 
 /**
@@ -291,6 +362,7 @@ export function availableDecisions(
   bestLaser: LaserType,
   _hasPod: boolean,
   hostile: boolean,
+  toughness: number = MAX_SHIELDS + MAX_ENERGY,
 ): Decisions {
   /*
    * §95: ПИРАТ — ЦЕЛЬ, ДАЖЕ ЕСЛИ ОН ЛЕТИТ МИМО.
@@ -329,7 +401,7 @@ export function availableDecisions(
    * власть — только когда сами напали. Он и передаёт `hostile = true`
    * для законной цели.
    */
-  const weak = hostile && isWeak(enemy, bestLaser);
+  const weak = hostile && isWeak(enemy, bestLaser, toughness);
   return {
     attack: weak,
     flee: true,

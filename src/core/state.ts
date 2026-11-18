@@ -23,6 +23,7 @@ import {
   availableDecisions,
   bestLaserOf,
   canBeat,
+  toughnessOf,
   enemyOf,
   isCriminal,
   isLegalTarget,
@@ -36,7 +37,8 @@ import {
   equipmentAvailable,
   holdCapacity,
   HOLD_BASE,
-  MAX_MISSILES,
+  maxMissiles,
+  patrolMissilesRequired,
   STARTER_SHIP,
   type EquipmentId,
   type PlayerShip,
@@ -622,7 +624,8 @@ export interface EquipmentResult {
 export function owns(ship: PlayerShip, id: EquipmentId): boolean {
   switch (id) {
     case 'missile':
-      return ship.missiles >= MAX_MISSILES;
+      // §102: предел ракет — свойство корабля (у Аспа один слот).
+      return ship.missiles >= maxMissiles(ship);
     case 'cargoBay':
       return ship.cargoBayExtended;
     case 'ecm':
@@ -1004,7 +1007,14 @@ export function startJump(state: GameState, target: number, now: number, setting
  */
 export function startPatrol(state: GameState, now: number): JumpResult {
   if (state.flight) return { state, error: 'in-flight' };
-  if (state.ship.missiles < PATROL_MISSILES_REQUIRED) return { state, error: 'no-missiles' };
+  /*
+   * §102: «полный боекомплект» — это боекомплект КОРАБЛЯ, а не 4 ракеты.
+   * У Аспа слотов один, и требование четырёх запирало перехватчик на
+   * станции навсегда: в патруль он выйти не мог вообще.
+   */
+  if (state.ship.missiles < patrolMissilesRequired(state.ship)) {
+    return { state, error: 'no-missiles' };
+  }
   // Возврат домой бесплатный — станция рядом, но резерв нужен, чтобы
   // патруль не начался «на последних каплях».
   if (state.fuel <= PATROL_RETURN_RESERVE) return { state, error: 'no-fuel' };
@@ -1033,7 +1043,10 @@ export function startPatrol(state: GameState, now: number): JumpResult {
   };
 }
 
-/** Сколько ракет нужно, чтобы выйти в патруль (§78). */
+/**
+ * Сколько ракет нужно, чтобы выйти в патруль (§78), для стартовой Кобры.
+ * С §102 требование считается по кораблю: `patrolMissilesRequired`.
+ */
 export const PATROL_MISSILES_REQUIRED = 4;
 
 /* ---------- Галактический гиперпрыжок ---------- */
@@ -1355,8 +1368,8 @@ function autoDecision(
    */
   const criminal = isCriminal(state.legal);
   const raiding = patrol && criminal;
-  const can = availableDecisions(enemy, best, true, hostile);
-  const beat = canBeat(enemy, kit, best);
+  const can = availableDecisions(enemy, best, true, hostile, toughnessOf(state.ship));
+  const beat = canBeat(enemy, kit, best, state.ship.model);
   // Пиратство: бить можно любого. Обычный патруль: только враждебных
   // (пират, а также полиция и охотник, если статус уже криминальный).
   /*
@@ -2300,6 +2313,12 @@ export function deserialize(json: string): GameState {
   // Без этого старый файл даст undefined там, где читается stats.kills.
   if (!state.stats) state.stats = { ...ZERO_STATS };
   if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
+  /*
+   * §102: модель корабля. В сохранениях до неё поля нет — все летали на
+   * Кобре, поэтому именно она и подставляется. Без этого старый файл
+   * падал бы на первом же `holdCapacity`.
+   */
+  if (!state.ship.model) state.ship.model = 'cobra3';
   /*
    * §89: время карьеры. В сохранениях до §89 поля нет — начинаем с нуля.
    * `careerAt` НЕ трогаем: сохранение обязано читаться обратно байт в байт

@@ -9,6 +9,7 @@ import {
   enemyOf,
   isCriminal,
   isLegalTarget,
+  toughnessOf,
   type Decision,
 } from '../core/one-decision.ts';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
@@ -60,6 +61,7 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
+import { patrolMissilesRequired, shipSpec } from '../core/ships.ts';
 import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
@@ -436,7 +438,13 @@ function encounterCard(): string {
    * торговой. Поэтому напасть можно на пирата по роли — даже если он
    * сейчас летит мимо (жёлтый, §86).
    */
-  const can = availableDecisions(enemy, best, true, isLegalTarget(e.role, hostile));
+  const can = availableDecisions(
+    enemy,
+    best,
+    true,
+    isLegalTarget(e.role, hostile),
+    toughnessOf(state.ship),
+  );
 
   const btn = (decision: Decision, label: string, enabled: boolean, reason?: string): string =>
     `<button class="btn" data-action="decide" data-decision="${decision}" ${enabled ? '' : 'disabled'}
@@ -594,8 +602,8 @@ function flightButtons(): string {
    */
   const pirate = isCriminal(state.legal);
   let patrolReason = '';
-  if (state.ship.missiles < PATROL_MISSILES_REQUIRED) {
-    patrolReason = 'Не полный боекомплект';
+  if (state.ship.missiles < patrolMissilesRequired(state.ship)) {
+    patrolReason = `Не полный боекомплект: ${state.ship.missiles} из ${patrolMissilesRequired(state.ship)}`;
   } else if (state.fuel <= PATROL_RETURN_RESERVE) {
     patrolReason = `Нужен запас топлива на возврат: в баке ${ly(state.fuel)}`;
   }
@@ -1514,12 +1522,26 @@ function equipmentRows(): string {
   return EQUIPMENT.map((item) => {
     const have = owns(state.ship, item.id);
     const available = equipmentAvailable(item, tek);
+    /*
+     * §103.1: ЧЕГО НЕ ПРОДАЮТ — ТОГО НЕ ПОКАЗЫВАЕМ.
+     *
+     * Раньше недоступный по техуровню предмет висел строкой с подписью
+     * «нет на этой станции». Это тот же мёртвый ряд, что §103 убрал на
+     * рынке: в системе с техуровнем 1 из двенадцати строк девять были
+     * такими. Список верфи должен отвечать на вопрос «что я могу купить
+     * здесь», а не перечислять каталог галактики.
+     *
+     * Исключение — то, что УЖЕ СТОИТ на корабле: «установлено» это не
+     * предложение, а состояние, его прятать нельзя.
+     */
+    if (!available && !have) return '';
     let note = equipmentNote(item);
-    if (item.id === 'missile') note += ` · сейчас ${state.ship.missiles}`;
+    if (item.id === 'missile') {
+      note += ` · сейчас ${state.ship.missiles} из ${patrolMissilesRequired(state.ship)}`;
+    }
     let action: string;
     if (have && item.id !== 'missile') action = '<span class="chip">установлено</span>';
     else if (have) action = '<span class="chip">полный боекомплект</span>';
-    else if (!available) action = '<span class="chip dear">нет на этой станции</span>';
     else
       action = `<button class="btn tonal" data-action="equip" data-id="${item.id}" ${docked && state.cash >= item.price ? '' : 'disabled'}>Купить</button>`;
     return `<div class="good-row" style="margin:10px 0"><div><div class="name">${item.name}</div>
@@ -1533,10 +1555,11 @@ function hangarScreen(): string {
   // Модель корабля живёт в ангаре: это место про сам корабль, а экран
   // «Корабль» — про полёт и груз. В пути модель не рисуем: в ангаре
   // корабля нет, он улетел.
+  const name = shipSpec(state.ship).name;
   const model = docked
     ? `<div class="card ship-view">
-      <canvas id="ship-model" aria-label="Модель корабля Cobra Mk III"></canvas>
-      <div class="sub" style="text-align:center">Cobra Mk III · ваш корабль в ангаре</div>
+      <canvas id="ship-model" aria-label="Модель корабля ${name}"></canvas>
+      <div class="sub" style="text-align:center">${name} · ваш корабль в ангаре</div>
     </div>`
     : '';
   return `${model}<div class="card"><h2>Топливо</h2>
@@ -1547,7 +1570,7 @@ function hangarScreen(): string {
         <button class="btn" data-action="refuel" data-n="${missing}" ${docked && missing > 0 ? '' : 'disabled'}>Полный бак</button>
       </div></div>
     <div class="card"><h2>Оборудование</h2>
-      <div class="sub">Доступность зависит от технологического уровня станции (здесь ${currentSystem(state).techLevel + 1}). Установлен один лазер: новый заменяет прежний.</div>
+      <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
     ${galacticCard()}`;
 }
@@ -2243,7 +2266,13 @@ function onAction(el: HTMLElement): void {
        *
        * Теперь правило одно на оба места.
        */
-      const can = availableDecisions(enemy, bestLaserOf(lasers), true, isLegalTarget(enc.role, hostile));
+      const can = availableDecisions(
+        enemy,
+        bestLaserOf(lasers),
+        true,
+        isLegalTarget(enc.role, hostile),
+        toughnessOf(state.ship),
+      );
       const r = applyDecision(enemy, decision, can, hostile);
       if (!r) {
         addLog('Это решение сейчас недоступно');

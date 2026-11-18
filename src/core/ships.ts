@@ -95,7 +95,73 @@ export function enemyById(id: string): EnemyType {
   return e;
 }
 
+/**
+ * КУПЛЕННЫЕ КОРАБЛИ (§102).
+ *
+ * Числа взяты из дизассемблера Elite-A (markmoxon/elite-a-source-code-bbc-micro,
+ * `elite-source-docked.asm`, таблица `new_details`): трюм, слоты ракет,
+ * прочность и позиция в лестнице цен. Трюм и ракеты в оригинале хранятся
+ * с минус единицей — здесь уже приведены.
+ *
+ * Оговорки:
+ *
+ *  * `rank` — позиция в таблице `new_ships` (1 — самая дешёвая модель).
+ *    Elite-A продаёт первые `15 - 2 * экономика` позиций, поэтому ранг —
+ *    это и есть доступность: чем он больше, тем в меньшем числе систем
+ *    корабль вообще выставлен на продажу.
+ *  * Трюм Кобры — наш, 20/35 т, а не 42 т из Elite-A: 20 т это стартовый
+ *    баланс всей игры (§70–§103), и менять его вместе с покупкой кораблей
+ *    значило бы переписать всё сразу. У остальных моделей — значения
+ *    Elite-A до решения о масштабе.
+ *  * `holdExtended` есть только у Кобры: в оригинале «большой трюм» —
+ *    upgrade именно Кобры, крупным кораблям он не нужен и не предлагается.
+ */
+export const HOLD_BASE = 20;
+export const HOLD_EXTENDED = 35;
+
+/**
+ * Максимум ракет у стартовой Кобры. С §102 предел — свойство модели
+ * (`maxMissiles`), а константа осталась для совместимости и тестов.
+ */
+export const MAX_MISSILES = 4;
+
+export type ShipId = 'cobra3' | 'ferdelance' | 'python' | 'asp' | 'anaconda';
+
+export interface ShipSpec {
+  id: ShipId;
+  name: string;
+  /** Трюм, тонн */
+  hold: number;
+  /** Трюм с расширением; null — расширение не ставится */
+  holdExtended: number | null;
+  /** Слоты ракет на корпусе */
+  missiles: number;
+  /** Прочность корпуса (поле Shields из new_details) */
+  shields: number;
+  /** Позиция в таблице new_ships, 1 — самый дешёвый */
+  rank: number;
+}
+
+export const SHIPS: Record<ShipId, ShipSpec> = {
+  cobra3:     { id: 'cobra3',     name: 'Cobra Mk III', hold: HOLD_BASE,     holdExtended: HOLD_EXTENDED, missiles: 4,  shields: 7,  rank: 8 },
+  ferdelance: { id: 'ferdelance', name: 'Fer-de-Lance', hold: 9,             holdExtended: null,          missiles: 3,  shields: 8,  rank: 9 },
+  python:     { id: 'python',     name: 'Python',       hold: 106,           holdExtended: null,          missiles: 4,  shields: 11, rank: 12 },
+  asp:        { id: 'asp',        name: 'Asp Mk II',    hold: 6,             holdExtended: null,          missiles: 1,  shields: 10, rank: 14 },
+  anaconda:   { id: 'anaconda',   name: 'Anaconda',     hold: 253,           holdExtended: null,          missiles: 16, shields: 13, rank: 15 },
+};
+
+/** Характеристики корабля игрока. */
+export const shipSpec = (ship: PlayerShip): ShipSpec => SHIPS[ship.model];
+
+/** Сколько ракет влезает в ЭТОТ корабль (§102: у Аспа один слот). */
+export const maxMissiles = (ship: PlayerShip): number => shipSpec(ship).missiles;
+
+/** Сколько ракет нужно для патруля: полный боекомплект корабля (§102). */
+export const patrolMissilesRequired = (ship: PlayerShip): number => maxMissiles(ship);
+
 export interface PlayerShip {
+  /** Модель корабля. До §102 все летали на Кобре, и поля не было. */
+  model: ShipId;
   laser: LaserType;
   missiles: number;
   ecm: boolean;
@@ -109,6 +175,7 @@ export interface PlayerShip {
 
 /** Cobra Mk III с завода: один импульсный лазер и три ракеты. */
 export const STARTER_SHIP: Readonly<PlayerShip> = {
+  model: 'cobra3',
   laser: 'pulse',
   missiles: 3,
   ecm: false,
@@ -120,11 +187,16 @@ export const STARTER_SHIP: Readonly<PlayerShip> = {
   cargoBayExtended: false,
 };
 
-export const MAX_MISSILES = 4;
-export const HOLD_BASE = 20;
-export const HOLD_EXTENDED = 35;
-
-export const holdCapacity = (ship: PlayerShip): number => (ship.cargoBayExtended ? HOLD_EXTENDED : HOLD_BASE);
+/**
+ * Вместимость трюма ЭТОГО корабля (§102).
+ *
+ * До §102 трюм зависел только от «расширен» ли он. Теперь — от модели:
+ * у Питона 106 т, у Аспа 6 т, и расширение бывает только у Кобры.
+ */
+export const holdCapacity = (ship: PlayerShip): number => {
+  const spec = SHIPS[ship.model];
+  return ship.cargoBayExtended && spec.holdExtended !== null ? spec.holdExtended : spec.hold;
+};
 
 export type EquipmentId =
   | 'missile'
