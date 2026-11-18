@@ -25,6 +25,7 @@ import {
   advance,
   buy,
   buyEquipment,
+  buyShip,
   cargoTons,
   combatAction,
   combatAutoplay,
@@ -53,6 +54,7 @@ import {
   returnFromPatrol,
   systemsOf,
   type EquipmentError,
+  type ShipError,
   type GameEvent,
   type GameState,
   type JumpError,
@@ -61,7 +63,16 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
-import { maxFuel, maxMissiles, patrolMissilesRequired, shipSpec } from '../core/ships.ts';
+import {
+  maxFuel,
+  maxMissiles,
+  patrolMissilesRequired,
+  SHIPS,
+  shipPrice,
+  shipsForSale,
+  shipSpec,
+  type ShipId,
+} from '../core/ships.ts';
 import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
@@ -80,6 +91,14 @@ let log: LogEntry[] = [];
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let tab: Tab = 'ship';
 let selected: number | null = null;
+/**
+ * Корабль, ожидающий подтверждения покупки (§102.4).
+ *
+ * Покупка стирает оборудование и необратима, поэтому одного клика мало:
+ * первый клик спрашивает, второй покупает. Сбрасывается при смене вкладки
+ * и при любом действии, кроме подтверждения.
+ */
+let confirmShip: ShipId | null = null;
 
 /** Момент последней записи в localStorage — чтобы не писать каждый тик. */
 let lastSaveAt = 0;
@@ -219,6 +238,14 @@ const JUMP_ERRORS: Record<JumpError, string> = {
   // §78: патруль требует полного боекомплекта и запаса топлива.
   'no-missiles': 'Для патруля нужно 4 ракеты',
   'no-fuel': 'Мало топлива даже на возврат',
+};
+
+const SHIP_ERRORS: Record<ShipError, string> = {
+  'in-flight': 'Корабли продают только на станции',
+  unavailable: 'В этой системе такую модель не продают — нужна более промышленная',
+  cash: 'Не хватает денег даже с зачётом старого корабля',
+  owned: 'Это ваш корабль',
+  cargo: 'Груз не влезет в трюм нового корабля — сначала продайте лишнее',
 };
 
 const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
@@ -1589,7 +1616,85 @@ function hangarScreen(): string {
     <div class="card"><h2>Оборудование</h2>
       <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
+    ${shipyardCard()}
     ${galacticCard()}`;
+}
+
+/**
+ * ВЕРФЬ (§102.4).
+ *
+ * Правила Elite-A:
+ *   * продаются первые `15 - 2 * экономика` моделей из таблицы цен;
+ *   * старый корабль идёт в зачёт по полной цене — доплачивается разница;
+ *   * новый корабль приходит «голым», оборудование слетает (кроме ГГД,
+ *     это отступление, о котором сказано в подписи).
+ *
+ * Покупка необратима и стирает снаряжение, поэтому кнопка не покупает
+ * сразу: первый клик показывает подтверждение с точной суммой, второй
+ * совершает обмен.
+ */
+function shipyardCard(): string {
+  const docked = !state.flight;
+  const economy = currentSystem(state).economy;
+  const forSale = shipsForSale(economy);
+  const mine = state.ship.model;
+  const tradeIn = shipPrice(mine);
+
+  const rows = forSale.map((id) => {
+    const spec = SHIPS[id];
+    const price = shipPrice(id);
+    const diff = price - tradeIn;
+    const isMine = id === mine;
+    const unaffordable = state.cash < diff;
+    const tons = cargoTons(state);
+    const tooMuchCargo = tons > spec.hold;
+
+    let action: string;
+    if (isMine) action = '<span class="chip">ваш корабль</span>';
+    else if (confirmShip === id) {
+      action = `<span class="row" style="gap:6px">
+        <button class="btn danger" data-action="ship-confirm" data-id="${id}">Подтвердить</button>
+        <button class="btn text" data-action="ship-cancel">Отмена</button>
+      </span>`;
+    } else if (tooMuchCargo) {
+      action = `<span class="chip dear">груз ${tons} т не влезет в ${spec.hold} т</span>`;
+    } else {
+      action = `<button class="btn tonal" data-action="ship-buy" data-id="${id}" ${docked && !unaffordable ? '' : 'disabled'}>${diff > 0 ? `Доплатить ${cr(diff)}` : `Обменять`}</button>`;
+    }
+
+    const note = [
+      `Трюм ${spec.hold} т`,
+      `Ракеты ${spec.missiles}`,
+      `Прыжок ${ly(spec.range)}`,
+      `Цена ${cr(price)}`,
+    ].join(' · ');
+
+    const left = state.cash + tradeIn - price;
+    const confirm = confirmShip === id
+      ? `<div class="muted" style="margin-top:6px">Оборудование и ракеты слетят — останется голый ${spec.name}${state.ship.galacticHyperdrive ? ' и галактический двигатель' : ''}. Груз (${cargoTons(state)} т) останется. ${
+          left >= 0 ? `Денег останется ${cr(left)}.` : `Не хватает ${cr(-left)}.`
+        }</div>`
+      : '';
+
+    return `<div class="good-row" style="margin:10px 0"><div>
+        <div class="name">${spec.name}${isMine ? ' · сейчас' : ''}</div>
+        <div class="muted">${note}</div>${confirm}</div>${action}</div>`;
+  }).join('');
+
+  /*
+   * Подпись считает РЕАЛЬНО показанные модели, а не число из формулы:
+   * наши шесть кораблей стоят в таблице цен с промежутками (ранги
+   * 1, 8, 9, 12, 14, 15), и «15 - 2*экономика = 5» вовсе не значит, что
+   * на верфи пять строк. Иначе подпись обещала бы не то, что видно.
+   */
+  const hint = forSale.length === Object.keys(SHIPS).length
+    ? 'Богатая промышленная система — на верфи всё, что есть в галактике.'
+    : `Список зависит от экономики системы: здесь продаётся ${forSale.length} из ${Object.keys(SHIPS).length} моделей. Чем промышленнее система, тем длиннее список.`;
+
+  return `<div class="card"><h2>Верфь</h2>
+      <div class="sub">Зачёт вашего ${SHIPS[mine].name} — ${cr(tradeIn)}. Платится только разница.</div>
+      <div class="sub" style="color:var(--dim)">${hint}</div>
+      ${rows}</div>`;
 }
 
 /**
@@ -2187,6 +2292,8 @@ function onAction(el: HTMLElement): void {
       // скриптом, а правило должно держаться в одном месте.
       if (blockedTabs().includes(want)) break;
       tab = want;
+      // §102.4: подтверждение покупки корабля живёт только на вкладке.
+      confirmShip = null;
       break;
     }
     case 'go-map':
@@ -2248,6 +2355,28 @@ function onAction(el: HTMLElement): void {
       const r = refuel(state, Number(el.dataset.n));
       state = r.state;
       if (r.amount > 0) addLog(`Заправка: +${ly(r.amount)}`);
+      break;
+    }
+    case 'ship-buy': {
+      // Первый клик — только спросить: покупка стирает снаряжение.
+      confirmShip = el.dataset.id as ShipId;
+      break;
+    }
+    case 'ship-cancel': {
+      confirmShip = null;
+      break;
+    }
+    case 'ship-confirm': {
+      const id = el.dataset.id as ShipId;
+      const was = SHIPS[state.ship.model].name;
+      const r = buyShip(state, id);
+      confirmShip = null;
+      if (r.error) {
+        addLog(SHIP_ERRORS[r.error]);
+      } else {
+        state = r.state;
+        addLog(`Куплен ${SHIPS[id].name} вместо ${was}. Доплата: ${cr(r.paid ?? 0)}`);
+      }
       break;
     }
     case 'equip': {

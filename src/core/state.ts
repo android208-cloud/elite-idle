@@ -39,12 +39,16 @@ import {
   HOLD_BASE,
   maxFuel,
   maxMissiles,
+  shipPrice,
+  SHIPS,
+  shipsForSale,
   shipSpec,
   patrolMissilesRequired,
   LEGACY_COBRA_SHIP,
   STARTER_SHIP,
   type EquipmentId,
   type PlayerShip,
+  type ShipId,
 } from './ships.ts';
 
 export { nextByte } from './rng.ts';
@@ -1081,6 +1085,82 @@ export function startPatrol(state: GameState, now: number): JumpResult {
  * С §102 требование считается по кораблю: `patrolMissilesRequired`.
  */
 export const PATROL_MISSILES_REQUIRED = 4;
+
+/* ---------- Верфь (§102.4) ---------- */
+
+export type ShipError = 'in-flight' | 'unavailable' | 'cash' | 'owned' | 'cargo';
+
+export interface ShipResult {
+  state: GameState;
+  error?: ShipError;
+  /** Сколько ушло (или вернулось при обмене) — для журнала. */
+  paid?: number;
+}
+
+/**
+ * Покупка корабля.
+ *
+ * Правила взяты из `n_buyship` дизассемблера Elite-A, кроме одного:
+ *
+ *   зачёт  — старый корабль по ПОЛНОЙ цене: `CASH + price(old) - price(new)`;
+ *   список — первые `15 - 2 * экономика` моделей из таблицы цен;
+ *   новое  — «minimal equipment»: лазер, ракеты, ECM, бомба, сборщик,
+ *            компьютер и большой трюм слетают.
+ *
+ * Отступления:
+ *
+ *  * Галактический гипердвигатель остаётся (решение пользователя): он
+ *    привязан к карте, а не к корпусу.
+ *  * Правовой статус НЕ обнуляется, хотя в Elite-A покупка корабля
+ *    «смывает» розыск. У нас отмывание устроено через перелёты (§85–§87),
+ *    и бесплатная амнистия обесценила бы его.
+ *  * Груз сохраняется (в Elite-A в коде он тоже не стирается, вопреки
+ *    описанию на сайте). Если груз не влезает в новый трюм — покупка
+ *    отклоняется: молча выбросить чужой товар нельзя.
+ *  * Топливо не доливается: `min(остаток, бак нового корабля)`. В Elite-A
+ *    новый корабль приходит с полным баком, но у нас это бесплатная
+ *    заправка по любому поводу.
+ */
+export function buyShip(state: GameState, id: ShipId): ShipResult {
+  if (state.flight) return { state, error: 'in-flight' };
+  if (state.ship.model === id) return { state, error: 'owned' };
+
+  const spec = SHIPS[id];
+  const economy = currentSystem(state).economy;
+  if (!shipsForSale(economy).includes(id)) return { state, error: 'unavailable' };
+
+  const price = shipPrice(id);
+  const tradeIn = shipPrice(state.ship.model);
+  if (state.cash + tradeIn < price) return { state, error: 'cash' };
+
+  const tons = cargoTons(state);
+  if (tons > spec.hold) return { state, error: 'cargo' };
+
+  const ship: PlayerShip = {
+    model: id,
+    laser: 'none',
+    missiles: 0,
+    ecm: false,
+    energyBomb: false,
+    energyUnit: false,
+    fuelScoops: false,
+    dockingComputer: false,
+    // Решение пользователя: ГГД остаётся, остальное оборудование теряется.
+    galacticHyperdrive: state.ship.galacticHyperdrive,
+    cargoBayExtended: false,
+  };
+
+  return {
+    paid: price - tradeIn,
+    state: {
+      ...state,
+      cash: state.cash + tradeIn - price,
+      fuel: Math.min(state.fuel, spec.range),
+      holdSpace: holdCapacity(ship) - tons,
+      ship,
+    },
+  };
+}
 
 /* ---------- Галактический гиперпрыжок ---------- */
 

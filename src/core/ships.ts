@@ -143,15 +143,69 @@ export interface ShipSpec {
   range: number;
   /** Позиция в таблице new_ships, 1 — самый дешёвый */
   rank: number;
+  /**
+   * Цена из таблицы `new_ships` (вариант `_RELEASED`), в десятых долях
+   * кредита: у Кобры 2 870 000 = 287 000.0 Cr.
+   */
+  elitePrice: number;
 }
 
 export const SHIPS: Record<ShipId, ShipSpec> = {
-  adder:      { id: 'adder',      name: 'Adder',        hold: 8,             holdExtended: null,          missiles: 1,  shields: 4,  range: 60,  rank: 1 },
-  cobra3:     { id: 'cobra3',     name: 'Cobra Mk III', hold: HOLD_BASE,     holdExtended: HOLD_EXTENDED, missiles: 4,  shields: 7,  range: 70,  rank: 8 },
-  ferdelance: { id: 'ferdelance', name: 'Fer-de-Lance', hold: 9,             holdExtended: null,          missiles: 3,  shields: 8,  range: 85,  rank: 9 },
-  python:     { id: 'python',     name: 'Python',       hold: 106,           holdExtended: null,          missiles: 4,  shields: 11, range: 80,  rank: 12 },
-  asp:        { id: 'asp',        name: 'Asp Mk II',    hold: 6,             holdExtended: null,          missiles: 1,  shields: 10, range: 125, rank: 14 },
-  anaconda:   { id: 'anaconda',   name: 'Anaconda',     hold: 253,           holdExtended: null,          missiles: 16, shields: 13, range: 100, rank: 15 },
+  adder:      { id: 'adder',      name: 'Adder',        hold: 8,         holdExtended: null,          missiles: 1,  shields: 4,  range: 60,  rank: 1,  elitePrice: 310000 },
+  cobra3:     { id: 'cobra3',     name: 'Cobra Mk III', hold: HOLD_BASE, holdExtended: HOLD_EXTENDED, missiles: 4,  shields: 7,  range: 70,  rank: 8,  elitePrice: 2870000 },
+  ferdelance: { id: 'ferdelance', name: 'Fer-de-Lance', hold: 9,         holdExtended: null,          missiles: 3,  shields: 8,  range: 85,  rank: 9,  elitePrice: 3595000 },
+  python:     { id: 'python',     name: 'Python',       hold: 106,       holdExtended: null,          missiles: 4,  shields: 11, range: 80,  rank: 12, elitePrice: 7620000 },
+  asp:        { id: 'asp',        name: 'Asp Mk II',    hold: 6,         holdExtended: null,          missiles: 1,  shields: 10, range: 125, rank: 14, elitePrice: 10120000 },
+  anaconda:   { id: 'anaconda',   name: 'Anaconda',     hold: 253,       holdExtended: null,          missiles: 16, shields: 13, range: 100, rank: 15, elitePrice: 18695000 },
+};
+
+/**
+ * ВО СКОЛЬКО РАЗ НАШИ ЦЕНЫ МЕНЬШЕ ЦЕН ELITE-A (§102.4).
+ *
+ * В оригинале корабль купить было нельзя, поэтому канонической цены не
+ * существует: таблицу в Elite-A Дагган придумал как сток денег для игроков
+ * с миллионами на счету. Проверка на нашей экономике: Кобра за 287 000 CR
+ * — это 512 рейсов по 560 CR, Анаконда — 3300 рейсов, то есть 139 часов
+ * торговли. Мы сжали время полёта примерно в 30 раз, значит и цены должны
+ * сжаться так же.
+ *
+ * Отсюда делитель 31. Он не «на глаз»: экономика игры измерена, и на этом
+ * масштабе карьера от Аддера до Анаконды занимает ~150 рейсов, а Питон
+ * стоит 24 600 — ровно «25 000, наторгованных за три дня» пользователя.
+ *
+ * ВАЖНО: это одна ручка на всю верфь. Когда появятся флот и планеты,
+ * цена кораблей должна оставить им место сверху — и менять её надо здесь,
+ * а не в пяти местах.
+ */
+export const SHIP_PRICE_DIVISOR = 31;
+
+/**
+ * Цена корабля в наших деньгах (десятые доли кредита).
+ *
+ * Округляем до целого кредита: «9 258.1 CR» на витрине читается как
+ * бухгалтерская выписка, а не как цена.
+ */
+export const shipPrice = (id: ShipId): number =>
+  Math.round(SHIPS[id].elitePrice / SHIP_PRICE_DIVISOR / 10) * 10;
+
+/**
+ * Сколько моделей продаётся в системе — формула Elite-A: `15 - 2 * экономика`.
+ *
+ * В коде оригинала (`n_buyship`): `SEC : LDA #15 : SBC QQ28 : SBC QQ28`.
+ * Таблица `new_ships` отсортирована по цене, и продаются первые QQ25
+ * записей — то есть дело не в «какой корабль в какой системе», а в длине
+ * списка. В бедной аграрной системе (экономика 7) остаётся одна модель,
+ * как и в Elite-A оставался один Adder.
+ */
+export const shipsForSaleCount = (economy: number): number =>
+  Math.max(1, 15 - 2 * Math.max(0, Math.min(7, Math.round(economy))));
+
+/** Какие корабли этой экономики выставлены на продажу. */
+export const shipsForSale = (economy: number): ShipId[] => {
+  const count = shipsForSaleCount(economy);
+  return (Object.keys(SHIPS) as ShipId[])
+    .filter((id) => SHIPS[id].rank <= count)
+    .sort((a, b) => SHIPS[a].rank - SHIPS[b].rank);
 };
 
 /** Характеристики корабля игрока. */

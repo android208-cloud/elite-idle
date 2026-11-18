@@ -22,10 +22,13 @@ import {
   maxMissiles,
   patrolMissilesRequired,
   shipSpec,
+  shipPrice,
+  shipsForSale,
+  SHIP_PRICE_DIVISOR,
   type PlayerShip,
 } from '../src/core/ships.ts';
 import { canBeat, hasBossKit, isWeak, toughnessOf } from '../src/core/one-decision.ts';
-import { buyEquipment, newGame } from '../src/core/state.ts';
+import { buyEquipment, buyShip, newGame } from '../src/core/state.ts';
 import { enemyById } from '../src/core/ships.ts';
 
 const ship = (model: keyof typeof SHIPS, extra: Partial<PlayerShip> = {}): PlayerShip => ({
@@ -171,5 +174,71 @@ describe('§102 данные Elite-A', () => {
       (['cobra3', 'ferdelance', 'asp', 'python', 'anaconda'] as const).map((m) => SHIPS[m].shields),
       [7, 8, 10, 11, 13],
     );
+  });
+});
+
+describe('§102.4 верфь', () => {
+  const rich = (seed = 1) => ({ ...newGame(seed), system: 23, cash: 400000 });
+
+  it('цена — цена Elite-A, сжатая делителем', () => {
+    assert.equal(SHIP_PRICE_DIVISOR, 31);
+    assert.equal(shipPrice('adder'), 10000);      // 1 000 CR
+    assert.equal(shipPrice('cobra3'), 92580);     // 9 258 CR
+    assert.equal(shipPrice('python'), 245810);    // 24 581 CR
+    assert.equal(shipPrice('anaconda'), 603060);  // 60 306 CR
+  });
+
+  it('список зависит от экономики: 15 - 2 * экономика', () => {
+    // Богатая промышленная — всё; аграрная — только самый дешёвый.
+    assert.equal(shipsForSale(0).length, 6);
+    assert.deepEqual(shipsForSale(5), ['adder']);
+    assert.deepEqual(shipsForSale(7), ['adder']);
+    // Кобра (ранг 8) видна только в системах с экономикой <= 3.
+    assert.ok(shipsForSale(3).includes('cobra3'));
+    assert.ok(!shipsForSale(4).includes('cobra3'));
+  });
+
+  it('зачёт по полной цене: платится только разница', () => {
+    const g = rich();
+    const r = buyShip(g, 'cobra3');
+    assert.equal(r.error, undefined);
+    assert.equal(r.state.cash, 400000 + 10000 - 92580);
+    assert.equal(r.state.ship.model, 'cobra3');
+  });
+
+  it('новый корабль приходит голым, ГГД остаётся, статус не сбрасывается', () => {
+    const ship = { ...newGame(1).ship, ecm: true, energyBomb: true, fuelScoops: true, galacticHyperdrive: true };
+    const g = { ...rich(), ship, legal: 30 };
+    const r = buyShip(g, 'python');
+    assert.equal(r.state.ship.model, 'python');
+    assert.equal(r.state.ship.laser, 'none');
+    assert.equal(r.state.ship.missiles, 0);
+    assert.equal(r.state.ship.ecm, false);
+    assert.equal(r.state.ship.energyBomb, false);
+    assert.equal(r.state.ship.fuelScoops, false);
+    assert.equal(r.state.ship.galacticHyperdrive, true, 'ГГД привязан к карте, а не к корпусу');
+    assert.equal(r.state.legal, 30, 'отмывание статуса устроено иначе');
+  });
+
+  it('трюм нового корабля и груз', () => {
+    const g = { ...rich(), holdSpace: 4, cargo: newGame(1).cargo.map((_, i) => (i === 0 ? 4 : 0)) };
+    const r = buyShip(g, 'python');
+    assert.equal(r.state.holdSpace, 106 - 4);
+  });
+
+  it('груз, который не влезает, — отказ, а не молчаливая потеря', () => {
+    const g = { ...rich(), holdSpace: 0, cargo: newGame(1).cargo.map((_, i) => (i === 0 ? 8 : 0)) };
+    assert.equal(buyShip(g, 'asp').error, 'cargo');
+  });
+
+  it('в бедной системе модель не продаётся', () => {
+    const g = { ...newGame(1), system: 7, cash: 400000 }; // LAVE, экономика 5
+    assert.equal(buyShip(g, 'python').error, 'unavailable');
+    assert.equal(buyShip(g, 'adder').error, 'owned');
+  });
+
+  it('без денег — отказ', () => {
+    const g = { ...rich(), cash: 0 };
+    assert.equal(buyShip(g, 'python').error, 'cash');
   });
 });

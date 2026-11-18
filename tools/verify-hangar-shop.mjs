@@ -61,6 +61,15 @@ function boot(system, ship) {
 const tabBtn = (w, id) => [...w.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === id);
 const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 const content = (w) => w.document.getElementById('content').textContent;
+/*
+ * §102.4: в ангаре появилась верфь, и её строки (`good-row`) тоже попадают
+ * в выборку. Считаем только строки карточки «Оборудование».
+ */
+const equipRows = (w) => {
+  const card = [...w.document.querySelectorAll('#content .card')]
+    .find((c) => c.querySelector('h2')?.textContent.trim() === 'Оборудование');
+  return card ? [...card.querySelectorAll('.good-row')].length : -1;
+};
 
 async function openHangar(system, ship) {
   const w = boot(system, ship);
@@ -136,8 +145,7 @@ check('лучевой лазер (№6) здесь не продаётся', !/�
 check('импульсный лазер (№5) продаётся', /Импульсный лазер/.test(tText));
 check('стыковочного компьютера (№11) здесь нет', !/Стыковочный компьютер/.test(tText));
 check('в списке остались только покупные и установленные строки',
-  [...teaatis.document.querySelectorAll('.good-row')].length === 6,
-  `строк: ${[...teaatis.document.querySelectorAll('.good-row')].length}`);
+  equipRows(teaatis) === 6, `строк: ${equipRows(teaatis)}`);
 teaatis.close();
 
 /* ---------- ONRIRA, техуровень 14: продаётся всё ---------- */
@@ -146,8 +154,7 @@ const oText = content(onrira);
 check('на высокой станции есть военный лазер', /Военный лазер/.test(oText));
 check('на высокой станции есть галактический двигатель', /Галактический гипердвигатель/.test(oText));
 check('все двенадцать строк на месте',
-  [...onrira.document.querySelectorAll('.good-row')].length === 12,
-  `строк: ${[...onrira.document.querySelectorAll('.good-row')].length}`);
+  equipRows(onrira) === 12, `строк: ${equipRows(onrira)}`);
 check('скрытых подписей не осталось', !/нет на этой станции/.test(oText));
 onrira.close();
 
