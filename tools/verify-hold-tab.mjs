@@ -74,6 +74,10 @@ await new Promise((r) => setTimeout(r, 250));
 check('экран открыт', w.document.getElementById('title').textContent === 'Трюм');
 
 check('запрещённый товар назван', /Рабы/.test(content(w)), '');
+// §98.1: показываем только то, что лежит в трюме.
+const goodsRows = [...w.document.querySelectorAll('[data-action="dropAll"]')].length;
+check('в списке только товары из трюма — одна строка', goodsRows === 1, `строк: ${goodsRows}`);
+check('пустых позиций нет', !/Еда/.test(content(w)) && !/Текстиль/.test(content(w)));
 check('слово «контрабанда» не используется', !/контрабанд/i.test(content(w)));
 check('есть предупреждение о невозможности побега', /побег/i.test(content(w)));
 check('есть кнопки сброса', !!w.document.querySelector('[data-action="dropAll"]'));
@@ -93,7 +97,11 @@ check('журнал записал сброс', /Выброшено в косм�
 const dropAll = [...w.document.querySelectorAll('[data-action="dropAll"]')].find((b) => b.dataset.i === String(SLAVES));
 click(w, dropAll);
 await new Promise((r) => setTimeout(r, 250));
-check('«Сбросить всё» очищает позицию', /В трюме: 0 т/.test(content(w)) || !/Рабы/.test(content(w)));
+// Товар называется и в журнале («Выброшено в космос: Рабы»), поэтому
+// проверяем не текст, а строки списка: кнопок сброса быть не должно.
+check('«Сбросить всё» убирает позицию из списка (§98.1)',
+  w.document.querySelectorAll('[data-action="dropAll"]').length === 0);
+check('пустой трюм говорит об этом прямо', /Трюм пуст/.test(content(w)));
 check('место в трюме вернулось', /Свободно: 20 т/.test(content(w)), content(w).match(/Свободно: \d+ т/)?.[0] ?? '');
 check('журнал отметил, что побег снова возможен', /побег от статуса снова возможен/i.test(content(w)));
 check('предупреждения о грузе больше нет', !/В трюме запрещённый товар/.test(content(w)));

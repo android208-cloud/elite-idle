@@ -15,7 +15,7 @@ import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/comba
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES, isTonneCargo } from '../core/market.ts';
 import { isContraband } from '../core/cargo-canisters.ts';
-import { cargoManifest, handoverLine, contrabandValue, contrabandGoods } from '../core/cargo-origin.ts';
+import { cargoManifest, handoverLine, contrabandValue, contrabandGoods, untrackedContraband } from '../core/cargo-origin.ts';
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
@@ -1378,28 +1378,37 @@ function holdScreen(): string {
   const cap = state.holdSpace + tons;
   const banned = contrabandGoods(state.cargo);
   const value = contrabandValue(state.cargo, state.market);
+  /*
+   * §98.1: только то, что лежит в трюме.
+   *
+   * Сначала показывались все семнадцать позиций — «чтобы видеть, чего нет».
+   * На телефоне это три экрана прокрутки ради двух строк груза, и
+   * пользователь попросил убрать пустое. Правильно: трюм — это список
+   * ТОГО, ЧТО ВЕЗЁШЬ; что не везёшь, и так понятно.
+   */
   const rows = COMMODITIES.map((c, i) => {
     const have = state.cargo[i];
+    if (have <= 0) return '';
     const illegal = isContraband(i);
-    // Нет товара и нет смысла сбрасывать — строка всё равно нужна, но без
-    // кнопки: пустая позиция объясняет, чего в трюме нет.
-    const drop = have > 0
-      ? `<button class="btn text" data-action="drop1" data-i="${i}">Сбросить 1</button>
-         <button class="btn text" data-action="dropAll" data-i="${i}">Сбросить всё</button>`
-      : '';
-    return `<div class="card${illegal && have > 0 ? ' danger' : ''}"><div class="good-row">
-        <div><div class="name">${illegal && have > 0 ? `<span class="banned">${c.name}</span>` : c.name}</div>
+    return `<div class="card${illegal ? ' danger' : ''}"><div class="good-row">
+        <div><div class="name">${illegal ? `<span class="banned">${c.name}</span>` : c.name}</div>
           <div class="muted">В трюме: ${have} ${UNITS[c.unit]} · Цена у станции: ${cr(state.market[i].price)}</div></div>
-        <div class="price">${have > 0 ? `${have} ${UNITS[c.unit]}` : '<span class="muted">—</span>'}</div></div>
-      ${drop ? `<div class="row" style="margin-top:10px">${drop}</div>` : ''}</div>`;
-  }).join('');
+        <div class="price">${have} ${UNITS[c.unit]}</div></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn text" data-action="drop1" data-i="${i}">Сбросить 1</button>
+        <button class="btn text" data-action="dropAll" data-i="${i}">Сбросить всё</button>
+      </div></div>`;
+  }).filter(Boolean).join('');
+  const empty = rows
+    ? ''
+    : '<div class="card"><h2>Трюм пуст</h2><div class="sub">Здесь будут товары, которые вы везёте. Покупать и продавать можно только на станции — вкладка «Рынок».</div></div>';
   const warn = banned
     ? `<div class="alert">В трюме запрещённый товар: ${banned} — это ${cr(value)} по ценам станции. Пока он в трюме, побег от статуса невозможен (§80.1).</div>`
     : '';
   return `<div class="card"><h2>Трюм</h2>
       <div class="sub">Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т · Деньги: ${cr(state.cash)}</div>
       ${warn}
-      <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${rows}
+      <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${empty}${rows}
     ${logCard()}`;
 }
 
@@ -2269,10 +2278,21 @@ function onAction(el: HTMLElement): void {
            * ЧТО везём и ОТКУДА оно взялось. Иначе игрок видит наказание без
            * причины и не знает, что выбрасывать.
            */
-          const goods = cargoManifest(state).filter((e) => e.amount > 0);
+          const manifest = cargoManifest(state);
+          const goods = manifest.filter((e) => e.amount > 0);
           const what = handoverLine(goods);
+          /*
+           * §98.1: если путь неизвестен (груз достался от сохранения до §98
+           * или от пути, который не записывается), не выдумываем его и не
+           * молчим: называем товар и говорим прямо, что путь неизвестен.
+           */
+          const lost = untrackedContraband(manifest, state.cargo);
+          const unknown = lost > 0 ? contrabandGoods(state.cargo) : '';
+          const batch = what
+            ? what
+            : `${unknown} — происхождение неизвестно`;
           addLog(
-            `Взлёт с запрещённым грузом${what ? `: ${what}` : ''}. Правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`,
+            `Взлёт с запрещённым грузом: ${batch}. Правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`,
           );
           if (state.cargo.some((n, k) => isContraband(k) && n > 0)) {
             addLog('Пока такой груз в трюме, побег от статуса невозможен. Сбросить его можно во вкладке «Трюм»');

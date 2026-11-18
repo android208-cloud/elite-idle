@@ -163,6 +163,28 @@ export function contrabandValue(cargo: readonly number[], market: readonly { pri
   return sum;
 }
 
+/**
+ * §98.1: сколько запрещёнки ЗАБЫЛИ записать.
+ *
+ * Манифест заводится на новых путях (§98), но трюм мог быть набран раньше —
+ * сохранением до §98, покупкой в другой версии игры, подбором на пути,
+ * который ещё не обёрнут. Тогда груз есть, а происхождения нет, и журнал
+ * говорит только «в трюме запрещённое», без товара и пути.
+ *
+ * Это не повод молчать и не повод выдумывать путь. Считаем разницу между
+ * трюмом и манифестом и говорим честно: «происхождение неизвестно».
+ */
+export function untrackedContraband(manifest: CargoManifest, cargo: readonly number[]): number {
+  let missing = 0;
+  for (let i = 0; i < cargo.length; i++) {
+    const have = cargo[i] ?? 0;
+    if (!isContraband(i) || have <= 0) continue;
+    const tracked = manifest.find((e) => e.commodity === i)?.amount ?? 0;
+    missing += Math.max(0, have - tracked);
+  }
+  return missing;
+}
+
 /** Позиции манифеста с положительным остатком — «что лежит сейчас». */
 export function cargoManifest(state: { cargo: number[]; cargoOrigin?: CargoManifest }): CargoManifest {
   return reconcile(state.cargoOrigin ?? EMPTY_MANIFEST, state.cargo);

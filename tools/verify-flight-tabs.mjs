@@ -85,7 +85,10 @@ click(wf, tabBtn(wf, 'market'));
 await new Promise((r) => setTimeout(r, 250));
 check('в полёте рынок открывается как «Трюм»', title(wf) === 'Трюм', `заголовок: ${title(wf)}`);
 const holdText = () => wf.document.getElementById('content').textContent;
-check('трюм показывает список товаров', /Еда/.test(holdText()) && /Текстиль/.test(holdText()));
+// §98.1: в списке только то, что в трюме. В фикстуре — две единицы «Еды»,
+// остальные позиции пусты и не показываются вовсе.
+check('трюм показывает товар из трюма', /Еда/.test(holdText()));
+check('пустых позиций в списке нет', !/Текстиль/.test(holdText()));
 check('в трюме есть кнопки сброса', !!wf.document.querySelector('[data-action="dropAll"]'));
 const topInfo = () => wf.document.getElementById('top-info')?.textContent ?? '';
 check('в шапке трюма — загрузка, а не деньги', /\d+ \/ \d+ т/.test(topInfo()), topInfo().trim());
