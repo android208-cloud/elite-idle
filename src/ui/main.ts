@@ -14,6 +14,7 @@ import {
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES, isTonneCargo } from '../core/market.ts';
+import { isContraband } from '../core/cargo-canisters.ts';
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
@@ -785,7 +786,21 @@ function salvageScreen(): string {
     .map((c, i) => {
       const name = COMMODITIES[c.commodity].name;
       const full = isTonneCargo(c.commodity) && state.holdSpace < c.amount;
-      return `<div class="row"><span>${name}${full ? ' <span class="muted">— нет места</span>' : ''}</span>
+      /*
+       * §97: запрещённый товар помечен прямо в списке.
+       *
+       * Взять его по-прежнему можно — это решение игрока, и статус вырастет
+       * честно (`salvageTake`). Но в патруле, где игрок нажимает кнопки
+       * быстро, он должен видеть цену ДО нажатия, а не узнавать из журнала
+       * потом. §93 требовал причины в журнале; здесь та же причина, только
+       * заранее.
+       *
+       * Слово «контрабанда» не используется: по правилу пользователя оно не
+       * должно появляться — только красный цвет.
+       */
+      const banned = isContraband(c.commodity);
+      const note = full ? ' <span class="muted">— нет места</span>' : '';
+      return `<div class="row"><span${banned ? ' class="banned"' : ''}>${name}${note}</span>
         <span class="spacer"></span>
         <button class="btn tonal" data-action="salvage-take" data-i="${i}" ${full ? 'disabled' : ''}>Взять</button></div>`;
     })
@@ -795,7 +810,7 @@ function salvageScreen(): string {
       <div class="sub">В обломках ${total} ${plural(total, 'контейнер', 'контейнера', 'контейнеров')}. Свободно в трюме: ${state.holdSpace} т</div>
       ${list}
       <div class="row" style="margin-top:14px">
-        <button class="btn" data-action="salvage-all">Взять всё, что влезает</button>
+        <button class="btn" data-action="salvage-all">Взять всё чистое</button>
         <button class="btn text" data-action="salvage-close">Оставить</button>
       </div>
     </div>

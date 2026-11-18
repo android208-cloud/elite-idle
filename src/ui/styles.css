@@ -113,6 +113,8 @@ select { background: var(--surface-3); color: var(--on-surface); border: 1px sol
 
 .card.warn { border-left: 4px solid var(--warn); }
 .card.danger { border-left: 4px solid var(--bad); }
+/* §97: запрещённый товар в обломках — красным, до нажатия «Взять». */
+.banned { color: var(--bad); }
 /*
  * §85: спокойная встреча. Пользователь: «а так — зелёный». Полиция и
  * охотник становятся красными только когда враждебны, а торговец и

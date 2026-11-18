@@ -7,7 +7,7 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
-import { autoScoop, canisterCount, countContraband, rollCanisters, scoopAll, scoopOne, type CargoCanister } from './cargo-canisters.ts';
+import { autoScoop, canisterCount, countContraband, isContraband, rollCanisters, scoopAll, scoopOne, type CargoCanister } from './cargo-canisters.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import {
   COMMODITIES,
@@ -1140,17 +1140,41 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
      */
     const index = Math.floor(dice.next() * 16);
     const amount = 1 + Math.floor(dice.next() * 3);
+    const name = COMMODITIES[index].name;
     let next: GameState = { ...state, rng: dice.rng, flight };
-    let text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. Топливосборщика нет, проходим мимо`;
+    let text = `Дрейфующий контейнер: ${name}. Топливосборщика нет, проходим мимо`;
     if (state.ship.fuelScoops) {
-      const room = Math.min(amount, cargoRoom(state, index));
-      if (room > 0) {
-        const cargo = state.cargo.slice();
-        cargo[index] += room;
-        next = { ...next, cargo, holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace };
-        text = `Подобран контейнер: ${COMMODITIES[index].name}, ${room}`;
+      /*
+       * §97: запрещёнку дрейфующий контейнер НЕ берёт — по тому же правилу,
+       * что автоподбор обломков (§93).
+       *
+       * Найдено пользователем: в патруле смог забрать запрещёнку. §93
+       * закрыл подбор из обломков после боя, а этот путь остался открыт,
+       * потому что он вообще не про обломки: канистра попадается в полёте,
+       * берётся влёт, без экрана и без вопроса. Причём товар здесь любой из
+       * шестнадцати — рабы (3), наркотики (6) и оружие (10) в том числе.
+       *
+       * Хуже всего было то, что статус при этом не рос: игрок вёз рабов с
+       * `legal = 0`, то есть формально оставался чистым, а контрабанда в
+       * трюме запрещает побег (§80.1). Автоматика снова решала за игрока —
+       * ровно то, что §93 запретил.
+       *
+       * Взять такой контейнер осознанно нельзя: подбор влётный, экрана
+       * решения у него нет. Поэтому единственное честное поведение —
+       * пройти мимо и сказать об этом.
+       */
+      if (isContraband(index)) {
+        text = `Дрейфующий контейнер: ${name}. Запрещённый товар — проходим мимо, он делает преступником`;
       } else {
-        text = `Дрейфующий контейнер: ${COMMODITIES[index].name}. В трюме нет места`;
+        const room = Math.min(amount, cargoRoom(state, index));
+        if (room > 0) {
+          const cargo = state.cargo.slice();
+          cargo[index] += room;
+          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace };
+          text = `Подобран контейнер: ${name}, ${room}`;
+        } else {
+          text = `Дрейфующий контейнер: ${name}. В трюме нет места`;
+        }
       }
     }
     events.push({ type: 'canister', at, text });
