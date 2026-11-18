@@ -1353,6 +1353,24 @@ function priceChip(i: number): string {
 }
 
 /**
+ * §99: полоска заполнения трюма — по образцу полоски топлива в ангаре.
+ *
+ * Топливо показывает, сколько бака занято, здесь — сколько трюма. Одни и
+ * те же классы `.progress`, тот же зелёный цвет: игрок не учится заново,
+ * а полоска читается одним взглядом там, где раньше приходилось считать
+ * в уме «занято 7 из 20».
+ *
+ * Показывается и на рынке, и в трюме: покупка на станции и сброс в полёте —
+ * две стороны одного и того же места в корабле.
+ */
+function holdBar(): string {
+  const tons = cargoTons(state);
+  const cap = tons + state.holdSpace;
+  const pct = cap > 0 ? Math.min(100, (tons / cap) * 100) : 0;
+  return `<div class="progress"><div style="width:${pct}%"></div></div>`;
+}
+
+/**
  * §98: «Трюм» — вкладка рынка в полёте.
  *
  * Пользователь: «Сделай чтобы в полете экран рынок превращался в "Трюм", в
@@ -1389,14 +1407,31 @@ function holdScreen(): string {
   const rows = COMMODITIES.map((c, i) => {
     const have = state.cargo[i];
     if (have <= 0) return '';
+    const m = state.market[i];
     const illegal = isContraband(i);
-    return `<div class="card${illegal ? ' danger' : ''}"><div class="good-row">
-        <div><div class="name">${illegal ? `<span class="banned">${c.name}</span>` : c.name}</div>
-          <div class="muted">В трюме: ${have} ${UNITS[c.unit]} · Цена у станции: ${cr(state.market[i].price)}</div></div>
-        <div class="price">${have} ${UNITS[c.unit]}</div></div>
+    /*
+     * §99: карточка — точная копия рыночной.
+     *
+     * Пользователь: «Точно скопируй карточку товара для трюма из рынка,
+     * замени "Макс" на "Выбросить всё", оставь кнопку "-1" на марки месте».
+     *
+     * Поэтому разметка та же, до класса `illegal` включительно: название с
+     * меткой цены, строка «В наличии · В трюме», цена справа. Кнопка «−1»
+     * стоит первой и в том же тональном стиле, «Выбросить всё» — на месте
+     * «Макс.», последней.
+     *
+     * Двух кнопок рынка здесь нет: «+1» и «Продать всё» в полёте
+     * невозможны — торговли нет. Выключенные кнопки, которые ничего не
+     * делают, хуже их отсутствия.
+     */
+    return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
+        <div><div class="name">${c.name} ${priceChip(i)}</div>
+          <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${have} ${UNITS[c.unit]}</div></div>
+        <div class="price">${cr(m.price)}</div></div>
       <div class="row" style="margin-top:10px">
-        <button class="btn text" data-action="drop1" data-i="${i}">Сбросить 1</button>
-        <button class="btn text" data-action="dropAll" data-i="${i}">Сбросить всё</button>
+        <button class="btn tonal" data-action="drop1" data-i="${i}">−1</button>
+        <span class="spacer"></span>
+        <button class="btn text" data-action="dropAll" data-i="${i}">Выбросить всё</button>
       </div></div>`;
   }).filter(Boolean).join('');
   const empty = rows
@@ -1407,6 +1442,7 @@ function holdScreen(): string {
     : '';
   return `<div class="card"><h2>Трюм</h2>
       <div class="sub">Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т · Деньги: ${cr(state.cash)}</div>
+      ${holdBar()}
       ${warn}
       <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${empty}${rows}
     ${logCard()}`;
@@ -1436,8 +1472,11 @@ function marketScreen(): string {
         <button class="btn text" data-action="buyMax" data-i="${i}" ${docked && m.quantity > 0 ? '' : 'disabled'}>Макс.</button>
       </div></div>`;
   }).join('');
+  const tons = cargoTons(state);
+  const cap = tons + state.holdSpace;
   return `<div class="card"><h2>Рынок: ${currentSystem(state).name}</h2>
-    <div class="sub">Деньги: ${cr(state.cash)} · Свободно в трюме: ${state.holdSpace} т</div>
+    <div class="sub">Деньги: ${cr(state.cash)} · Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
+    ${holdBar()}
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div>${rows}`;
 }
 

@@ -82,12 +82,33 @@ check('слово «контрабанда» не используется', !/�
 check('есть предупреждение о невозможности побега', /побег/i.test(content(w)));
 check('есть кнопки сброса', !!w.document.querySelector('[data-action="dropAll"]'));
 
+/* §99: полоска заполнения трюма — как полоска топлива в ангаре. */
+const bar = w.document.querySelector('#content .card .progress');
+check('в верхней карточке есть полоска трюма', !!bar);
+const fill = bar?.querySelector('div');
+// В фикстуре 2 т из 20 — полоска должна быть заполнена на 10%.
+check('полоска показывает заполнение 10%', fill?.getAttribute('style') === 'width:10%', fill?.getAttribute('style') ?? 'нет div');
+
+/* §99: карточка товара — копия рыночной. */
+const goodsCard = [...w.document.querySelectorAll('#content .card')].find((c) => /Рабы/.test(c.textContent) && c.querySelector('[data-action="dropAll"]'));
+check('карточка товара помечена как на рынке (illegal)', goodsCard?.classList.contains('illegal'));
+check('в карточке есть метка цены', !!goodsCard?.querySelector('.chip'));
+check('строка «В наличии · В трюме» как на рынке', /В наличии: \d+ т · В трюме: 2 т/.test(goodsCard?.textContent ?? ''));
+check('цена справа тем же классом', !!goodsCard?.querySelector('.price'));
+const row = goodsCard?.querySelector('.row');
+const btns = [...(row?.querySelectorAll('button') ?? [])];
+check('«−1» первая кнопка', btns[0]?.textContent.trim() === '−1', btns[0]?.textContent.trim() ?? '');
+check('«−1» — тональная, как на рынке', btns[0]?.classList.contains('tonal'));
+check('«Выбросить всё» последняя', btns[btns.length - 1]?.textContent.trim() === 'Выбросить всё', btns[btns.length - 1]?.textContent.trim() ?? '');
+check('«Макс.» в трюме нет', !/Макс/.test(content(w)));
+check('кнопок покупки в трюме нет', !w.document.querySelector('[data-action="buy1"]'));
+
 const before = w.document.getElementById('content').textContent.match(/Занято (\d+) из (\d+)/);
 check('шапка трюма показывает загрузку', !!before, before?.[0] ?? '');
 
 // Сброс одной единицы рабов
 const dropOne = [...w.document.querySelectorAll('[data-action="drop1"]')].find((b) => b.dataset.i === String(SLAVES));
-check('у запрещённого товара есть кнопка «Сбросить 1»', !!dropOne);
+check('у запрещённого товара есть кнопка «−1»', !!dropOne && dropOne.textContent.trim() === '−1');
 click(w, dropOne);
 await new Promise((r) => setTimeout(r, 250));
 check('после сброса одной единицы осталась одна', /В трюме: 1 т/.test(content(w)), '');
@@ -114,6 +135,14 @@ click(wd, tabBtn(wd, 'market'));
 await new Promise((r) => setTimeout(r, 250));
 check('на станции открывается рынок', wd.document.getElementById('title').textContent === 'Рынок');
 check('на станции сброса нет', !wd.document.querySelector('[data-action="dropAll"]'));
+
+/* §99: полоска трюма есть и на рынке — там же, где торгуют. */
+const mbar = wd.document.querySelector('#content .card .progress');
+check('на рынке есть полоска трюма', !!mbar);
+const mfill = mbar?.querySelector('div');
+// В фикстуре те же 2 т из 20 — те же 10%.
+check('полоска рынка показывает те же 10%', mfill?.getAttribute('style') === 'width:10%', mfill?.getAttribute('style') ?? 'нет div');
+check('на рынке цена справа, а не количество', !!wd.document.querySelector('#content .card .price'));
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 w.close(); wd.close();
