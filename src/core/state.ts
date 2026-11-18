@@ -7,7 +7,7 @@
  */
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
-import { autoScoop, canisterCount, rollCanisters, scoopOne, type CargoCanister } from './cargo-canisters.ts';
+import { autoScoop, canisterCount, countContraband, rollCanisters, scoopAll, scoopOne, type CargoCanister } from './cargo-canisters.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import {
   COMMODITIES,
@@ -1358,13 +1358,25 @@ function autoDecision(
       cargo = got.cargo;
       holdSpace = got.holdSpace;
       looted = got.taken;
+      /*
+       * §93: запрещёнку автоподбор не берёт — говорим об этом прямо.
+       *
+       * Молчаливое «подобрано 1 контейнер» при трёх выпавших выглядело бы
+       * потерей груза. Причина другая: рабы и наркотики в трюме сделали бы
+       * преступником без выбора игрока, а контрабанда ещё и запрещает
+       * побег (§80.1). Поэтому пишем, что осталось и почему.
+       */
+      const banned = countContraband(rolled.canisters);
+      const why = banned > 0
+        ? `. В обломках был${banned === 1 ? '' : 'о'} ${banned} ${plural(banned, 'контейнер', 'контейнера', 'контейнеров')} с запрещённым товаром — оставлен${banned === 1 ? '' : 'о'}: такой груз делает преступником`
+        : '';
       events.push({
         type: 'raided',
         at,
         text:
           looted > 0
-            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником`
-            : 'Торговец уничтожен, но трюм полон — груз потерян',
+            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником${why}`
+            : `Торговец уничтожен, но груз не взят — трюм полон${why}`,
       });
     }
   } else if (won && enc.role === 'police') {
@@ -1503,13 +1515,41 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
         }
 
         if (settings.autoScoop) {
-          // Автоподбор: берём всё, что влезает, остальное остаётся в космосе.
+          /*
+           * §93: автоподбор берёт только чистый груз. Запрещёнку игрок
+           * может взять сам — на экране обломков, осознанно, и тогда
+           * статус вырастет честно (`salvageTake`). Автоматика такого
+           * решения принимать не должна.
+           */
           const got = autoScoop(next.cargo, next.holdSpace, leftovers);
           next = { ...next, cargo: got.cargo, holdSpace: got.holdSpace };
+          const banned = countContraband(leftovers);
           if (got.taken > 0) {
             text += `. Подобрано контейнеров: ${got.taken}`;
           }
           if (got.left > 0) text += `, ${got.left} не поместилось`;
+          if (banned > 0) {
+            text += `. ${banned} с запрещённым товаром оставлены: такой груз делает преступником`;
+          }
+          /*
+           * Запрещённый груз остался — значит есть что решать. Показываем
+           * экран обломков только с ним, даже при включённом автоподборе:
+           * выбор «взять рабов или нет» — не тот, что делается за игрока.
+           */
+          if (banned > 0) {
+            say(text);
+            return {
+              ...resume(next),
+              salvage: {
+                canisters: leftovers.filter((c) => countContraband([c]) > 0),
+                taken: 0,
+                left: 0,
+                pausedAt: at,
+                pausedMs: 0,
+                enemyName: enemy.name,
+              },
+            };
+          }
           say(text);
           return resume(next);
         }
@@ -1978,11 +2018,22 @@ export function salvageTake(
   return { state: next, error: 'none' };
 }
 
-/** Взять всё, что влезает, и закрыть подбор. */
+/**
+ * Взять всё, что влезает, и закрыть подбор.
+ *
+ * §93: здесь `autoScoop` НЕ годится. Он не берёт запрещёнку, потому что
+ * создан для автоподбора без игрока. А эта кнопка — нажатие ИГРОКА на
+ * экране обломков: он явно сказал «беру всё», и молча оставить рабов в
+ * космосе было бы обманом. Поэтому здесь подбор полный, а статус растёт
+ * честно — как при ручном «Взять».
+ *
+ * Если игрок не хочет криминала, он видит запрещённый товар в списке и
+ * жмёт «Оставить».
+ */
 export function salvageTakeAll(state: GameState, at: number): { state: GameState; taken: number; left: number } {
   const sv = state.salvage;
   if (!sv) return { state, taken: 0, left: 0 };
-  const got = autoScoop(state.cargo, state.holdSpace, sv.canisters);
+  const got = scoopAll(state.cargo, state.holdSpace, sv.canisters);
   return {
     taken: got.taken,
     left: got.left,

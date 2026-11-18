@@ -107,12 +107,72 @@ export function rollCanisters(
 }
 
 /**
+ * Товары, из-за которых трюм становится криминальным.
+ *
+ * Индексы те же, что в `contrabandLevel`: рабы (3), наркотики (6),
+ * оружие (10). Держим их здесь, а не в `state.ts`, потому что фильтр
+ * нужен именно подбору — рядом с остальными правилами контейнеров.
+ */
+export const CONTRABAND_INDEXES: readonly number[] = [3, 6, 10];
+
+/** Делает ли этот товар игрока преступником, если он в трюме. */
+export const isContraband = (commodity: number): boolean => CONTRABAND_INDEXES.includes(commodity);
+
+/**
  * Автоподбор: забирает всё, что влезает в трюм, остальное бросает.
  *
- * Возвращает новое содержимое трюма и остаток свободного места. Ничего
- * не мутирует — вызывающая сторона собирает состояние сама.
+ * §93: ЗАПРЕЩЁНКУ АВТОМАТ НЕ БЕРЁТ.
+ *
+ * Пользователь заметил ловушку: в патруле груз подбирается сам, без
+ * участия игрока. Если среди обломков лежат рабы или наркотики, они
+ * молча падают в трюм — и это уже преступление, которого игрок не
+ * выбирал. Хуже того, контрабанда в трюме запрещает побег от статуса
+ * (§80.1), то есть автоматика отнимала возможность бежать.
+ *
+ * Правило, которое из этого выведено: **автоматика не делает игрока
+ * преступником**. Запрещённый товар остаётся в космосе, а в журнал
+ * попадает причина — иначе решение выглядело бы потерей груза.
+ *
+ * Фильтр живёт здесь, а не в вызывающем коде, чтобы правило нельзя было
+ * забыть применить в одном из двух мест (обычный бой и патруль).
+ *
+ * Ручной подбор (`scoopOne`) НЕ фильтруется: там решает игрок, и статус
+ * за груз растёт честно.
  */
 export function autoScoop(
+  cargo: readonly number[],
+  holdSpace: number,
+  canisters: readonly CargoCanister[],
+): { cargo: number[]; holdSpace: number; taken: number; left: number } {
+  const next = cargo.slice();
+  let space = holdSpace;
+  let taken = 0;
+  let left = 0;
+  for (const c of canisters) {
+    // Запрещёнку автоматика не трогает вовсе: она не «не поместилась»,
+    // она осталась по другой причине, и путать эти две причины нельзя —
+    // игрок увидит разное объяснение.
+    if (isContraband(c.commodity)) continue;
+    const tonne = isTonneCargo(c.commodity);
+    if (tonne && space < c.amount) {
+      left += 1;
+      continue;
+    }
+    next[c.commodity] += c.amount;
+    if (tonne) space -= c.amount;
+    taken += 1;
+  }
+  return { cargo: next, holdSpace: space, taken, left };
+}
+
+/**
+ * Подбор ВСЕГО, что влезает, без фильтра запрещёнки.
+ *
+ * В отличие от `autoScoop` вызывается только по явному решению игрока
+ * (кнопка «Взять всё» на экране обломков). Автоматика такого не делает
+ * — см. `autoScoop`.
+ */
+export function scoopAll(
   cargo: readonly number[],
   holdSpace: number,
   canisters: readonly CargoCanister[],
@@ -132,6 +192,17 @@ export function autoScoop(
     taken += 1;
   }
   return { cargo: next, holdSpace: space, taken, left };
+}
+
+/**
+ * Сколько запрещённых контейнеров среди обломков — для честного текста в
+ * журнале.
+ *
+ * Отдельная функция, а не подсчёт на месте: одна и та же цифра нужна и
+ * обычному бою, и патрулю, и она не должна разъезжаться.
+ */
+export function countContraband(canisters: readonly CargoCanister[]): number {
+  return canisters.filter((c) => isContraband(c.commodity)).length;
 }
 
 /**
