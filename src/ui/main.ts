@@ -15,6 +15,7 @@ import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/comba
 import { distance, ECONOMIES, GALACTIC_ARRIVAL, GOVERNMENTS, nearestSystem } from '../core/galaxy.ts';
 import { COMMODITIES, isTonneCargo } from '../core/market.ts';
 import { isContraband } from '../core/cargo-canisters.ts';
+import { cargoManifest, handoverLine, contrabandValue, contrabandGoods } from '../core/cargo-origin.ts';
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
@@ -239,7 +240,7 @@ const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
  * Это ещё и проверка честности игры: раз мы «просто летим», рынок в пути
  * не должен быть доступен — иначе полёт перестаёт что-либо значить.
  */
-const DOCKED_ONLY: Tab[] = ['market', 'hangar'];
+const DOCKED_ONLY: Tab[] = ['hangar'];
 
 /** Вкладки, недоступные в полёте именно сейчас. */
 function blockedTabs(): Tab[] {
@@ -274,6 +275,8 @@ const icons = {
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'ship', label: 'Корабль', icon: icons.ship },
   { id: 'map', label: 'Карта', icon: icons.map },
+  // §98: в полёте это не рынок, а трюм. Тот же значок обмена: игрок ищет
+  // груз там же, где торговал, и не должен переучиваться.
   { id: 'market', label: 'Рынок', icon: icons.market },
   { id: 'hangar', label: 'Ангар', icon: icons.hangar },
   { id: 'log', label: 'Журнал', icon: icons.log },
@@ -1349,8 +1352,61 @@ function priceChip(i: number): string {
   return '';
 }
 
+/**
+ * §98: «Трюм» — вкладка рынка в полёте.
+ *
+ * Пользователь: «Сделай чтобы в полете экран рынок превращался в "Трюм", в
+ * котором будет список товаров как в рынке, но с возможностью сбросить
+ * конкретный товар».
+ *
+ * Список повторяет рынок намеренно: тот же порядок товаров, те же названия,
+ * то же место цены. Глаз не переучивается — меняются только кнопки: вместо
+ * «купить/продать» здесь «выбросить». Цена показывается справочно (по рынку
+ * системы вылета): в полёте продать некому, но сколько груз стоит — знать
+ * полезно, особенно когда решаешь, что выбросить.
+ *
+ * Сброс в полёте — не роскошь. Контрабанда в трюме запрещает побег от
+ * статуса (§80.1), а выбросить её было негде: экран обломков появляется
+ * только после боя и только с тем, что выпало. Игрок оказывался заперт со
+ * своим грузом.
+ *
+ * Пустые позиции показываются: в трюме важно видеть, что ты НЕ везёшь,
+ * а список из трёх строк выглядел бы поломкой.
+ */
+function holdScreen(): string {
+  const tons = cargoTons(state);
+  const cap = state.holdSpace + tons;
+  const banned = contrabandGoods(state.cargo);
+  const value = contrabandValue(state.cargo, state.market);
+  const rows = COMMODITIES.map((c, i) => {
+    const have = state.cargo[i];
+    const illegal = isContraband(i);
+    // Нет товара и нет смысла сбрасывать — строка всё равно нужна, но без
+    // кнопки: пустая позиция объясняет, чего в трюме нет.
+    const drop = have > 0
+      ? `<button class="btn text" data-action="drop1" data-i="${i}">Сбросить 1</button>
+         <button class="btn text" data-action="dropAll" data-i="${i}">Сбросить всё</button>`
+      : '';
+    return `<div class="card${illegal && have > 0 ? ' danger' : ''}"><div class="good-row">
+        <div><div class="name">${illegal && have > 0 ? `<span class="banned">${c.name}</span>` : c.name}</div>
+          <div class="muted">В трюме: ${have} ${UNITS[c.unit]} · Цена у станции: ${cr(state.market[i].price)}</div></div>
+        <div class="price">${have > 0 ? `${have} ${UNITS[c.unit]}` : '<span class="muted">—</span>'}</div></div>
+      ${drop ? `<div class="row" style="margin-top:10px">${drop}</div>` : ''}</div>`;
+  }).join('');
+  const warn = banned
+    ? `<div class="alert">В трюме запрещённый товар: ${banned} — это ${cr(value)} по ценам станции. Пока он в трюме, побег от статуса невозможен (§80.1).</div>`
+    : '';
+  return `<div class="card"><h2>Трюм</h2>
+      <div class="sub">Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т · Деньги: ${cr(state.cash)}</div>
+      ${warn}
+      <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${rows}
+    ${logCard()}`;
+}
+
 function marketScreen(): string {
-  const docked = !state.flight;
+  // §98: в полёте рынок недоступен, но вкладка не пустует — это «Трюм».
+  if (state.flight) return holdScreen();
+  const docked = true;
   const rows = COMMODITIES.map((c, i) => {
     const m = state.market[i];
     if (c.name === 'Предметы пришельцев' && m.quantity === 0 && state.cargo[i] === 0) return '';
@@ -1722,6 +1778,26 @@ function topBar(busy: boolean): void {
   el.textContent = topValue(state, busy ? null : tab);
 }
 
+/**
+ * §98: подпись вкладки зависит от места.
+ *
+ * На станции это «Рынок» — там торгуют. В полёте рынка нет, но груз есть,
+ * и именно там его надо сбрасывать: контрабанда в трюме запрещает побег
+ * (§80.1), а выбросить её раньше было негде — экран обломков бывает только
+ * после боя.
+ *
+ * Поэтому та же вкладка в полёте называется «Трюм». Отдельную вкладку не
+ * заводим: пять кнопок внизу — это предел для телефона, шестая сжала бы
+ * все, а значение и так одно — груз.
+ *
+ * `id` при этом остаётся 'market': переименование не должно тянуть за собой
+ * сохранения, шапку и проверки.
+ */
+function tabLabel(id: Tab): string {
+  if (id === 'market') return state.flight ? 'Трюм' : 'Рынок';
+  return TABS.find((t) => t.id === id)!.label;
+}
+
 function render(): void {
   const content = document.getElementById('content')!;
   const screens: Record<Tab, () => string> = {
@@ -1760,7 +1836,7 @@ function render(): void {
     ? 'Бой'
     : inSalvage
       ? 'Обломки'
-      : TABS.find((t) => t.id === tab)!.label;
+      : tabLabel(tab);
   topBar(inCombat || inSalvage);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
@@ -1770,7 +1846,7 @@ function render(): void {
     return `<button class="${t.id === tab && !inCombat && !inSalvage ? 'active' : ''}${off ? ' off' : ''}"
         data-action="tab" data-tab="${t.id}" ${off ? 'disabled aria-disabled="true"' : ''}
         title="${off ? 'Только на станции' : ''}">
-        <span class="pill">${icon(t.icon)}</span>${t.label}</button>`;
+        <span class="pill">${icon(t.icon)}</span>${tabLabel(t.id)}</button>`;
   }).join('');
   if (tab === 'map' && !inCombat && !inSalvage) drawMap();
   // Модель встречи живёт только пока экран её показывает: иначе кадры
@@ -2188,9 +2264,19 @@ function onAction(el: HTMLElement): void {
         addLog(`Отправление: ${currentSystem(state).name} → ${systemsOf(state.galaxy)[to].name}`);
         // Взлёт с контрабандой поднимает правовой статус (TT110 / BAD)
         if (state.legal > legalBefore) {
+          /*
+           * §98: записи мало говорить «статус вырос» — она обязана называть
+           * ЧТО везём и ОТКУДА оно взялось. Иначе игрок видит наказание без
+           * причины и не знает, что выбрасывать.
+           */
+          const goods = cargoManifest(state).filter((e) => e.amount > 0);
+          const what = handoverLine(goods);
           addLog(
-            `Контрабанда в трюме: правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`,
+            `Взлёт с запрещённым грузом${what ? `: ${what}` : ''}. Правовой статус ${legalBefore} → ${state.legal} (${legalLabel(state.legal)})`,
           );
+          if (state.cargo.some((n, k) => isContraband(k) && n > 0)) {
+            addLog('Пока такой груз в трюме, побег от статуса невозможен. Сбросить его можно во вкладке «Трюм»');
+          }
         }
         tab = 'ship';
       }
@@ -2225,6 +2311,29 @@ function onAction(el: HTMLElement): void {
       state = salvageClose(state);
       addLog('Обломки оставлены');
       break;
+    /*
+     * §98: сброс груза из «Трюма».
+     *
+     * Отдельно от `jettison` (тот живёт на экране обломков и связан с
+     * паузой подбора): здесь сброс — обычное действие в полёте, и он
+     * обязан попадать в журнал. Журнал — единственное место, где игрок
+     * потом поймёт, куда делся груз.
+     */
+    case 'drop1':
+    case 'dropAll': {
+      const amount = a === 'drop1' ? 1 : state.cargo[i];
+      const r = jettisonCargo(state, i, amount);
+      state = r.state;
+      if (r.dropped > 0) {
+        const name = COMMODITIES[i].name;
+        const unit = UNITS[COMMODITIES[i].unit];
+        addLog(`Выброшено в космос: ${name}, ${r.dropped} ${unit}`);
+        if (isContraband(i) && state.cargo[i] === 0) {
+          addLog(`В трюме больше нет: ${name}. Побег от статуса снова возможен`);
+        }
+      }
+      break;
+    }
     case 'jettison': {
       const i = Number(el.dataset.i);
       const r = jettisonCargo(state, i, 1);

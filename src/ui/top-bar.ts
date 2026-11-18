@@ -25,7 +25,7 @@
  * Модуль чистый (без DOM), чтобы правило проверялось тестом: системы на
  * карте выбираются тапом по канвасу, а тап в jsdom не срабатывает.
  */
-import { systemsOf, type GameState } from '../core/state.ts';
+import { cargoTons, systemsOf, type GameState } from '../core/state.ts';
 
 /** Название корабля игрока. Пока он один — константа. */
 export const SHIP_NAME = 'Cobra Mk III';
@@ -87,6 +87,15 @@ export function topValue(state: GameState, tab: TopTab | null): string {
     case 'map':
       return placeOf(state);
     case 'market':
+      /*
+       * §98: в полёте вкладка называется «Трюм», и её значение — груз, а не
+       * деньги: торговать негде, а место в трюме как раз то, что волнует.
+       */
+      if (state.flight) {
+        const tons = cargoTons(state);
+        return `${tons} / ${tons + state.holdSpace} т`;
+      }
+      return fmtCash(state.cash);
     case 'hangar':
       return fmtCash(state.cash);
     case 'log':

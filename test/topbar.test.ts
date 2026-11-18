@@ -94,3 +94,12 @@ test('§91: в бою и на обломках — место, а не кред�
   assert.ok(!/CR/.test(v), 'в бою кредиты в шапке не нужны');
   assert.equal(v, topValue(base, 'map'));
 });
+
+test('§98: в полёте вкладка рынка показывает груз, а на станции — деньги', () => {
+  const base = { ...newGame(1), cash: 12345 };
+  const base2 = { ...base, cargo: base.cargo.map((n, i) => (i === 0 ? 3 : n)), holdSpace: 17 };
+  assert.equal(topValue(base2, 'market'), '1234.5 CR', 'на станции — деньги, как было');
+  // В полёте — «3 / 20 т»: занято и всего.
+  const flying = { ...base2, flight: { from: base.system, to: base.system, patrol: true } as never };
+  assert.equal(topValue(flying, 'market'), '3 / 20 т');
+});

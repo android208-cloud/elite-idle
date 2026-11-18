@@ -8,6 +8,7 @@
 
 import { autoCombat, canDo, combatRound, startCombat, type CombatAction, type CombatState } from './combat.ts';
 import { autoScoop, canisterCount, countContraband, isContraband, rollCanisters, scoopAll, scoopOne, type CargoCanister } from './cargo-canisters.ts';
+import { noteCargo, reconcile, type CargoManifest } from './cargo-origin.ts';
 import { buildGalaxy, distance, GALACTIC_ARRIVAL, GALAXY_COUNT, nearestSystem, type StarSystem } from './galaxy.ts';
 import {
   COMMODITIES,
@@ -287,6 +288,14 @@ export interface GameState {
   holdSpace: number;
   /** Содержимое трюма по товарам (в единицах товара) */
   cargo: number[];
+  /**
+   * §98: откуда в трюме запрещённый товар.
+   *
+   * Справка о происхождении, а не второй источник правды: количество
+   * по-прежнему живёт в `cargo`. Нужна журналу, чтобы называть товар и путь,
+   * а не только «статус вырос».
+   */
+  cargoOrigin: CargoManifest;
   market: MarketEntry[];
   /** Состояние генератора случайных чисел (32 бита) */
   rng: number;
@@ -453,6 +462,7 @@ export function newGame(rngSeed: number): GameState {
     fuel: MAX_FUEL,
     holdSpace: START_HOLD,
     cargo: COMMODITIES.map(() => 0),
+    cargoOrigin: [],
     market: generateMarket(lave, 0),
     rng: rngSeed >>> 0,
     flight: null,
@@ -493,6 +503,20 @@ export function plural(n: number, one: string, few: string, many: string): strin
 
 export function cargoTons(state: GameState): number {
   return cargoTonsOf(state.cargo);
+}
+
+/**
+ * §98: записать в манифест подбор из обломков.
+ *
+ * `autoScoop` и `scoopAll` возвращают только трюм, а не то, какие именно
+ * контейнеры взяты. Но запрещёнку автоподбор не трогает вовсе (§93), так
+ * что для автоподбора подойдёт любой контейнер: noteCargo сам отбросит
+ * чистый товар. Для ручного «Взять всё» правило то же.
+ */
+function noteFromCanisters(manifest: CargoManifest, canisters: readonly CargoCanister[]): CargoManifest {
+  let next = manifest;
+  for (const c of canisters) next = noteCargo(next, c.commodity, c.amount, 'salvage');
+  return next;
 }
 
 export interface TradeResult {
@@ -538,6 +562,8 @@ export function buy(state: GameState, index: number, amount: number): TradeResul
     state: {
       ...state,
       cargo,
+      // §98: запоминаем путь — «куплено на рынке».
+      cargoOrigin: noteCargo(state.cargoOrigin, index, t, 'bought'),
       market,
       cash: state.cash - t * entry.price,
       holdSpace: isTonneCargo(index) ? state.holdSpace - t : state.holdSpace,
@@ -561,6 +587,8 @@ export function sell(state: GameState, index: number, amount: number): TradeResu
     state: {
       ...state,
       cargo,
+      // §98: проданного в трюме больше нет — манифест догоняет.
+      cargoOrigin: reconcile(state.cargoOrigin, cargo),
       market,
       cash: state.cash + t * entry.price,
       holdSpace: isTonneCargo(index) ? state.holdSpace + t : state.holdSpace,
@@ -1170,7 +1198,14 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
         if (room > 0) {
           const cargo = state.cargo.slice();
           cargo[index] += room;
-          next = { ...next, cargo, holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace };
+          next = {
+            ...next,
+            cargo,
+            // §98: даже закрытый §97 путь остаётся в манифесте: правило
+            // может измениться, а запись обязана быть честной.
+            cargoOrigin: noteCargo(next.cargoOrigin, index, room, 'drifting'),
+            holdSpace: isTonneCargo(index) ? state.holdSpace - room : state.holdSpace,
+          };
           text = `Подобран контейнер: ${name}, ${room}`;
         } else {
           text = `Дрейфующий контейнер: ${name}. В трюме нет места`;
@@ -1415,6 +1450,7 @@ function autoDecision(
       cargo = got.cargo;
       holdSpace = got.holdSpace;
       looted = got.taken;
+      state = { ...state, cargoOrigin: noteFromCanisters(state.cargoOrigin, rolled.canisters) };
       /*
        * §93: запрещёнку автоподбор не берёт — говорим об этом прямо.
        *
@@ -1509,7 +1545,7 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
   };
 
   if (c.cargoDumped) {
-    s = { ...s, cargo: s.cargo.map(() => 0), holdSpace: holdCapacity(s.ship) };
+    s = { ...s, cargo: s.cargo.map(() => 0), cargoOrigin: [], holdSpace: holdCapacity(s.ship) };
   }
 
   /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
@@ -1579,7 +1615,12 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
            * решения принимать не должна.
            */
           const got = autoScoop(next.cargo, next.holdSpace, leftovers);
-          next = { ...next, cargo: got.cargo, holdSpace: got.holdSpace };
+          next = {
+            ...next,
+            cargo: got.cargo,
+            cargoOrigin: noteFromCanisters(next.cargoOrigin, leftovers),
+            holdSpace: got.holdSpace,
+          };
           const banned = countContraband(leftovers);
           if (got.taken > 0) {
             text += `. Подобрано контейнеров: ${got.taken}`;
@@ -1659,6 +1700,7 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
       const next = returnToStation({
         ...s,
         cargo: s.cargo.map(() => 0),
+        cargoOrigin: [],
         holdSpace: holdCapacity(s.ship),
         cash: Math.floor(s.cash * INSURANCE_CASH_KEPT),
       });
@@ -2094,6 +2136,7 @@ export function salvageTake(
   const next: GameState = {
     ...closed,
     cargo: got.cargo,
+    cargoOrigin: noteCargo(state.cargoOrigin, canister.commodity, canister.amount, 'salvage'),
     holdSpace: got.holdSpace,
     salvage: rest.length > 0 ? { ...sv, canisters: rest, taken: sv.taken + 1, pausedAt: at } : null,
     // Контейнер с контрабандой повышает правовой статус так же, как
@@ -2125,6 +2168,7 @@ export function salvageTakeAll(state: GameState, at: number): { state: GameState
     state: {
       ...resumeAfterSalvage(state),
       cargo: got.cargo,
+      cargoOrigin: noteFromCanisters(state.cargoOrigin, sv.canisters),
       holdSpace: got.holdSpace,
       legal: Math.min(255, state.legal + contrabandLevel(got.cargo) - contrabandLevel(state.cargo)),
       salvage: null,
@@ -2160,6 +2204,7 @@ export function jettisonCargo(
     state: {
       ...state,
       cargo,
+      cargoOrigin: reconcile(state.cargoOrigin, cargo),
       holdSpace: isTonneCargo(index) ? state.holdSpace + drop : state.holdSpace,
     },
     dropped: drop,
@@ -2252,6 +2297,12 @@ export function deserialize(json: string): GameState {
     if (f.arriveAt === INF) f.arriveAt = Number.POSITIVE_INFINITY;
     if (f.remainingBaseMs === INF) f.remainingBaseMs = Number.POSITIVE_INFINITY;
   }
+  /*
+   * §98: манифест происхождения груза. В сохранениях до §98 поля нет —
+   * начинаем с пустого. Старый трюм при этом остаётся как был: манифест
+   * описывает только то, что произойдёт ПОСЛЕ загрузки, и ничего не теряет.
+   */
+  if (!Array.isArray(state.cargoOrigin)) state.cargoOrigin = [];
   // Совместимость с сохранениями до §73: поля обломков тогда не было.
   if (state.salvage === undefined) state.salvage = null;
   /*

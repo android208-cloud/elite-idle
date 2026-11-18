@@ -1,6 +1,10 @@
 /**
  * В полёте рынок и ангар недоступны; журнал сворачивается (§75).
  *
+ * §98 изменил одно: рынок в полёте больше НЕ исчезает — вкладка остаётся,
+ * но называется «Трюм» и показывает груз со сбросом. Ангар по-прежнему
+ * только на станции: выйти в космос и поставить лазер нельзя.
+ *
  * Проверяем то, что видит игрок: в полёте вкладки «Рынок» и «Ангар»
  * приглушены и не открываются, а на станции снова работают. Журнал
  * свёрнут по умолчанию, разворачивается и сворачивается обратно.
@@ -19,7 +23,8 @@ const check = (name, cond, extra = '') => {
 function save(inFlight) {
   const state = {
     version: 2, galaxy: 1, system: 7, cash: 5000, fuel: 60, holdSpace: 20,
-    cargo: Array(17).fill(0), market: Array(17).fill({ price: 100, quantity: 5 }),
+    // §98: в трюме есть груз — иначе кнопок сброса не будет вовсе.
+    cargo: [2, ...Array(16).fill(0)], market: Array(17).fill({ price: 100, quantity: 5 }),
     rng: 1, flight: null,
     ship: { laser: 'pulse', missiles: 3, ecm: false, energyBomb: false, escapePod: false,
             energyUnit: false, fuelScoops: false, dockingComputer: false, galacticHyperdrive: false, cargoBayExtended: false },
@@ -64,10 +69,10 @@ const title = (w) => w.document.getElementById('title').textContent;
 /* ---------- В полёте ---------- */
 const wf = boot(true);
 await new Promise((r) => setTimeout(r, 900));
-check('в полёте рынок приглушён', tabBtn(wf, 'market').classList.contains('off'));
+check('в полёте рынок НЕ приглушён — это «Трюм» (§98)', !tabBtn(wf, 'market').classList.contains('off'));
 check('в полёте ангар приглушён', tabBtn(wf, 'hangar').classList.contains('off'));
-check('в полёте кнопки рынка и ангара выключены',
-  tabBtn(wf, 'market').disabled && tabBtn(wf, 'hangar').disabled);
+check('в полёте выключен только ангар',
+  !tabBtn(wf, 'market').disabled && tabBtn(wf, 'hangar').disabled);
 // Опечатка в первой версии: проверял `.off` у РЫНКА, а он как раз должен
 // быть приглушён — проверка противоречила сама себе. Смысл в том, что
 // корабль, карта и журнал остаются рабочими.
@@ -75,22 +80,30 @@ check('корабль, карта и журнал в полёте доступн
   !tabBtn(wf, 'ship').disabled && !tabBtn(wf, 'map').disabled && !tabBtn(wf, 'log').disabled &&
   !tabBtn(wf, 'ship').classList.contains('off') && !tabBtn(wf, 'map').classList.contains('off'));
 
+check('в полёте вкладка называется «Трюм»', /Трюм/.test(tabBtn(wf, 'market').textContent), tabBtn(wf, 'market').textContent.trim());
 click(wf, tabBtn(wf, 'market'));
-await new Promise((r) => setTimeout(r, 200));
-check('нажатие на рынок в полёте не открывает его', title(wf) === 'Корабль', `заголовок: ${title(wf)}`);
+await new Promise((r) => setTimeout(r, 250));
+check('в полёте рынок открывается как «Трюм»', title(wf) === 'Трюм', `заголовок: ${title(wf)}`);
+const holdText = () => wf.document.getElementById('content').textContent;
+check('трюм показывает список товаров', /Еда/.test(holdText()) && /Текстиль/.test(holdText()));
+check('в трюме есть кнопки сброса', !!wf.document.querySelector('[data-action="dropAll"]'));
+const topInfo = () => wf.document.getElementById('top-info')?.textContent ?? '';
+check('в шапке трюма — загрузка, а не деньги', /\d+ \/ \d+ т/.test(topInfo()), topInfo().trim());
 
 click(wf, tabBtn(wf, 'hangar'));
 await new Promise((r) => setTimeout(r, 200));
-check('нажатие на ангар в полёте не открывает его', title(wf) === 'Корабль', `заголовок: ${title(wf)}`);
+check('нажатие на ангар в полёте не открывает его', title(wf) === 'Трюм', `заголовок: ${title(wf)}`);
 
 /* ---------- На станции ---------- */
 const wd = boot(false);
 await new Promise((r) => setTimeout(r, 900));
 check('на станции рынок доступен', !tabBtn(wd, 'market').disabled && !tabBtn(wd, 'market').classList.contains('off'));
 check('на станции ангар доступен', !tabBtn(wd, 'hangar').disabled);
+check('на станции вкладка называется «Рынок»', /Рынок/.test(tabBtn(wd, 'market').textContent));
 click(wd, tabBtn(wd, 'market'));
 await new Promise((r) => setTimeout(r, 200));
 check('на станции рынок открывается', title(wd) === 'Рынок', `заголовок: ${title(wd)}`);
+check('на станции кнопок сброса нет', !wd.document.querySelector('[data-action="dropAll"]'));
 click(wd, tabBtn(wd, 'hangar'));
 await new Promise((r) => setTimeout(r, 200));
 check('на станции ангар открывается', title(wd) === 'Ангар', `заголовок: ${title(wd)}`);
