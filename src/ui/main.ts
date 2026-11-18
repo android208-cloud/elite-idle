@@ -425,7 +425,13 @@ function encounterCard(): string {
   };
   const best = bestLaserOf(lasers);
   // §77: капсулы нет, третий аргумент больше ни на что не влияет.
-  const can = availableDecisions(enemy, best, true, hostile);
+  /*
+   * §95: «законная цель» — это РОЛЬ, а не флаг модели. `enemy.pirate`
+   * означает «на таком корабле летают пираты»; Cobra Mk III бывает и
+   * торговой. Поэтому напасть можно на пирата по роли — даже если он
+   * сейчас летит мимо (жёлтый, §86).
+   */
+  const can = availableDecisions(enemy, best, true, hostile || e.role === 'pirate');
 
   const btn = (decision: Decision, label: string, enabled: boolean, reason?: string): string =>
     `<button class="btn" data-action="decide" data-decision="${decision}" ${enabled ? '' : 'disabled'}
