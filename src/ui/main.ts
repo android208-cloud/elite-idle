@@ -8,6 +8,7 @@ import {
   bestLaserOf,
   enemyOf,
   isCriminal,
+  isLegalTarget,
   type Decision,
 } from '../core/one-decision.ts';
 import { canDo, MAX_ENERGY, MAX_SHIELDS, type CombatAction } from '../core/combat.ts';
@@ -431,7 +432,7 @@ function encounterCard(): string {
    * торговой. Поэтому напасть можно на пирата по роли — даже если он
    * сейчас летит мимо (жёлтый, §86).
    */
-  const can = availableDecisions(enemy, best, true, hostile || e.role === 'pirate');
+  const can = availableDecisions(enemy, best, true, isLegalTarget(e.role, hostile));
 
   const btn = (decision: Decision, label: string, enabled: boolean, reason?: string): string =>
     `<button class="btn" data-action="decide" data-decision="${decision}" ${enabled ? '' : 'disabled'}
@@ -2068,7 +2069,17 @@ function onAction(el: HTMLElement): void {
         military: state.ship.laser === 'military',
         mining: state.ship.laser === 'mining',
       };
-      const can = availableDecisions(enemy, bestLaserOf(lasers), true, hostile);
+      /*
+       * §96: ЗДЕСЬ БЫЛА ПРИЧИНА «это решение сейчас недоступно».
+       *
+       * Карточка встречи рисовала кнопку по правилу `isLegalTarget(роль)`,
+       * а обработчик нажатия считал решения без роли. На пирата, летящего
+       * мимо, кнопка была активна, нажатие приходило сюда — `can.attack`
+       * выходил `false` — и игрок получал отказ.
+       *
+       * Теперь правило одно на оба места.
+       */
+      const can = availableDecisions(enemy, bestLaserOf(lasers), true, isLegalTarget(enc.role, hostile));
       const r = applyDecision(enemy, decision, can, hostile);
       if (!r) {
         addLog('Это решение сейчас недоступно');

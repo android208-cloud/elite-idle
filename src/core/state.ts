@@ -24,6 +24,7 @@ import {
   canBeat,
   enemyOf,
   isCriminal,
+  isLegalTarget,
   needsMissile,
 } from './one-decision.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
@@ -1319,14 +1320,17 @@ function autoDecision(
    * торговая одновременно. Поэтому цель определяется РОЛЬЮ встречи,
    * а не флагом корабля: иначе чистый пилот грабил торговца на Cobra.
    */
-  const legalTarget = hostile || enc.role === 'pirate';
   /*
+   * §96: правило законной цели — ОДНО, в `isLegalTarget`. Здесь его
+   * дублировать нельзя: именно расхождение копий дало «это решение
+   * сейчас недоступно» в интерфейсе.
+   *
    * `beat` обязателен для ЛЮБОЙ атаки, включая пиратство: «бить можно
    * любого» §79 не отменяет проверку снаряжения. Python и Анаконда
    * требуют полного набора (§78), и правило «нельзя — значит пропуск»
    * остаётся и здесь.
    */
-  const mayAttack = (raiding || legalTarget) && beat;
+  const mayAttack = (raiding || isLegalTarget(enc.role, hostile)) && beat;
   const r = autoResolve(enemy, { ...can, attack: mayAttack }, hostile);
   events.push({ type: r.outcome, at, text: r.text });
   // Статистика: победа считается убийством ровно так же, как и при
@@ -2153,8 +2157,30 @@ export function combatAutoplay(
 
 /* ---------- Сохранение ---------- */
 
+/**
+ * Сериализация состояния.
+ *
+ * §96: `Infinity` НЕ ВЫЖИВАЕТ `JSON.stringify` — он превращается в `null`.
+ * А у патруля ровно два поля бесконечны:
+ *
+ *     flight.arriveAt        = Infinity   (патруль кончается топливом, не временем)
+ *     flight.remainingBaseMs = Infinity
+ *
+ * После загрузки они становились `null`/`0`, и первый же тик считал полёт
+ * завершённым: `advance` писал «Прибытие» и высаживал игрока на станцию.
+ * То есть патруль не переживал сохранение — а сохраняется игра каждые
+ * 10 секунд и при каждом событии.
+ *
+ * Решение: помечаем бесконечность явным маркером и восстанавливаем её при
+ * чтении. Не `null` и не `-1`: путать «нет значения» с «бесконечно» нельзя,
+ * это разные вещи, и `null` уже используется как «поля нет».
+ */
+const INF = 'Infinity';
+
 export function serialize(state: GameState): string {
-  return JSON.stringify(state);
+  return JSON.stringify(state, (_key, value) =>
+    value === Number.POSITIVE_INFINITY ? INF : value,
+  );
 }
 
 /** Загрузка с проверкой версии. Версия 1 (до боёв) дополняется значениями по умолчанию. */
@@ -2192,6 +2218,16 @@ export function deserialize(json: string): GameState {
    * (это проверяют инварианты), а «точку отсчёта» сбрасывает UI при загрузке.
    */
   if (typeof state.careerMs !== 'number') state.careerMs = 0;
+  /*
+   * §96: восстановление бесконечностей патруля. `serialize` пишет их
+   * строкой 'Infinity', потому что JSON не умеет бесконечность. Без
+   * обратного преобразования патруль «прибывал» сразу после загрузки.
+   */
+  if (state.flight) {
+    const f = state.flight as unknown as Record<string, unknown>;
+    if (f.arriveAt === INF) f.arriveAt = Number.POSITIVE_INFINITY;
+    if (f.remainingBaseMs === INF) f.remainingBaseMs = Number.POSITIVE_INFINITY;
+  }
   // Совместимость с сохранениями до §73: поля обломков тогда не было.
   if (state.salvage === undefined) state.salvage = null;
   /*
