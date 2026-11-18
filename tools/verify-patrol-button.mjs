@@ -39,7 +39,7 @@ const check = (name, cond, extra = '') => {
   else { bad++; console.log('❌ ' + name + (extra ? ' · ' + extra : '')); }
 };
 
-const card = () => [...window.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+const card = () => [...window.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
 const buttons = () => [...(card()?.querySelectorAll('button') ?? [])];
 const byText = (t) => buttons().find((b) => b.textContent.includes(t));
 
@@ -103,14 +103,14 @@ await new Promise((r) => setTimeout(r, 900));
 
 const w2 = dom2.window;
 // До старта патруля его карточки ещё нет — кнопка живёт в «Пункте назначения».
-const destCard = () => [...w2.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+const destCard = () => [...w2.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
 const btn2 = [...(destCard()?.querySelectorAll('button') ?? [])].find((b) => /Патрулировать|Пиратство/.test(b.textContent));
 
 check('с ракетами патруль доступен', btn2?.disabled === false, btn2 ? `[${btn2.textContent}]` : 'кнопки нет');
 
 btn2?.dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
 await new Promise((r) => setTimeout(r, 500));
-const destCard2 = () => [...w2.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+const destCard2 = () => [...w2.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
 const after = w2.document.getElementById('content').textContent;
 /*
  * §82: у патруля свой вид — «Патруль: <система>», встречи и топливо.
@@ -151,7 +151,7 @@ const dom3 = new JSDOM(html, {
 });
 await new Promise((r) => setTimeout(r, 900));
 const w3 = dom3.window;
-const card3 = () => [...w3.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+const card3 = () => [...w3.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
 const labels = [...(card3()?.querySelectorAll('button') ?? [])].map((b) => b.textContent.trim());
 check('у преступника кнопка зовётся «Пиратство»', labels.includes('Пиратство'), labels.join(' · '));
 check('у преступника нет «Патрулировать»', !labels.includes('Патрулировать'));

@@ -37,7 +37,7 @@ window.cancelAnimationFrame = clearTimeout;
 await new Promise((r) => setTimeout(r, 800));
 const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 const title = () => window.document.getElementById('title').textContent;
-const card = () => [...window.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+const card = () => [...window.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
 
 let ok = 0, bad = 0;
 const check = (name, cond, extra = '') => {

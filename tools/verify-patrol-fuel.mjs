@@ -62,13 +62,13 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
   const dom = make(JSON.stringify(save));
   await new Promise((r) => setTimeout(r, 900));
   const w = dom.window;
-  const dest = () => [...w.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('Пункт назначения'));
+  const dest = () => [...w.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('Пункт назначения'));
   [...(dest()?.querySelectorAll('button') ?? [])]
     .find((b) => /Патрулировать|Пиратство/.test(b.textContent))
     ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   await new Promise((r) => setTimeout(r, 600));
 
-  const card = [...w.document.querySelectorAll('#content > .card')].find((c) => /Патруль:|Пиратство:/.test(c.textContent));
+  const card = [...w.document.querySelectorAll('#content .card')].find((c) => /Патруль:|Пиратство:/.test(c.textContent));
   return { w, card, bar: w.document.getElementById('flight-fuel'), text: w.document.getElementById('content').textContent };
 }
 
@@ -119,7 +119,7 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
     const w = dom.window;
     const stats = [...w.document.querySelectorAll('.stat')];
     const status = stats.find((e) => e.textContent.includes('Статус'));
-    const cargoCard = [...w.document.querySelectorAll('#content > .card')].find((c) => c.querySelector('h2')?.textContent === 'Груз');
+    const cargoCard = [...w.document.querySelectorAll('#content .card')].find((c) => c.querySelector('h2')?.textContent === 'Груз');
     return { status, cargoCard, text: w.document.getElementById('content').textContent };
   }
 
