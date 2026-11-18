@@ -57,7 +57,6 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
 } from '../core/state.ts';
-import { canisterCount } from '../core/cargo-canisters.ts';
 import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
@@ -363,7 +362,7 @@ function systemInfo(index: number): string {
 function flightCard(): string {
   const f = state.flight;
   if (!f) {
-    return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+    return `<div class="card"><h2>На станции ${currentSystem(state).name}</h2>
       <div class="sub">${systemInfo(state.system)}</div></div>`;
   }
   /*
@@ -375,6 +374,7 @@ function flightCard(): string {
    * времени, а по топливу.
    */
   if (f.patrol) {
+    const enc = state.encounter ? encounterCard() : '';
     const pirate = isCriminal(state.legal);
     /*
      * §86: ЖЁЛТАЯ — «следят», КРАСНАЯ — «пиратство».
@@ -396,13 +396,14 @@ function flightCard(): string {
         ${stat('Израсходовано', `${f.patrolFuelUsed ?? 0} ед.`)}
       </div>
       ${bar(state.fuel, MAX_FUEL, '', 'flight-fuel')}
-      <div class="sub">Топливо <span id="flight-fuel-text">${ly(state.fuel)}</span> из ${ly(MAX_FUEL)}</div></div>`;
+      <div class="sub">Топливо <span id="flight-fuel-text">${ly(state.fuel)}</span> из ${ly(MAX_FUEL)}</div></div>${enc}`;
   }
   const systems = systemsOf(state.galaxy);
+  const enc = state.encounter ? encounterCard() : '';
   const frame = isCriminal(state.legal) || contrabandLevel(state.cargo) > 0 ? ' danger' : '';
   return `<div class="card${frame}"><h2>В пути: ${systems[f.from].name} → ${systems[f.to].name}</h2>
     <div class="progress"><div id="flight-bar" style="width:0%"></div></div>
-    <div class="sub">Прибытие через <span id="flight-eta"></span></div></div>`;
+    <div class="sub">Прибытие через <span id="flight-eta"></span></div></div>${enc}`;
 }
 
 /**
@@ -456,52 +457,24 @@ function encounterCard(): string {
    *   все остальные мирные → зелёная
    */
   const tone = hostile ? ' danger' : e.role === 'pirate' ? ' warn' : ' calm';
-  /*
-   * §94: ВСТРЕЧА ЖИВЁТ В ТОМ ЖЕ СЛОТЕ, ЧТО «ПУНКТ НАЗНАЧЕНИЯ».
-   *
-   * Пользователь: «блок 2 всегда фиксированного размера; при встрече блок
-   * "в радиусе" рисуется вместо блока 2; постараться максимально сохранить
-   * расположение полей и кнопок».
-   *
-   * Поэтому вся карточка повторяет сетку пункта назначения:
-   *
-   *   h2 «…»                    — заголовок (кто именно)
-   *   строка цели: имя (корабль) + чип + расстояние → «встреча»
-   *   подпись: роль и решение таймера
-   *   ряд статов: Время (до автобоя) / Обломки (сколько контейнеров)
-   *   ряд кнопок: Напасть / Бежать / Пропустить
-   *
-   * Модель корабля — единственное, чего нет в пункте назначения. Она
-   * уменьшена до полосы 96px, чтобы не раздувать высоту слота: слот
-   * должен оставаться одного размера во всех состояниях.
-   */
-  const resolveIn = Math.max(0, e.resolveAt - Date.now());
-  const lootCount = canisterCount(e.enemyId, e.role === 'trader' ? 'trader' : 'pirate');
-  const place = systemsOf(state.galaxy)[state.system].name;
+  const share = hostile && can.attack ? '' : '';
+  // Модель встречного корабля: видно, с кем имеешь дело, а не только
+  // название. Корабль, которого нет в парке (канистра, астероид),
+  // просто не показывается — лучше пусто, чем силуэт не того класса.
   const model = FLEET[enemy.id]
     ? `<canvas class="enc-model" data-ship="${enemy.id}" aria-label="Модель корабля ${enemy.name}"></canvas>`
     : '';
-  return `<div class="card${tone}" data-slot="2"><h2>В радиусе: ${ROLE_NAMES[e.role]}</h2>
-    <div class="row">
-      <span class="price">${enemy.name}</span>
-      <span class="chip">${hostile ? 'враг' : 'мимо'}</span>
-      <span class="spacer"></span>
-      <span class="muted">${place}</span>
-    </div>
+  return `<div class="card${tone}"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
     ${model}
-    <div class="sub" style="margin-top:6px">${hostile ? 'Враждебен' : 'Не враждебен'} · решение через <span id="enc-eta"></span></div>
+    <div class="sub">${hostile ? 'Враждебен' : 'Не враждебен'} · Решение через <span id="enc-eta"></span></div>
     <div class="row" style="margin-top:12px">
-      ${stat('Время', fmtDur(resolveIn))}
-      ${stat('Обломки', lootCount > 0 ? `${lootCount} конт.` : '—')}
-    </div>
-    <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
       ${btn('attack', 'Напасть', can.attack, can.attackReason)}
       ${btn('flee', 'Бежать', can.flee, can.fleeReason)}
       ${btn('skip', 'Пропустить', can.skip)}
     </div>
     ${can.attackReason && !can.attack ? `<div class="muted" style="margin-top:6px">${can.attackReason}</div>` : ''}
     ${can.fleeReason && !can.flee ? `<div class="muted" style="margin-top:4px">${can.fleeReason}</div>` : ''}
-  </div>`;
+  </div>${share}`;
 }
 
 function equipmentSummary(): string {
@@ -544,25 +517,7 @@ function shipScreen(): string {
   // §83.2: «Статус» не красим — пользователь сказал «тогда ладно, не крась».
   // Плитка сетки с цветной полосой смотрелась чужеродно рядом с карточками.
   const smuggling = contrabandLevel(state.cargo) > 0;
-  /*
-   * §94: БЛОК 2 — ОДИН СЛОТ, ДВА ЖИЛЬЦА.
-   *
-   * Пользователь: «при встрече блок "в радиусе" рисуется ВМЕСТО блока 2,
-   * или становится им». Значит, в разметке это одно место, а не две
-   * карточки подряд: иначе при встрече экран прыгал бы на всю высоту
-   * пункта назначения.
-   *
-   * На стоянке и в полёте жилец — пункт назначения (или карточка полёта),
-   * а если есть встреча — она. Класс `slot2` держит минимальную высоту,
-   * чтобы низ экрана не дёргался при смене жильца.
-   */
-  /*
-   * При встрече блок 1 остаётся на месте: «Станция LAVE» — это обстановка,
-   * она не перестаёт быть правдой от того, что рядом появился пират.
-   * Заменяется только жилец слота 2.
-   */
-  const slot2 = state.encounter ? encounterCard() : destinationCard();
-  return `${flightCard()}<div class="slot2">${slot2}</div>
+  return `${flightCard()}${destinationCard()}
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
       ${stat('Топливо', ly(state.fuel))}
@@ -1894,10 +1849,9 @@ function drawEncounterFrame(now: number): void {
   if (!bp || !ctx) return;
 
   const dpr = window.devicePixelRatio || 1;
-  // §94: высота модели задана CSS (полоса 96px), а не пропорцией от
-  // ширины. Иначе на широком экране она раздувалась и слот «прыгал».
   const w = canvas.clientWidth || 260;
-  const h = canvas.clientHeight || 96;
+  const h = Math.round(w * 0.42);
+  canvas.style.height = `${h}px`;
   const bw = Math.round(w * dpr);
   const bh = Math.round(h * dpr);
   if (canvas.width !== bw) canvas.width = bw;

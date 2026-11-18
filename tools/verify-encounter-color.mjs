@@ -78,7 +78,7 @@ async function encounter({ role, enemy, outcome, legal = 0 }) {
   const dom = make(JSON.stringify(save));
   await new Promise((r) => setTimeout(r, 900));
   const w = dom.window;
-  const card = [...w.document.querySelectorAll('#content .card')].find((c) => c.textContent.includes('В радиусе'));
+  const card = [...w.document.querySelectorAll('#content > .card')].find((c) => c.textContent.includes('В радиусе'));
   return card?.className ?? '';
 }
 
