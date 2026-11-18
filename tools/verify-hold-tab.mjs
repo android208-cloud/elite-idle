@@ -20,11 +20,15 @@ const check = (name, cond, extra = '') => {
 
 const SLAVES = 3;
 
-function save(inFlight) {
+/*
+ * Фикстура трюма. Второй аргумент — рыночные позиции: по умолчанию все
+ * товары есть (quantity 5), а §103-проверкам нужен рынок с нулями.
+ */
+function save(inFlight, market = Array(17).fill({ price: 100, quantity: 5 }), cargo = null) {
   const state = {
     version: 3, galaxy: 1, system: 7, cash: 5000, fuel: 60, holdSpace: 18,
-    cargo: Array(17).fill(0).map((_, i) => (i === SLAVES ? 2 : 0)),
-    market: Array(17).fill({ price: 100, quantity: 5 }),
+    cargo: cargo ?? Array(17).fill(0).map((_, i) => (i === SLAVES ? 2 : 0)),
+    market,
     rng: 1, flight: null,
     ship: { laser: 'pulse', missiles: 3, ecm: false, energyBomb: false,
             energyUnit: false, fuelScoops: false, dockingComputer: false, galacticHyperdrive: false, cargoBayExtended: false },
@@ -42,7 +46,7 @@ function save(inFlight) {
   return { state: JSON.stringify(state), log: [{ at: Date.now(), text: 'Тестовая запись' }], settings: {} };
 }
 
-function boot(inFlight) {
+function boot(inFlight, market, cargo) {
   const dom = new JSDOM(html, {
     runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://elite.test/',
     virtualConsole: new VirtualConsole(),
@@ -55,7 +59,7 @@ function boot(inFlight) {
       });
       w.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
       w.cancelAnimationFrame = clearTimeout;
-      w.localStorage.setItem('elite-idle-save-v1', JSON.stringify(save(inFlight)));
+      w.localStorage.setItem('elite-idle-save-v1', JSON.stringify(save(inFlight, market, cargo)));
     },
   });
   return dom.window;
@@ -153,6 +157,38 @@ const mfill = mbar?.querySelector('div');
 // В фикстуре те же 2 т из 20 — те же 10%.
 check('полоска рынка показывает те же 10%', mfill?.getAttribute('style') === 'width:10%', mfill?.getAttribute('style') ?? 'нет div');
 check('на рынке цена справа, а не количество', !!wd.document.querySelector('#content .card .price'));
+
+/*
+ * §103: чего нет на станции — того не показываем.
+ *
+ * Рынок с двумя нулями: Еда (индекс 0) отсутствует и в трюме её нет —
+ * карточки быть не должно. Оружие (10) отсутствует, но 1 т лежит в трюме —
+ * карточка обязана остаться, иначе груз не продать.
+ */
+const ZERO_MARKET = Array(17).fill({ price: 100, quantity: 5 });
+ZERO_MARKET[0] = { price: 100, quantity: 0 };
+ZERO_MARKET[10] = { price: 500, quantity: 0 };
+const ZERO_CARGO = Array(17).fill(0);
+ZERO_CARGO[10] = 1;
+
+const wz = boot(false, ZERO_MARKET, ZERO_CARGO);
+await new Promise((r) => setTimeout(r, 900));
+click(wz, tabBtn(wz, 'market'));
+await new Promise((r) => setTimeout(r, 250));
+const zcontent = content(wz);
+check('§103: отсутствующий товар скрыт', !/Еда/.test(zcontent));
+check('§103: остальные товары на месте', /Текстиль/.test(zcontent) && /Компьютеры/.test(zcontent));
+// Ноль остаётся ровно один — у товара, который лежит в трюме.
+const zeroRows = [...wz.document.querySelectorAll('#content .card')]
+  .filter((c) => /В наличии: 0 /.test(c.textContent));
+check('§103: нулевая строка осталась только у груза из трюма',
+  zeroRows.length === 1 && /Оружие/.test(zeroRows[0].textContent), `строк: ${zeroRows.length}`);
+const gunRow = [...wz.document.querySelectorAll('#content .card')].find((c) => /Оружие/.test(c.textContent));
+check('§103: товар из трюма показан даже при нуле', !!gunRow);
+check('§103: у него доступна продажа, а покупка нет',
+  !!gunRow?.querySelector('[data-action="sell1"]:not([disabled])') &&
+  !!gunRow?.querySelector('[data-action="buy1"][disabled]'));
+wz.close();
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 w.close(); wd.close();
