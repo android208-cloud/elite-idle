@@ -95,6 +95,15 @@ check('карточка товара помечена как на рынке (il
 check('в карточке есть метка цены', !!goodsCard?.querySelector('.chip'));
 check('строка «В наличии · В трюме» как на рынке', /В наличии: \d+ т · В трюме: 2 т/.test(goodsCard?.textContent ?? ''));
 check('цена справа тем же классом', !!goodsCard?.querySelector('.price'));
+/*
+ * §100: пользователь спросил «цену за всё количество?». Ответ должен быть
+ * виден на экране, а не только в объяснении: цена за единицу — крупно,
+ * стоимость всего запаса — мелким под ней.
+ */
+const priceBlock = goodsCard?.querySelector('.price');
+// В фикстуре цена 100 десятых = 10.0 CR, груза 2 т.
+check('крупная цена — за единицу', /^10\.0 CR/.test(priceBlock?.textContent.trim() ?? ''), priceBlock?.textContent.trim() ?? '');
+check('мелким — стоимость всего запаса', /2 т = 20\.0 CR/.test(priceBlock?.textContent ?? ''), priceBlock?.textContent.trim() ?? '');
 const row = goodsCard?.querySelector('.row');
 const btns = [...(row?.querySelectorAll('button') ?? [])];
 check('«−1» первая кнопка', btns[0]?.textContent.trim() === '−1', btns[0]?.textContent.trim() ?? '');

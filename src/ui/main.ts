@@ -1424,10 +1424,20 @@ function holdScreen(): string {
      * невозможны — торговли нет. Выключенные кнопки, которые ничего не
      * делают, хуже их отсутствия.
      */
+    /*
+     * §100: цена — за ОДНУ единицу, как на рынке, но в трюме это читалось
+     * двусмысленно: пользователь прямо спросил «цену товара у нас за всё
+     * количество?». На рынке вопрос не возникает — там покупают поштучно,
+     * а в трюме рядом стоит количество, и цифра выглядит как «за всё».
+     *
+     * Поэтому большая цифра остаётся прежней (цена за единицу, тот же
+     * класс `.price`, то же место), а под ней мелким — сколько стоит весь
+     * запас. Так карточка остаётся копией рыночной, но вопроса больше нет.
+     */
     return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
         <div><div class="name">${c.name} ${priceChip(i)}</div>
           <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${have} ${UNITS[c.unit]}</div></div>
-        <div class="price">${cr(m.price)}</div></div>
+        <div class="price">${cr(m.price)}<div class="muted">${have} ${UNITS[c.unit]} = ${cr(m.price * have)}</div></div></div>
       <div class="row" style="margin-top:10px">
         <button class="btn tonal" data-action="drop1" data-i="${i}">−1</button>
         <span class="spacer"></span>
