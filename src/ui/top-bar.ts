@@ -26,10 +26,18 @@
  * карте выбираются тапом по канвасу, а тап в jsdom не срабатывает.
  */
 import { systemsOf, type GameState } from '../core/state.ts';
+import { shipSpec } from '../core/ships.ts';
 import { holdValue } from '../core/cargo-origin.ts';
 
-/** Название корабля игрока. Пока он один — константа. */
-export const SHIP_NAME = 'Cobra Mk III';
+/**
+ * §109: название корабля игрока — из состояния, а не константа.
+ *
+ * Было `SHIP_NAME = 'Cobra Mk III'`: шапка честно писала «Кобра», даже
+ * когда в ангаре стоял купленный Python (скриншот пользователя: модель
+ * Питона, подпись «Python · ваш корабль в ангаре», а в шапке — Кобра).
+ * Теперь имя берётся оттуда же, откуда модель и подпись в ангаре, —
+ * из `state.ship`, поэтому разойтись им больше негде.
+ */
 
 /** Вкладки, для которых шапка знает своё значение. */
 export type TopTab = 'ship' | 'map' | 'market' | 'hangar' | 'log';
@@ -84,7 +92,7 @@ export function topValue(state: GameState, tab: TopTab | null): string {
   if (tab === null) return placeOf(state);
   switch (tab) {
     case 'ship':
-      return SHIP_NAME;
+      return shipSpec(state.ship).name;
     case 'map':
       return placeOf(state);
     case 'market':

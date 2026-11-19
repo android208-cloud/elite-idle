@@ -264,7 +264,18 @@ export interface ShipModelOptions {
   ship?: ShipBlueprint;
   /** Угол наклона, радианы. Небольшой, чтобы читался силуэт сверху. */
   pitch?: number;
-  /** Цвет линий. */
+  /**
+   * Цвет контура корпуса.
+   *
+   * §109: раньше здесь по умолчанию стоял яркий бирюзовый `#4fd8c4`, и
+   * модель читалась как неоновая проволока: вокруг корпуса шла светлая
+   * окантовка, которой у настоящего корабля быть не может. Пользователь
+   * попросил её убрать.
+   *
+   * Теперь контур — тёмный, темнее любой грани (rgb 11, 30, 27): он не
+   * светится, а только отделяет грани друг от друга и держит силуэт,
+   * чтобы корпус не расплывался в одно пятно.
+   */
   stroke?: string;
   /** Цвет «носа» — чтобы было видно, куда корабль смотрит. */
   accent?: string;
@@ -279,7 +290,7 @@ export interface ShipModelOptions {
 export function drawShipModel(ctx: CanvasRenderingContext2D, o: ShipModelOptions): void {
   const { width, height, yaw } = o;
   const pitch = o.pitch ?? 0.28;
-  const stroke = o.stroke ?? '#4fd8c4';
+  const stroke = o.stroke ?? '#0b1e1b';
   const accent = o.accent ?? '#ffd37a';
 
   // Геометрия: по умолчанию корабль игрока. Все дальнейшие шаги
@@ -551,7 +562,7 @@ export function drawShipModel(ctx: CanvasRenderingContext2D, o: ShipModelOptions
   }
 
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 1.1;
+  ctx.lineWidth = 1.3;
   ctx.lineJoin = 'round';
   for (const [key, faces] of edgeFacesList) {
     // Ребро на контуре: одна из его граней смотрит на зрителя,

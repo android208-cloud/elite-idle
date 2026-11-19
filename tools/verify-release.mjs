@@ -86,7 +86,7 @@ for (const name of ['map', 'market', 'hangar', 'log', 'ship']) {
 check('шапка следует за вкладкой', new Set(Object.values(byTab)).size === 4,
   Object.entries(byTab).map(([k, v]) => `${k}=${v}`).join(' · '));
 check('«Рынок» и «Ангар» — кредиты', /CR$/.test(byTab.market) && byTab.market === byTab.hangar, byTab.market);
-check('«Корабль» — название', byTab.ship === 'Cobra Mk III', byTab.ship);
+check('«Корабль» — название стартового корабля', byTab.ship === 'Adder', byTab.ship);
 check('«Карта» — система', byTab.map === 'LAVE' || /^[A-ZА-Я]/.test(byTab.map), byTab.map);
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);

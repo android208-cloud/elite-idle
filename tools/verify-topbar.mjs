@@ -49,15 +49,19 @@ for (const tab of ['ship', 'map', 'market', 'hangar', 'log']) {
 }
 
 // 3. Корабль — название
+//
+// §109: здесь стояло «Cobra Mk III», и проверка проходила только потому,
+// что в шапке лежала КОНСТАНТА. Игрок начинает на Аддере — шапка обязана
+// называть Аддер, а не тот корабль, который был в оригинале 1984 года.
 await go('ship');
-check('«Корабль»: Cobra Mk III', info() === 'Cobra Mk III', info());
+check('«Корабль»: название того, на чём летим (Аддер)', info() === 'Adder', info());
 check('«Корабль»: кредитов в шапке нет', !/CR/.test(info()), info());
 check('«Корабль»: деньги есть в карточке', /Деньги/.test(flat(d.getElementById('content'))));
 
 // 4. Рынок и ангар — кредиты
 await go('market');
 check('«Рынок»: кредиты', /^\d+\.\d CR$/.test(info()), info());
-check('«Рынок»: имени корабля нет', !/Cobra/.test(info()), info());
+check('«Рынок»: имени корабля нет', !/Adder|Cobra/.test(info()), info());
 await go('hangar');
 check('«Ангар»: кредиты', /^\d+\.\d CR$/.test(info()), info());
 

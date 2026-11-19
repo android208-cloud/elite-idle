@@ -113,6 +113,13 @@ async function openHangar(system, ship) {
   check('в ангаре бак 6.0 из 6.0', /6\.0 св\. г\. из 6\.0/.test(fh.replace(/\s+/g, ' ')));
   check('большого трюма для Аддера нет', !/Увеличенный трюм/.test(fh));
   check('лазер купить можно — это первое дело', /Импульсный лазер/.test(fh));
+  /* §109: шапка «Корабль» берёт имя из состояния. На новой игре это Аддер,
+   * а не «Cobra Mk III» из константы — раньше здесь стояла именно она. */
+  click(fw, tabBtn(fw, 'ship'));
+  await new Promise((r) => setTimeout(r, 250));
+  check('§109: шапка «Корабль» назвала стартовый Аддер',
+    fw.document.getElementById('top-info').textContent.trim() === 'Adder',
+    fw.document.getElementById('top-info').textContent.trim());
   fw.close();
 }
 
@@ -122,6 +129,15 @@ const laveText = content(lave);
 check('ангар открылся', lave.document.getElementById('title').textContent === 'Ангар',
   lave.document.getElementById('title').textContent);
 check('модель корабля названа по данным', /Cobra Mk III · ваш корабль в ангаре/.test(laveText));
+/* §109: здесь корабль — Кобра, и шапка обязана сказать «Cobra Mk III».
+ * Проверка парная к «Аддеру» выше: вместе они и означают «динамическое». */
+click(lave, tabBtn(lave, 'ship'));
+await new Promise((r) => setTimeout(r, 250));
+check('§109: шапка «Корабль» назвала Кобру',
+  lave.document.getElementById('top-info').textContent.trim() === 'Cobra Mk III',
+  lave.document.getElementById('top-info').textContent.trim());
+click(lave, tabBtn(lave, 'hangar'));
+await new Promise((r) => setTimeout(r, 250));
 check('нет строк «нет на этой станции»', !/нет на этой станции/.test(laveText));
 check('продаётся то, что по техуровню доступно', /Топливосборщик/.test(laveText) && /ECM/.test(laveText));
 check('военного лазера здесь нет', !/Военный лазер/.test(laveText));

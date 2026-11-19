@@ -13,7 +13,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { newGame, serialize, deserialize } from '../src/core/state.ts';
-import { topValue, fmtCareer, fmtCash, SHIP_NAME } from '../src/ui/top-bar.ts';
+import { shipSpec } from '../src/core/ships.ts';
+import { topValue, fmtCareer, fmtCash } from '../src/ui/top-bar.ts';
 
 test('время карьеры переживает сохранение', () => {
   const s = { ...newGame(1), careerMs: 5 * 3600_000, careerAt: 123456 };
@@ -48,7 +49,7 @@ test('fmtCareer: до часа — минуты, дальше — часы', () 
 
 test('§91: на каждой вкладке своё ЗНАЧЕНИЕ, без подписи', () => {
   const s = { ...newGame(1), cash: 12345 };
-  assert.equal(topValue(s, 'ship'), SHIP_NAME);
+  assert.equal(topValue(s, 'ship'), shipSpec(s.ship).name);
   // Рынок и ангар — деньги, и только они.
   assert.equal(topValue(s, 'market'), '1234.5 CR');
   assert.equal(topValue(s, 'hangar'), '1234.5 CR');
@@ -60,7 +61,7 @@ test('§91: на каждой вкладке своё ЗНАЧЕНИЕ, без �
 test('§91: имя корабля не появляется там, где его не просили', () => {
   const s = newGame(1);
   for (const tab of ['map', 'market', 'hangar', 'log'] as const) {
-    assert.notEqual(topValue(s, tab), SHIP_NAME, `на «${tab}» не должно быть имени корабля`);
+    assert.notEqual(topValue(s, tab), shipSpec(s.ship).name, `на «${tab}» не должно быть имени корабля`);
   }
 });
 
@@ -110,4 +111,24 @@ test('§98: в полёте вкладка рынка показывает гр�
   const expected = `${((3 * base2.market[0].price) / 10).toFixed(1)} CR`;
   assert.equal(topValue(flying, 'market'), expected);
   assert.ok(!/ т$/.test(topValue(flying, 'market')), 'тонн в шапке трюма больше нет');
+});
+
+test('§109: шапка называет ТОТ корабль, на котором летает игрок', () => {
+  // Скриншот пользователя: в ангаре Питон и подпись «Python · ваш корабль
+  // в ангаре», а в шапке — «Cobra Mk III» из константы.
+  const s = newGame(1);
+  assert.equal(topValue(s, 'ship'), 'Adder', 'стартовый Аддер назван Аддером');
+  for (const [model, name] of [['python', 'Python'], ['cobra3', 'Cobra Mk III'], ['anaconda', 'Anaconda']] as const) {
+    const bought = { ...s, ship: { ...s.ship, model } };
+    assert.equal(topValue(bought, 'ship'), name, `после покупки ${name} шапка должна говорить ${name}`);
+  }
+});
+
+test('§109: имя в шапке совпадает с подписью в ангаре', () => {
+  // Оба берут имя из `shipSpec(state.ship)`, поэтому проверка общая:
+  // если это разойдётся, разойдётся и здесь.
+  const g = newGame(1);
+  const s = { ...g, ship: { ...g.ship, model: 'python' as const } };
+  assert.equal(topValue(s, 'ship'), shipSpec(s.ship).name);
+  assert.equal(topValue(s, 'ship'), 'Python');
 });
