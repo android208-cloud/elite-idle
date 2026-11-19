@@ -27,19 +27,22 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--on-sur
 .top-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: calc(env(safe-area-inset-top) + 14px) 20px 10px; }
 .top-bar h1 { margin: 0; font-size: 22px; font-weight: 500; }
-/* §91: в шапке одно ЗНАЧЕНИЕ без подписи, и кегль у него тот же, что у
-   заголовка слева (22px). Иначе строка выглядела как подпись к заголовку,
-   хотя это равноправная половина шапки: слева ГДЕ вы, справа ЧТО здесь
-   важно. Одинаковый размер делает их парой.
+/* §91: в шапке одно ЗНАЧЕНИЕ без подписи.
 
-   `align-items: baseline` у `.top-bar` уже выравнивает обе половины по
-   общей базовой линии — так строка читается как одна, а не как два
+   §111: кегль значения — на два пункта МЕНЬШЕ заголовка (20 против 22).
+   До этого он был тем же, что у заголовка: пользователь просил «уменьшить
+   шрифт надписей справа в шапке на два пункта». Разница в два пункта
+   оставляет их парой (общая базовая линия, один шрифт), но справа
+   значение больше не спорит с названием экрана.
+
+   `align-items: baseline` у `.top-bar` выравнивает обе половины по общей
+   базовой линии — так строка читается как одна, а не как два
    разнокалиберных куска.
 
    `min-width: 0` нужен для усечения: без него flex-элемент не сжимается
    ниже содержимого, и длинное имя системы вылезло бы за край. */
 #top-info { font-variant-numeric: tabular-nums; color: var(--primary); font-weight: 500;
-  font-size: 22px; line-height: 1; min-width: 0;
+  font-size: 20px; line-height: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }

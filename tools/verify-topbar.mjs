@@ -74,11 +74,12 @@ check('«Карта»: кредитов нет', !/CR/.test(info()), info());
 await go('log');
 check('«Журнал»: время карьеры', /(< 1 мин|\d+ (мин|ч))/.test(info()), info());
 
-// 7. Кегль значения = кеглю заголовка (просьба пользователя)
+// 7. Кегль значения — на два пункта меньше заголовка (§111)
 const fs = (el) => w.getComputedStyle(el).fontSize;
-check('кегль шапки равен кеглю заголовка', fs(d.getElementById('top-info')) === fs(d.getElementById('title')),
+const size = (el) => Number.parseFloat(fs(el));
+check('§111: значение на 2 пункта меньше заголовка', size(d.getElementById('title')) - size(d.getElementById('top-info')) === 2,
   `${fs(d.getElementById('top-info'))} против ${fs(d.getElementById('title'))}`);
-check('кегль — 22px', fs(d.getElementById('top-info')) === '22px', fs(d.getElementById('top-info')));
+check('§111: кегль значения — 20px', fs(d.getElementById('top-info')) === '20px', fs(d.getElementById('top-info')));
 
 // 8. Иконки нижней строки
 const pills = [...d.querySelectorAll('.nav-bar .pill')];
