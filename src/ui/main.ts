@@ -18,6 +18,7 @@ import { COMMODITIES, isTonneCargo } from '../core/market.ts';
 import { isContraband } from '../core/cargo-canisters.ts';
 import { cargoManifest, handoverLine, contrabandValue, contrabandGoods, untrackedContraband, holdValue } from '../core/cargo-origin.ts';
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
+import { buildDebugFile, debugFileName, encodeDebugFile, type DebugEnv } from '../core/debug-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
@@ -1280,6 +1281,8 @@ function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
   }
   if (!lanes.size) return;
 
+  if (!settings.devRoutes && !settings.devPilots) return;
+
   // Фокус — то, на что игрок сейчас смотрит: выбранная система, а если
   // ничего не выбрано — та, где он стоит.
   const focus = selected ?? state.system;
@@ -1287,7 +1290,7 @@ function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
   ctx.save();
   ctx.lineCap = 'round';
   let drawn = 0;
-  for (const lane of lanes.values()) {
+  for (const lane of settings.devRoutes ? lanes.values() : []) {
     if (drawn >= MAX_ROUTE_LINES) break;
     const color = PILOT_ROLE_CHART[lane.role];
     const touches = lane.from === focus || lane.to === focus;
@@ -1332,6 +1335,62 @@ function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
     ctx.stroke();
     drawn++;
   }
+
+  /*
+   * §113: САМ ПИЛОТ НА МАРШРУТЕ — ТРЕУГОЛЬНИК.
+   *
+   * Пользователь: «делаем не точки, а треугольники, чтобы было понятно
+   * направление». Точка на линии ничего не говорит о том, летит он туда
+   * или уже обратно; треугольник, повёрнутый по ходу, говорит это сразу.
+   *
+   * Где он сейчас — считаем по времени, а не храним: рейс идёт от
+   * возвращения минус цикл, половина цикла — туда, половина — обратно.
+   * Так положение всегда согласовано с теми же числами, по которым
+   * платят деньги (`pilotCycleMs`), и его нельзя «рассинхронизировать».
+   */
+  if (settings.devPilots) {
+    const now = Date.now();
+    for (const pilot of pilots) {
+      if (!pilot.route || pilot.route.from === pilot.route.to) continue; // патруль — кольцом
+      const a = systems[pilot.route.from];
+      const b = systems[pilot.route.to];
+      if (!a || !b) continue;
+      if (big && !(view.visible(a) && view.visible(b))) continue;
+
+      const cycle = pilotCycleMs(state, pilot, settings);
+      if (cycle <= 0) continue;
+      let phase = (now - (pilot.nextRunAt - cycle)) / cycle;
+      phase = phase - Math.floor(phase); // 0..1, переполнение не ломает
+      const outbound = phase < 0.5;
+      const f = outbound ? phase * 2 : 2 - phase * 2;
+
+      const pa = view.screenOf(a.x, a.y);
+      const pb = view.screenOf(b.x, b.y);
+      const x = pa.x + (pb.x - pa.x) * f;
+      const y = pa.y + (pb.y - pa.y) * f;
+      const angle = Math.atan2((pb.y - pa.y) * (outbound ? 1 : -1), (pb.x - pa.x) * (outbound ? 1 : -1));
+      const size = big ? 7 : 5;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(size, 0);
+      ctx.lineTo(-size * 0.72, size * 0.6);
+      ctx.lineTo(-size * 0.72, -size * 0.6);
+      ctx.closePath();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = PILOT_ROLE_CHART[pilot.role];
+      ctx.fill();
+      /* Тёмный ореол: треугольник стоит на линии своего же цвета, и без
+       * него он сливается с ней в одну палку. */
+      ctx.strokeStyle = '#0f1514';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   ctx.restore();
 }
 
@@ -2140,6 +2199,58 @@ function statsCard(): string {
   </div>`;
 }
 
+/**
+ * §113: экран «Отладка».
+ *
+ * Зачем отдельный экран, а не строки в настройках: у игрока настройки —
+ * это «как играть», а здесь «как смотреть внутрь». Смешивать их значит
+ * заставлять игрока читать наши ручки, а нас — прятать их в общий список.
+ *
+ * Что здесь есть:
+ *  - два переключателя карты (линии маршрутов и сам пилот);
+ *  - выгрузка отладочного файла — полное состояние, настройки, журнал,
+ *    среда браузера и расшифровка флота (`buildDebugFile`).
+ */
+function devScreen(): string {
+  const sizes = (() => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY) ?? '';
+      return `${Math.round(raw.length / 1024)} КБ`;
+    } catch {
+      return '—';
+    }
+  })();
+  const notice = devNotice
+    ? `<div class="${devNotice.ok ? 'sub' : 'alert'}" style="margin-top:10px">${devNotice.text}</div>`
+    : '';
+  const pilots = state.pilots ?? [];
+  const withRoute = pilots.filter((p) => p.route !== null).length;
+
+  return `<div class="card">
+      <div class="row"><button class="btn text" data-action="dev-close">← Назад</button><span class="spacer"></span>
+        <span class="chip">сохранение ${sizes}</span></div>
+      <h2 style="margin-top:10px">Карта и флот</h2>
+      <div class="row" style="margin-top:6px"><label>Линии маршрутов</label><span class="spacer"></span>
+        ${select('devRoutes', [['on', 'Показаны'], ['off', 'Скрыты']], settings.devRoutes ? 'on' : 'off')}</div>
+      <div class="row" style="margin-top:10px"><label>Пилот на маршруте</label><span class="spacer"></span>
+        ${select('devPilots', [['on', 'Показан'], ['off', 'Скрыт']], settings.devPilots ? 'on' : 'off')}</div>
+      <div class="sub" style="margin:6px 0 4px">Пилот рисуется треугольником по ходу движения; патрульный — кольцом вокруг системы.</div>
+      <div class="sub" style="margin-top:8px;color:var(--dim)">Пилотов: ${pilots.length}, из них в рейсе: ${withRoute}.</div>
+    </div>
+    <div class="card">
+      <h2>Лог файла</h2>
+      <div class="sub">Полная выгрузка для разбора: состояние целиком, настройки, журнал событий, среда браузера и расшифровка флота —
+        расстояние рейса, длительность цикла, доход и риски каждого пилота.</div>
+      <div class="sub" style="margin-top:8px;color:var(--dim)">В браузере: система ${systemsOf(state.galaxy)[state.system]?.name ?? '—'},
+        кредитов ${cr(state.cash)}, строк журнала ${log.length}.</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn tonal" data-action="dev-log">Скачать лог</button>
+      </div>
+      <div class="sub" style="margin-top:8px;color:var(--dim)">Файл: ${debugFileName(state)}</div>
+      ${notice}
+    </div>`;
+}
+
 function logScreen(): string {
   // ×0.5 убран по просьбе пользователя (§76): на этапе расчётов он был
   // полезен (позволял замерить «полтора часа отсутствия»), в игре лишний.
@@ -2168,7 +2279,8 @@ function logScreen(): string {
       <div class="sub" style="margin:6px 0 12px">${settings.dockingModule
         ? 'Прыжок — только из мини-игры стыковки. На карте «Отстыковка».'
         : 'Прыжок — прямо с карты, без мини-игры.'}</div>
-      <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div></div>
+      <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div>
+      <div class="row" style="margin-top:6px"><button class="btn text" data-action="dev-open">Для разработчика →</button></div></div>
     ${saveCard()}
     ${logCard()}`;
 }
@@ -2431,12 +2543,23 @@ function render(): void {
    */
   const scrollTop = content.scrollTop;
   const active = document.activeElement as HTMLElement | null;
-  content.innerHTML = inCombat ? combatScreen() : inSalvage ? salvageScreen() : screens[tab]();
+  // §113: экран отладки — поверх вкладки, но не поверх боя и обломков:
+  // там идёт решение, и уводить с него нельзя.
+  const showDev = devOpen && !inCombat && !inSalvage;
+  content.innerHTML = inCombat
+    ? combatScreen()
+    : inSalvage
+      ? salvageScreen()
+      : showDev
+        ? devScreen()
+        : screens[tab]();
   document.getElementById('title')!.textContent = inCombat
     ? 'Бой'
     : inSalvage
       ? 'Обломки'
-      : tabLabel(tab);
+      : showDev
+        ? 'Отладка'
+        : tabLabel(tab);
   topBar(inCombat || inSalvage);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
@@ -2483,6 +2606,18 @@ function render(): void {
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
+
+/**
+ * §113: отдельный экран для разработчика.
+ *
+ * Не вкладка: вкладок пять, и шестая сжала бы все (это уже решено в §98).
+ * Поэтому «Отладка» открывается кнопкой из настроек, а закрывается либо
+ * «Назад», либо любой вкладкой — состояние экрана не переживает переход.
+ */
+let devOpen = false;
+
+/** Строка-подтверждение на экране отладки (после скачивания лога). */
+let devNotice: { ok: boolean; text: string } | null = null;
 
 let shipModelFrame = 0;
 let shipModelAngle = 0;
@@ -2536,6 +2671,38 @@ function drawShipFrame(now: number): void {
  * несколько секунд, вращение тут отвлекало бы. Угол в три четверти,
  * чтобы силуэт читался: нос, борт и то, насколько корабль большой.
  */
+/**
+ * §113: среда браузера для отладочного файла.
+ *
+ * Собирается здесь, а не в `debug-file.ts`: ядро не должно знать про
+ * `navigator` и `window` — иначе его нельзя проверить тестом.
+ */
+function debugEnv(): DebugEnv {
+  let storageKeys: string[] = [];
+  try {
+    storageKeys = Object.keys(localStorage);
+  } catch {
+    storageKeys = [];
+  }
+  return {
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+    platform: typeof navigator !== 'undefined' ? navigator.platform : undefined,
+    language: typeof navigator !== 'undefined' ? navigator.language : undefined,
+    timeZone: (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        return undefined;
+      }
+    })(),
+    viewport: [window.innerWidth, window.innerHeight],
+    dpr: window.devicePixelRatio,
+    online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+    storageKeys,
+    standalone: EMBEDDED,
+  };
+}
+
 /** Кадр анимации модели встреченного корабля. */
 let encFrame = 0;
 
@@ -2693,6 +2860,7 @@ function onAction(el: HTMLElement): void {
       // скриптом, а правило должно держаться в одном месте.
       if (blockedTabs().includes(want)) break;
       tab = want;
+      devOpen = false; // §113: экран отладки закрывается любой вкладкой
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
       // §105: то же для найма и открытого списка маршрутов.
@@ -3115,6 +3283,44 @@ function onAction(el: HTMLElement): void {
       input?.click();
       return;
     }
+    /*
+     * §113: экран отладки.
+     *
+     * Открывается из настроек, закрывается «Назад» или любой вкладкой.
+     * Отдельного пункта в нижней строке нет: пять вкладок — предел для
+     * телефона (см. §98), и шестая сжала бы остальные.
+     */
+    case 'dev-open': {
+      devOpen = true;
+      devNotice = null;
+      render();
+      break;
+    }
+    case 'dev-close': {
+      devOpen = false;
+      render();
+      break;
+    }
+    case 'dev-log': {
+      try {
+        const now = Date.now();
+        const file = buildDebugFile(state, log, settings, debugEnv(), now);
+        const blob = new Blob([encodeDebugFile(file)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = debugFileName(state, now);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        devNotice = { ok: true, text: `Лог сохранён: ${a.download}` };
+      } catch {
+        devNotice = { ok: false, text: 'Не удалось выгрузить лог: браузер не дал скачать.' };
+      }
+      render();
+      break;
+    }
     case 'notify-permission':
       void Notification.requestPermission().then(() => render());
       return;
@@ -3267,7 +3473,7 @@ document.addEventListener('change', (ev) => {
   const el = ev.target as HTMLSelectElement;
   if (el.dataset.action !== 'setting') return;
   const key = el.dataset.key as keyof Settings;
-  if (key === 'dockingModule' || key === 'autoScoop') {
+  if (key === 'dockingModule' || key === 'autoScoop' || key === 'devRoutes' || key === 'devPilots') {
     // Булевы флаги: в разметке 'on'/'off', в состоянии true/false.
     settings = { ...settings, [key]: el.value === 'on' };
     save();
