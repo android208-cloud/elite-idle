@@ -1706,6 +1706,7 @@ function holdScreen(): string {
     if (have <= 0) return '';
     const m = state.market[i];
     const illegal = isContraband(i);
+    const chip = priceChip(i);
     /*
      * §99: карточка — точная копия рыночной.
      *
@@ -1734,7 +1735,7 @@ function holdScreen(): string {
      * единицу остаётся в подписи рядом с ценой станции.
      */
     return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
-        <div><div class="name">${c.name} ${priceChip(i)}</div>
+        <div><div class="name${chip ? ' with-chip' : ''}">${c.name}${chip}</div>
           <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${have} ${UNITS[c.unit]} · ${cr(m.price)}/${UNITS[c.unit]}</div></div>
         <div class="price">${cr(m.price * have)}</div></div>
       <div class="row" style="margin-top:10px">
@@ -1777,13 +1778,14 @@ function marketScreen(): string {
      * участвует в игре.
      */
     if (m.quantity === 0 && state.cargo[i] === 0) return '';
+    const chip = priceChip(i);
     // Контрабанда помечается красным и словом: в оригинале это рабы,
     // наркотики и оружие (SLAVES_INDEX, NARCOTICS_INDEX, FIREARMS_INDEX).
     // Подсветка нужна не для красоты: за такой груз растёт правовой
     // статус, и игрок должен видеть это до покупки, а не после.
     const illegal = [SLAVES_INDEX, NARCOTICS_INDEX, FIREARMS_INDEX].includes(i);
     return `<div class="card${illegal ? ' illegal' : ''}"><div class="good-row">
-        <div><div class="name">${c.name} ${priceChip(i)}</div>
+        <div><div class="name${chip ? ' with-chip' : ''}">${c.name}${chip}</div>
           <div class="muted">В наличии: ${m.quantity} ${UNITS[c.unit]} · В трюме: ${state.cargo[i]} ${UNITS[c.unit]}</div></div>
         <div class="price">${cr(m.price)}</div></div>
       <div class="row" style="margin-top:10px">
@@ -2075,7 +2077,10 @@ function pilotsScreen(): string {
 
     const panel = routePilot === p.id ? pilotRoutePanel(p, systems) : '';
 
-    return `<div class="card">
+    return {
+      perHour,
+      income,
+      html: `<div class="card">
         <div class="row"><h2 style="margin:0">${p.name}</h2><span class="spacer"></span>
           <span class="chip">${SHIPS[p.ship].name}</span></div>
         <div class="sub" style="margin-top:2px">${where}</div>
@@ -2083,8 +2088,25 @@ function pilotsScreen(): string {
         <div class="row" style="margin-top:12px"><span class="spacer"></span>
           <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить маршрут' : 'Назначить маршрут'}</button>
         </div>${panel}
-      </div>`;
-  }).join('');
+      </div>`,
+    };
+  })
+    /*
+     * §116: ПОРЯДОК — ПО ДОХОДУ.
+     *
+     * Пользователь: «сортировка по доходу будет кстати». Карточки идут от
+     * самой прибыльной к самой скромной: экран нужен для одного
+     * взгляда — «кто кормит флот, а кто простаивает». Пилот без маршрута
+     * приносит ноль и оказывается внизу сам собой, без отдельного правила.
+     *
+     * Второй ключ — доход за рейс: при одинаковой ставке в час выше тот,
+     * кто везёт больше. Дальше сравнивать нечем, и это безопасно: sort в
+     * JS устойчивый, поэтому равные пилоты остаются в порядке найма и
+     * карточки не меняются местами при каждой перерисовке.
+     */
+    .sort((a, b) => b.perHour - a.perHour || b.income - a.income)
+    .map((c) => c.html)
+    .join('');
 
   let hire: string;
   if (!hireOpen) {
@@ -2120,6 +2142,7 @@ function pilotsScreen(): string {
         ${stat('Принесли', cr(t.earned))}
       </div>
       <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Рейс — настоящий перелёт туда и обратно плюс два часа отдыха. Один маршрут — один пилот.</div>
+      <div class="sub">Сверху — кто приносит больше в час; пилоты без маршрута в конце.</div>
     </div>
     ${cards}
     <div class="card"><h2>Нанять пилота</h2>

@@ -147,6 +147,33 @@ async function hangar(opts) {
   w.close();
 }
 
+/* ---------- §116: порядок по доходу ---------- */
+{
+  // Пилот без маршрута приносит ноль — в списке он должен оказаться последним,
+  // даже если нанят первым.
+  const far = Date.now() + 1e9;
+  const idle = {
+    id: 2, name: 'Бета', ship: 'adder', home: LAVE, route: null,
+    nextRunAt: far, role: 'trader', runs: 0, failures: 0,
+  };
+  const worker = {
+    id: 1, name: 'Альфа', ship: 'adder', home: LAVE, route: { from: LAVE, to: REORTE },
+    nextRunAt: far, role: 'trader', runs: 0, failures: 0,
+  };
+  const w = boot(save({ pilots: [idle, worker], nextPilotId: 3 }));
+  await wait(900);
+  click(w, tabBtn(w, 'hangar'));
+  await wait(300);
+  click(w, byAction(w, 'pilots-open'));
+  await wait(300);
+
+  const names = [...w.document.querySelectorAll('#content h2')].map((h) => h.textContent);
+  check('пилот с маршрутом — первым', names[0] === 'Альфа', names.join(' · '));
+  check('пилот без маршрута — в конце', names[1] === 'Бета');
+  check('в шапке сказано, в каком порядке', /Сверху — кто приносит больше в час/.test(content(w)));
+  w.close();
+}
+
 /* ---------- Наём в два клика ---------- */
 {
   const w = await hangar();

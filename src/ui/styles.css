@@ -84,6 +84,27 @@ main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
 
 .good-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .good-row .name { font-weight: 500; }
+
+/*
+ * §116: название с пилюлей («дорого», «дёшево»).
+ *
+ * Раньше пилюля стояла в тексте строки, и её положение задавала базовая
+ * линия: у мелкого кегля (11px) против названия (16px) коробка съезжала
+ * вниз, а отступ зависел от случайного пробела в разметке — в одной
+ * карточке зазор был 4px, в другой 8px. Пользователь: «выровнять пилюли с
+ * надписями».
+ *
+ * Флекс выравнивает по центру строки и даёт ровный зазор: пилюля сидит
+ * ровно на середине названия при любой его длине. flex-wrap оставляет
+ * пилюлю читаемой на узком экране: она уходит на вторую строку, а не
+ * сжимает название в столбик.
+ */
+.name.with-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .chip { font-size: 11px; border-radius: 8px; padding: 2px 8px; border: 1px solid var(--outline); color: var(--on-variant); }
 .chip.cheap { color: var(--good); border-color: var(--good); }
 .chip.dear { color: var(--bad); border-color: var(--bad); }
