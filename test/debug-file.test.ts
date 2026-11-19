@@ -63,6 +63,11 @@ test('отладочный файл: у пилота видно доход и р
   assert.ok(trader.cycleMs > 0, 'цикл рейса посчитан');
   assert.ok(trader.route && trader.route.distanceLy >= 0, 'расстояние в световых годах');
   assert.ok(trader.risk !== null, 'риски есть');
+  // §120: в файле видно и ранг, и плотность встреч — по ним теперь
+  // считается и доход, и риск.
+  // Семь рейсов — четвёртая ступень таблицы («Средний»): 0, 1, 2, 4.
+  assert.equal(trader.rank, 'Средний', 'ранг пилота назван');
+  assert.ok(trader.encounters > 0, `встреч за рейс: ${trader.encounters}`);
   // Полицейскому рисуем риск гибели, а не перехвата.
   assert.ok(police.risk !== null);
   assert.equal((police.risk as Record<string, number>).death !== undefined, true);

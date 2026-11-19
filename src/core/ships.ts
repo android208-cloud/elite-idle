@@ -397,6 +397,15 @@ const RANKS: readonly [number, string][] = [
   [6400, 'ЭЛИТА'],               // Elite           6400+
 ];
 
+/**
+ * §120: названия рангов по порядку — чтобы флот брал РОВНО ту же таблицу.
+ *
+ * Пользователь: «ранги пилота — такие же, как у нас (дань игре)». Поэтому
+ * имена не копируются в `fleet.ts` списком, а выводятся из `RANKS`: если
+ * когда-нибудь поправится порог или перевод, поедет и флот.
+ */
+export const RANK_NAMES: readonly string[] = RANKS.map(([, name]) => name);
+
 export function rankOf(kills: number): string {
   let name = RANKS[0][1];
   for (const [min, label] of RANKS) if (kills >= min) name = label;

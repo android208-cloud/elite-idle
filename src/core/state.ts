@@ -35,6 +35,7 @@ import {
   policeBounty,
   pilotName,
   pilotRisk,
+  pilotRiskRanked,
   pilotRunIncome,
   routeDistance,
   routeProfit,
@@ -1328,6 +1329,39 @@ export function pilotCycleMs(
 }
 
 /**
+ * §120: СКОЛЬКО ВСТРЕЧ ПРИВЕЗЁТ РЕЙС ПИЛОТА.
+ *
+ * Пользователь: «можно ли применить формулу игрока к ним? то есть как если
+ * бы мы сами летели по этому маршруту». Ответ — да, и считается она ровно
+ * так же, как `nextEncounterAt`: первая встреча в середине перелёта, дальше
+ * по одной каждые `ENCOUNTER_PERIOD_MS / encounterRate` РЕАЛЬНОГО времени.
+ *
+ * Ключевое решение: у пилота это БАЗОВОЕ время, то есть как полёт на ×1.
+ * Пилот и так живёт в базовом времени — его цикл считается через
+ * `baseJumpDuration` без темпа, — поэтому «как если бы летели сами» для
+ * него означает медленный, честный полёт, а не пятисекундный прыжок на
+ * ×200. На ×200 пол флота давал бы ровно две встречи за рейс на любом
+ * маршруте, и расстояние перестало бы что-либо значить.
+ *
+ * Пол (одна встреча за перелёт) сохранён от игрока: даже на ближнем
+ * маршруте пилот кого-то встречает.
+ */
+export function pilotEncounters(
+  state: GameState,
+  pilot: Pilot,
+  settings: Settings = DEFAULT_SETTINGS,
+): number {
+  if (!pilot.route) return 0;
+  if (settings.encounterRate <= 0) return 0;
+  const systems = systemsOf(state.galaxy);
+  const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
+  const period = ENCOUNTER_PERIOD_MS / settings.encounterRate;
+  // Первая встреча — в середине пути, дальше по периоду; пол — одна за плечо.
+  const perLeg = 1 + Math.floor((flight / 2) / period);
+  return perLeg * 2;
+}
+
+/**
  * §108: надзор всех систем с учётом ваших полицейских.
  *
  * Возвращает массив длиной в галактику; база — правительство системы,
@@ -1529,12 +1563,25 @@ function accrueFleet(
      * его же участием — иначе он сам себе снижал бы риск, просто встав на
      * дежурство. И карточка, и досчёт считают одинаково.
      */
-    const risk = pilotRisk(
-      pilot.role,
-      lane,
-      pilot.role === 'police' ? systems[pilot.route.to].government : surv[pilot.route.to],
+    const risk = pilotRiskRanked(
+      pilotRisk(
+        pilot.role,
+        lane,
+        pilot.role === 'police' ? systems[pilot.route.to].government : surv[pilot.route.to],
+      ),
+      pilot.runs,
     );
     const wage = pilot.id - 1;
+    /*
+     * §120: РЕЙС — ЭТО СТОЛЬКО ВСТРЕЧ, СКОЛЬКО НАБРАЛОСЬ БЫ У ИГРОКА.
+     *
+     * Риск за рейс делится на число встреч, и кубик бросается на каждой:
+     * ожидание провала остаётся тем же (дальний маршрут не становится в
+     * десять раз смертельнее), но плотность событий — как в живом полёте.
+     * Пилот с рангом бросает по уже уменьшенным шансам.
+     */
+    const enc = Math.max(1, pilotEncounters(state, pilot, settings));
+    const perEnc = (chance: number): number => Math.min(1, chance / enc);
 
     /*
      * Выручка рейса считается один раз: и у торговца, и у контрабандиста,
@@ -1558,48 +1605,64 @@ function accrueFleet(
 
     for (let i = 0; i < count; i++) {
       if (pilot.role === 'pirate') {
-        if (draw() < risk.police) {
+        let caught = false;
+        let beaten = false;
+        for (let e = 0; e < enc; e++) {
+          if (draw() < perEnc(risk.police)) { caught = true; break; }
+          if (draw() < perEnc(risk.damage)) { beaten = true; break; }
+        }
+        if (caught) {
           failures++;
           lost = true;
           break;
         }
-        if (draw() < risk.damage) {
+        if (beaten) {
           failures++;
           cash -= Math.round(shipPrice(pilot.ship) * PIRATE_REPAIR_SHARE);
           continue;
         }
+        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
         runs++;
-        gained += pilotRunIncome(gross, wage);
         legal = Math.min(255, legal + PIRATE_LEGAL_PER_RUN);
         continue;
       }
 
       if (pilot.role === 'police') {
-        if (draw() < risk.death) {
+        let died = false;
+        let beaten = false;
+        for (let e = 0; e < enc; e++) {
+          if (draw() < perEnc(risk.death)) { died = true; break; }
+          if (draw() < perEnc(risk.beaten)) { beaten = true; break; }
+        }
+        if (died) {
           failures++;
           lost = true;
           break;
         }
-        if (draw() < risk.beaten) {
+        if (beaten) {
           failures++;
           cash -= Math.round(shipPrice(pilot.ship) * POLICE_REPAIR_SHARE);
           continue;
         }
+        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
         runs++;
-        gained += pilotRunIncome(gross, wage);
         continue;
       }
 
       if (pilot.role === 'smuggler') {
-        if (draw() < risk.inspect) {
+        let inspected = false;
+        for (let e = 0; e < enc; e++) {
+          if (draw() < perEnc(risk.inspect)) { inspected = true; break; }
+        }
+        if (inspected) {
           failures++;
-          gained += pilotRunIncome(legalOnly, wage);
+          gained += pilotRunIncome(legalOnly, wage, pilot.runs + runs);
           cash -= SMUGGLER_FINE;
           legal = Math.min(255, legal + SMUGGLER_LEGAL);
           continue;
         }
+        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
         runs++;
-        gained += pilotRunIncome(gross, wage);
         continue;
       }
 
@@ -1608,18 +1671,22 @@ function accrueFleet(
        * концов маршрута под охраной вашего полицейского, налёт может быть
        * отбит (§108) — и тогда рейс проходит как обычный.
        */
-      if (draw() < risk.raid) {
+      let raided = false;
+      for (let e = 0; e < enc; e++) {
+        if (draw() < perEnc(risk.raid)) { raided = true; break; }
+      }
+      if (raided) {
         const watched = guarded.has(pilot.route.from) || guarded.has(pilot.route.to);
         if (watched && draw() < POLICE_INTERCEPT) {
+          gained += pilotRunIncome(gross, wage, pilot.runs + runs);
           runs++;
-          gained += pilotRunIncome(gross, wage);
           continue;
         }
         failures++;
         continue;
       }
+      gained += pilotRunIncome(gross, wage, pilot.runs + runs);
       runs++;
-      gained += pilotRunIncome(gross, wage);
     }
 
     done += runs;

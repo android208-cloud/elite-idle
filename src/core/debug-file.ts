@@ -22,12 +22,21 @@ import { SAVE_FILE_APP, SAVE_FILE_VERSION, summarize, type SaveSummary } from '.
 import {
   laneSurveillance,
   pilotRisk,
+  pilotRankName,
+  pilotRiskRanked,
   pilotRunIncome,
   routeDistance,
   routeProfit,
 } from './fleet.ts';
 import { SHIPS } from './ships.ts';
-import { pilotCycleMs, SAVE_VERSION, systemsOf, type GameState, type Settings } from './state.ts';
+import {
+  pilotCycleMs,
+  pilotEncounters,
+  SAVE_VERSION,
+  systemsOf,
+  type GameState,
+  type Settings,
+} from './state.ts';
 
 /** Среда, в которой шла игра. Собирается вызывающим (UI), не этим модулем. */
 export interface DebugEnv {
@@ -59,6 +68,10 @@ export interface PilotDiagnostics {
   nextRunAt: string | null;
   runs: number;
   failures: number;
+  /** §120: ранг пилота — та же лестница, что у игрока, но по рейсам. */
+  rank: string;
+  /** §120: сколько встреч пилот переживает за один рейс. */
+  encounters: number;
   /** Ваша доля за один рейс, десятые кредита. */
   income: number;
   /** Шансы по текущему маршруту, доли (0.01 = 1%). */
@@ -127,10 +140,13 @@ export function buildDebugFile(
         ? systems[route.to].government
         : laneSurveillance(systems, route)
       : 0;
-    const risk = route ? { ...pilotRisk(p.role, lane, destSurv) } : null;
+    // §120: и риск, и доход — с поправкой на ранг, как в досчёте.
+    const risk = route ? { ...pilotRiskRanked(pilotRisk(p.role, lane, destSurv), p.runs) } : null;
     const index = Math.max(0, state.pilots.indexOf(p));
     const hold = SHIPS[p.ship]?.hold ?? 0;
-    const income = route ? pilotRunIncome(routeProfit(state.galaxy, systems, route, hold, p.role), index) : 0;
+    const income = route
+      ? pilotRunIncome(routeProfit(state.galaxy, systems, route, hold, p.role), index, p.runs)
+      : 0;
     return {
       id: p.id,
       name: p.name,
@@ -141,6 +157,8 @@ export function buildDebugFile(
       nextRunAt: p.nextRunAt ? new Date(p.nextRunAt).toISOString() : null,
       runs: p.runs,
       failures: p.failures,
+      rank: pilotRankName(p.runs),
+      encounters: pilotEncounters(state, p, settings),
       income,
       risk,
     };

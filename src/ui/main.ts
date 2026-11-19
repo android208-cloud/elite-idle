@@ -61,6 +61,7 @@ import {
   hirePilot,
   assignPilotRoute,
   pilotCycleMs,
+  pilotEncounters,
   pilotRouteProfit,
   surveillanceMap,
   type PilotError,
@@ -81,8 +82,14 @@ import {
   PILOT_MIN_KILLS,
   pirateLoot,
   POLICE_SURVEILLANCE_BONUS,
+  pilotRank,
+  pilotRankName,
   pilotRisk,
+  pilotRiskRanked,
   pilotRunIncome,
+  PILOT_RANK_INCOME,
+  PILOT_RANK_RISK,
+  PILOT_RANK_RUNS,
   PILOT_ROLE_NAMES,
   routeDistance,
   routeProfit,
@@ -2080,7 +2087,7 @@ function fleetTotals(): { count: number; inRoute: number; perHour: number; earne
   for (const p of state.pilots) {
     const cycle = pilotCycleMs(state, p, settings);
     if (cycle <= 0) continue;
-    const income = pilotRunIncome(pilotRouteProfit(state, p), p.id - 1);
+    const income = pilotRunIncome(pilotRouteProfit(state, p), p.id - 1, p.runs);
     perHour += Math.round(income / (cycle / 3_600_000) / 10);
     inRoute++;
   }
@@ -2149,7 +2156,7 @@ function pilotsScreen(): string {
   const cards = state.pilots.map((p) => {
     const cycle = pilotCycleMs(state, p, settings);
     const profit = pilotRouteProfit(state, p);
-    const income = pilotRunIncome(profit, p.id - 1);
+    const income = pilotRunIncome(profit, p.id - 1, p.runs);
     // `income` — в десятых кредита, как вся экономика; в час показываем
     // целые кредиты, иначе на экране было бы «490 CR/ч» вместо 49.
     const perHour = cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0;
@@ -2173,6 +2180,7 @@ function pilotsScreen(): string {
            ${stat('В час', `${perHour} CR`)}
          </div>
          <div class="sub" style="margin-top:8px">${risksLine(p.role, p, systems)}</div>
+         <div class="sub">${rankLine(p)} · встреч за рейс ${pilotEncounters(state, p, settings)}</div>
          <div class="sub">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
       : '<div class="sub" style="margin-top:10px">Маршрут не задан — корабль стоит в ангаре</div>';
 
@@ -2294,14 +2302,14 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
           ? policeBounty(systems[o.i].government)
           : routeProfit(state.galaxy, systems, route, spec.hold, role);
       const cycle = pilotCycleMs(state, { ...pilot, route }, settings);
-      const income = pilotRunIncome(gross, pilot.id - 1);
+      const income = pilotRunIncome(gross, pilot.id - 1, pilot.runs);
       // Полицейский рискует по беззаконию системы, а не по надзору с его же
       // участием — ровно так же считает и `accrueFleet`.
-      const risk = pilotRisk(
+      const risk = pilotRiskRanked(pilotRisk(
         role,
         (surv[route.from] + surv[route.to]) / 2,
         role === 'police' ? systems[o.i].government : surv[o.i],
-      );
+      ), pilot.runs);
       return {
         ...o,
         perHour: cycle > 0 ? Math.round(income / (cycle / 3_600_000) / 10) : 0,
@@ -2344,6 +2352,24 @@ function pct(x: number): string {
   return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)}%`;
 }
 
+/**
+ * §120: строка ранга в карточке пилота.
+ *
+ * Ранг — это не только титул: он даёт +4% выручки и −5% риска за ступень,
+ * поэтому рядом с именем стоит и цена ступени. И до следующего ранга —
+ * чтобы было видно, растёт пилот или стоит.
+ */
+function rankLine(p: Pilot): string {
+  const rank = pilotRank(p.runs);
+  const name = pilotRankName(p.runs);
+  const next = PILOT_RANK_RUNS[rank + 1];
+  const bonus = `+${Math.round(PILOT_RANK_INCOME * rank * 100)}% дохода, −${Math.round(PILOT_RANK_RISK * rank * 100)}% риска`;
+  const left = next === undefined
+    ? 'предел'
+    : `до «${pilotRankName(next)}» ${next - p.runs} ${next - p.runs === 1 ? 'рейс' : 'рейса'}`;
+  return `Ранг: <b>${name}</b> · ${bonus} · ${left}`;
+}
+
 /** Риски роли одной строкой — то, что игрок читает ПЕРЕД назначением. */
 function riskLabel(role: PilotRole, risk: ReturnType<typeof pilotRisk>): string {
   if (role === 'pirate') return `перехват ${pct(risk.police)} · трепка ${pct(risk.damage)}`;
@@ -2356,11 +2382,11 @@ function riskLabel(role: PilotRole, risk: ReturnType<typeof pilotRisk>): string 
 function risksLine(role: PilotRole, pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
   if (!pilot.route) return '';
   const surv = surveillanceMap(state);
-  const risk = pilotRisk(
+  const risk = pilotRiskRanked(pilotRisk(
     role,
     (surv[pilot.route.from] + surv[pilot.route.to]) / 2,
     role === 'police' ? systems[pilot.route.to].government : surv[pilot.route.to],
-  );
+  ), pilot.runs);
   return riskLabel(role, risk);
 }
 

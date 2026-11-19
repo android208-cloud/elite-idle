@@ -21,6 +21,7 @@ import {
   hirePilot,
   newGame,
   pilotCycleMs,
+  pilotEncounters,
   pilotRouteProfit,
   serialize,
   systemsOf,
@@ -37,7 +38,13 @@ import {
   formatSpan,
   laneSurveillance,
   pirateLoot,
+  pilotRank,
+  pilotRankName,
   pilotRisk,
+  pilotRiskRanked,
+  PILOT_RANK_INCOME,
+  PILOT_RANK_RISK,
+  PILOT_RANK_RUNS,
   policeBounty,
   pilotRunIncome,
   pilotWageShare,
@@ -61,6 +68,19 @@ const hired = (model: 'adder' | 'cobra3' = 'adder', cash = 200_000): GameState =
   const r = hirePilot(veteran(cash), model, 1_000_000);
   assert.equal(r.error, undefined);
   return r.state;
+};
+
+/**
+ * §120: сумма дохода за N рейсов С НАДБАВКОЙ ЗА РАНГ.
+ *
+ * Рейс, который пилот делает, будучи «Безобидным», платит как раньше, а
+ * двухсотый — уже с надбавкой. Поэтому проверки «деньги = рейсы × ставка»
+ * считают сумму по ступеням, а не одно умножение.
+ */
+const rankedIncome = (profit: number, runs: number): number => {
+  let sum = 0;
+  for (let k = 0; k < runs; k++) sum += pilotRunIncome(profit, 0, k);
+  return sum;
 };
 
 describe('§105 наём', () => {
@@ -213,7 +233,7 @@ describe('§105 цикл и деньги', () => {
     // §107: часть рейсов может отнять пират, поэтому считаем не удачу, а
     // инвариант: всего рейсов ровно по циклу, а деньги — по удачным.
     assert.equal(p.runs + p.failures, 8);
-    assert.equal(r.state.cash - cash0, p.runs * 384);
+    assert.equal(r.state.cash - cash0, rankedIncome(512, p.runs));
     assert.ok(r.events.some((e) => e.type === 'fleet'), 'в журнале есть строка флота');
   });
 
@@ -223,7 +243,7 @@ describe('§105 цикл и деньги', () => {
     const r = advance(s, 1_000_000 + 30 * 24 * HOUR, DEFAULT_SETTINGS);
     const [p] = r.state.pilots;
     assert.ok(p.runs > 200 && p.runs + p.failures < 300, `рейсов за 30 суток: ${p.runs + p.failures}`);
-    assert.equal(r.state.cash - cash0, p.runs * 384);
+    assert.equal(r.state.cash - cash0, rankedIncome(512, p.runs));
   });
 
   it('§114: доход флота копится в статистике — ровно то, что пришло на счёт', () => {
@@ -232,9 +252,9 @@ describe('§105 цикл и деньги', () => {
     const stats0 = s.stats.pilotIncome;
     const r = advance(s, 1_000_000 + 24 * HOUR, DEFAULT_SETTINGS);
     const [p] = r.state.pilots;
-    assert.equal(r.state.cash - cash0, p.runs * 384);
+    assert.equal(r.state.cash - cash0, rankedIncome(512, p.runs));
     // В статистике — ВАША доля, та же сумма, а не выручка целиком.
-    assert.equal(r.state.stats.pilotIncome - stats0, p.runs * 384);
+    assert.equal(r.state.stats.pilotIncome - stats0, rankedIncome(512, p.runs));
   });
 
   it('§114: без рейсов доход флота не растёт', () => {
@@ -395,6 +415,12 @@ describe('§107 что из этого следует в игре', () => {
 
   it('контрабандиста ловят на досмотре: штраф и розыск', () => {
     const s = onRoute(DICTATORS.from, DICTATORS.to, 'smuggler');
+    /*
+     * §120: пилот уже «ЭЛИТА» (300 рейсов), чтобы надбавка за ранг не
+     * менялась от рейса к рейсу и ожидание считалось одним умножением.
+     * Иначе пришлось бы повторять в тесте весь путь ступеней.
+     */
+    s.pilots[0].runs = 300;
     const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
     const [p] = r.state.pilots;
     assert.ok(p.failures > 0, 'досмотры случались');
@@ -402,7 +428,12 @@ describe('§107 что из этого следует в игре', () => {
     // На досмотре теряется запрещёнка: за удачный рейс платят 139.2 CR,
     // за пойманный — только законную часть (38.4) минус штраф 100 CR.
     const cash0 = s.cash;
-    assert.equal(r.state.cash - cash0, p.runs * 1392 + p.failures * (384 - 1000));
+    // Выручка рейса контрабандиста — 185.6 CR (с запрещёнкой), законная
+    // часть — 51.2 CR; вам с них 75%, и обе суммы уже с надбавкой «ЭЛИТЫ».
+    const ok = pilotRunIncome(1856, 0, 300);
+    const onlyLegal = pilotRunIncome(512, 0, 300);
+    assert.equal(r.state.cash - cash0, (p.runs - 300) * ok + p.failures * (onlyLegal - 1000),
+      'рейсов у пилота 300 было до теста — считаем только новые');
   });
 
   /*
@@ -523,6 +554,105 @@ describe('§108 полицейский', () => {
      * Награда 40 CR, пилоту четверть: 30 CR за рейс. Провал — это трепка:
      * ремонт в четверть цены Аддера (250 CR), поэтому считаем и его.
      */
-    assert.equal(r.state.cash - cash0, p.runs * 300 - p.failures * 2500);
+    assert.equal(r.state.cash - cash0, rankedIncome(400, p.runs) - p.failures * 2500);
+  });
+});
+
+describe('§120 ранги пилота', () => {
+  /*
+   * Пользователь: «ранги пилота — такие же, как у нас (дань игре)».
+   * Значит, имена — из общей таблицы `RANKS`, а ключ другой: не убийства,
+   * а рейсы. Иначе до ЭЛИТЫ было бы 6400 рейсов, то есть два года.
+   */
+  it('имена — те же, что у игрока, порядок тот же', () => {
+    assert.equal(pilotRankName(0), 'Безобидный');
+    assert.equal(pilotRankName(1), 'Почти безобидный');
+    assert.equal(pilotRankName(2), 'Слабый');
+    assert.equal(pilotRankName(4), 'Средний');
+    assert.equal(pilotRankName(8), 'Выше среднего');
+    assert.equal(pilotRankName(16), 'Опытный');
+    assert.equal(pilotRankName(32), 'Опасный');
+    assert.equal(pilotRankName(64), 'Смертельный');
+    assert.equal(pilotRankName(128), 'ЭЛИТА');
+    assert.equal(pilotRankName(500), 'ЭЛИТА', 'потолок один');
+  });
+
+  it('пороги — по рейсам, ступень между ними', () => {
+    assert.deepEqual([...PILOT_RANK_RUNS], [0, 1, 2, 4, 8, 16, 32, 64, 128]);
+    assert.equal(pilotRank(0), 0);
+    assert.equal(pilotRank(3), 2, 'три рейса — уже «Слабый», четвёртого ещё нет');
+    assert.equal(pilotRank(128), 8);
+  });
+
+  it('ранг повышает выручку рейса', () => {
+    assert.equal(pilotRunIncome(1000, 0, 0), 750, 'новичок — четверть пилоту, как раньше');
+    // 16 рейсов — это уже «Опытный», пятая ступень: +20%.
+    assert.equal(pilotRunIncome(1000, 0, 16), Math.round(750 * 1.2), '+20% к «Опытному»');
+    assert.equal(pilotRunIncome(1000, 0, 1), Math.round(750 * 1.04), '+4% со второго рейса');
+    assert.equal(pilotRunIncome(1000, 0, 128), Math.round(750 * 1.32), 'ЭЛИТА: +32%');
+    assert.ok(pilotRunIncome(1000, 0, 128) > pilotRunIncome(1000, 0, 127));
+    assert.equal(PILOT_RANK_INCOME, 0.04);
+  });
+
+  it('ранг снижает риск', () => {
+    const base = pilotRisk('pirate', 4, 2);
+    const pro = pilotRiskRanked(base, 128);
+    assert.ok(Math.abs(pro.police - base.police * 0.6) < 1e-12, '−5% за ступень, восемь ступеней — −40%');
+    assert.ok(Math.abs(pro.damage - base.damage * 0.6) < 1e-12);
+    assert.equal(PILOT_RANK_RISK, 0.05);
+    // Новичок ничего не получает: поправка ровно 1.
+    assert.deepEqual(pilotRiskRanked(base, 0), base);
+  });
+
+  it('ранг растёт от рейсов, а не от денег', () => {
+    const s = onRoute(DICTATORS.from, DICTATORS.to, 'trader');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    assert.ok(p.runs >= 128, `рейсов за месяц: ${p.runs}`);
+    assert.equal(pilotRankName(p.runs), 'ЭЛИТА');
+  });
+});
+
+describe('§120 встречи пилота', () => {
+  /*
+   * Пользователь: «можно ли применить формулу игрока к ним? то есть как
+   * если бы мы сами летели по этому маршруту». Формула игрока — первая
+   * встреча в середине перелёта, дальше по одной каждые
+   * `ENCOUNTER_PERIOD_MS / encounterRate`. У пилота это БАЗОВОЕ время.
+   */
+  it('считаются как у игрока: пол за плечо плюс по периоду', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    // 4.4 св. г. — 25 минут базового полёта, период 120 секунд: 7 встреч
+    // за плечо, значит 14 за рейс туда-обратно.
+    assert.equal(pilotEncounters(s, s.pilots[0]), 14);
+  });
+
+  it('дальше — больше встреч', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const far = { ...s, pilots: [{ ...s.pilots[0], route: { from: LAVE, to: s.pilots[0].route!.to } }] };
+    assert.ok(pilotEncounters(s, s.pilots[0]) > 2 * 1, 'без пола было бы меньше');
+    assert.ok(pilotEncounters(far, far.pilots[0]) >= pilotEncounters(s, s.pilots[0]));
+  });
+
+  it('частота встреч из настроек работает и здесь', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const often = { ...DEFAULT_SETTINGS, encounterRate: 2 };
+    const never = { ...DEFAULT_SETTINGS, encounterRate: 0 };
+    assert.equal(pilotEncounters(s, s.pilots[0], often), 26, 'вдвое плотнее — вдвое больше');
+    assert.equal(pilotEncounters(s, s.pilots[0], never), 0, '«нет встреч» выключает их и пилоту');
+  });
+
+  it('встречи не меняют ожидание провала за рейс', () => {
+    /*
+     * Риск делится на число встреч, поэтому месяц на одном и том же
+     * маршруте даёт примерно то же число провалов, что и до §120. Полоса
+     * широкая: это случайность, а не формула, — но выброс в десять раз
+     * такая проверка поймает.
+     */
+    const s = onRoute(ANARCHY.from, ANARCHY.to, 'trader');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    const total = p.runs + p.failures;
+    assert.ok(p.failures / total < 0.2, `провалов ${p.failures} из ${total}`);
   });
 });

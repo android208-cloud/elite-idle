@@ -34,7 +34,7 @@
 import { isContraband } from './cargo-canisters.ts';
 import { distance, type StarSystem } from './galaxy.ts';
 import { generateMarket, TONNE_MAX_INDEX } from './market.ts';
-import type { ShipId } from './ships.ts';
+import { RANK_NAMES, type ShipId } from './ships.ts';
 
 /** Задаток при найме, в десятых кредита: 500 CR. */
 export const PILOT_HIRE_FEE = 5000;
@@ -252,6 +252,72 @@ export interface Pilot {
   failures: number;
 }
 
+/* ---------- §120: ранги пилота ---------- */
+
+/**
+ * РАНГ ПИЛОТА — ТА ЖЕ ЛЕСТНИЦА, ЧТО У ИГРОКА, НО СЧИТАЕТСЯ ПО РЕЙСАМ.
+ *
+ * Пользователь: «ранги пилота — такие же, как у нас (дань игре)». Имена
+ * берутся прямо из `RANKS` в `ships.ts` (Безобидный … ЭЛИТА), никакого
+ * второго списка тут нет.
+ *
+ * Пороги пришлось пересчитать, и вот почему. У игрока ключ — убийства, и до
+ * ЭЛИТЫ их 6400. Пилот за сутки делает около десяти рейсов, то есть 6400
+ * рейсов — это два года реального времени; при таком пороге ранги пилота
+ * существовали бы только в теории. Поэтому шаг лестницы — рейсы, а не
+ * убийства: 0 / 1 / 2 / 4 / 8 / 16 / 32 / 64 / 128. Форма сохранена
+ * (удвоение), смысл тоже: ЭЛИТА — талант, который растёт годами, просто
+ * здесь это две недели работы одного пилота с отдыхом 2 часа.
+ */
+export const PILOT_RANK_RUNS: readonly number[] = [0, 1, 2, 4, 8, 16, 32, 64, 128];
+
+/** Прибавка к выручке рейса за каждый ранг: +4% (ЭЛИТА +32%). */
+export const PILOT_RANK_INCOME = 0.04;
+
+/** Снижение риска за каждый ранг: −5% (ЭЛИТА −40%). */
+export const PILOT_RANK_RISK = 0.05;
+
+/** Номер ранга по числу удачных рейсов, 0..8. */
+export function pilotRank(runs: number): number {
+  let rank = 0;
+  for (let i = 0; i < PILOT_RANK_RUNS.length; i++) if (runs >= PILOT_RANK_RUNS[i]) rank = i;
+  return rank;
+}
+
+/** Название ранга пилота — из общей таблицы. */
+export function pilotRankName(runs: number): string {
+  return RANK_NAMES[pilotRank(runs)] ?? RANK_NAMES[0];
+}
+
+/** Множитель выручки по рангу. */
+export function pilotSkillIncome(runs: number): number {
+  return 1 + PILOT_RANK_INCOME * pilotRank(runs);
+}
+
+/** Множитель риска по рангу: опытный пилот теряет реже. */
+export function pilotSkillRisk(runs: number): number {
+  return Math.max(0, 1 - PILOT_RANK_RISK * pilotRank(runs));
+}
+
+/**
+ * Риски с поправкой на ранг — то, что видит игрок и по чему считает досчёт.
+ *
+ * Отдельной функцией, а не внутри `pilotRisk`: `pilotRisk` описывает
+ * ЛИНИЮ (надзор, беззаконие), а ранг — ПИЛОТА. Смешав их, мы потеряли бы
+ * возможность показать риск маршрута до выбора пилота.
+ */
+export function pilotRiskRanked(risk: PilotRisk, runs: number): PilotRisk {
+  const k = pilotSkillRisk(runs);
+  return {
+    police: risk.police * k,
+    damage: risk.damage * k,
+    inspect: risk.inspect * k,
+    raid: risk.raid * k,
+    death: risk.death * k,
+    beaten: risk.beaten * k,
+  };
+}
+
 /** Доля n-го пилота (нумерация с нуля). */
 export function pilotWageShare(index: number): number {
   return Math.min(PILOT_MAX_WAGE, PILOT_WAGE + PILOT_WAGE_STEP * index);
@@ -350,13 +416,14 @@ export function routeDistance(systems: readonly StarSystem[], route: PilotRoute)
 }
 
 /**
- * Сколько пилоту платят за рейс: выручка минус его доля.
+ * Сколько пилоту платят за рейс: выручка минус его доля, плюс надбавка
+ * за ранг (§120). `runs` — сколько пилот уже отлетал: путь, а не убийства.
  *
  * Считается один раз на маршрут (выручка ровная), поэтому досчёт после
  * долгого отсутствия — это умножение, а не цикл по тысяче рейсов.
  */
-export function pilotRunIncome(profit: number, index: number): number {
-  return Math.round(profit * (1 - pilotWageShare(index)));
+export function pilotRunIncome(profit: number, index: number, runs = 0): number {
+  return Math.round(profit * (1 - pilotWageShare(index)) * pilotSkillIncome(runs));
 }
 
 /** Имена пилотов: имя и фамилия собираются из двух байтов. */

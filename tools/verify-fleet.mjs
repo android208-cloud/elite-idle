@@ -325,5 +325,67 @@ async function hangar(opts) {
   w.close();
 }
 
+
+/* ---------- §120: ранги пилота и встречи ---------- */
+/*
+ * Пользователь: «ранги пилота — такие же, как у нас», а встречи — «как если
+ * бы мы сами летели по этому маршруту». В карточке должны быть видны обе
+ * вещи: титул из общей таблицы, цена ступени и число встреч за рейс.
+ */
+{
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
+      route: { from: LAVE, to: REORTE },
+      nextRunAt: Date.now() + 3_600_000, role: 'trader', runs: 0, failures: 0,
+    }],
+    nextPilotId: 2,
+  });
+  const text = content(w);
+  check('§120: ранг пилота в карточке', /Ранг: Безобидный/.test(text), text.match(/Ранг: [^·]+/)?.[0] ?? '');
+  check('§120: цена ступени объяснена', /\+0% дохода, −0% риска/.test(text));
+  check('§120: до следующего ранга — один рейс', /до «Почти безобидный» 1 рейс/.test(text));
+  check('§120: встречи за рейс посчитаны', /встреч за рейс 14/.test(text),
+    text.match(/встреч за рейс \d+/)?.[0] ?? '');
+  check('§120: новичок получает обычную долю', /Вам38\.4 CR/.test(text),
+    text.match(/Вам[\d.]+ CR/)?.[0] ?? '');
+  w.close();
+}
+
+{
+  const w = await hangar({
+    pilots: [{
+      id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
+      route: { from: LAVE, to: REORTE },
+      nextRunAt: Date.now() + 3_600_000, role: 'trader', runs: 128, failures: 0,
+    }],
+    nextPilotId: 2,
+  });
+  const text = content(w);
+  check('§120: 128 рейсов — «ЭЛИТА»', /Ранг: ЭЛИТА/.test(text));
+  check('§120: надбавка +32%', /\+32% дохода, −40% риска/.test(text));
+  check('§120: доход вырос на треть', /Вам50\.7 CR/.test(text), text.match(/Вам[\d.]+ CR/)?.[0] ?? '');
+  check('§120: дальше расти некуда', /предел/.test(text));
+  w.close();
+}
+
+{
+  // Тот же пират, но с рангом: перехват реже — 4.5% против 2.7%.
+  const mkPirate = (runs) => ({
+    pilots: [{
+      id: 1, name: 'Рэй Дорн', ship: 'adder', home: LAVE,
+      route: { from: LAVE, to: REORTE },
+      nextRunAt: Date.now() + 3_600_000, role: 'pirate', runs, failures: 0,
+    }],
+    nextPilotId: 2,
+  });
+  const a = await hangar(mkPirate(0));
+  check('§120: у новичка перехват 4.5%', /перехват 4\.5%/.test(content(a)));
+  a.close();
+  const b = await hangar(mkPirate(128));
+  check('§120: у «ЭЛИТЫ» перехват 2.7%', /перехват 2\.7%/.test(content(b)));
+  b.close();
+}
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad > 0 ? 1 : 0);
