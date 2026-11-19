@@ -962,12 +962,30 @@ function mapScreen(): string {
       <div class="sub" style="margin-top:6px">В пути: ${fmtDur(jumpDuration(settings, d))}${settings.speed > 1 ? ` (при ×${settings.speed})` : ''}</div>
       ${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
   }
+  /*
+   * §112: расшифровка цветов маршрутов.
+   *
+   * Без неё цвет линии — загадка, а подписывать каждую линию именем
+   * пилота на карте нельзя: их 20, и они перекроют друг друга. Поэтому
+   * легенда одна на всех и только для тех ролей, что сейчас в рейсе.
+   * Пилоты без маршрута тоже видны здесь — иначе «нанял, а он не летит»
+   * выглядело бы поломкой.
+   */
+  const flying = state.pilots.filter((p) => p.route !== null);
+  const idle = state.pilots.length - flying.length;
+  const roles = [...new Set(flying.map((p) => p.role))];
+  const legend = roles.length
+    ? `<div class="sub" style="margin-top:6px">Маршруты пилотов: ${roles
+        .map((r) => `<span style="color:${PILOT_ROLE_CHART[r]}">${PILOT_ROLE_NAMES[r].toLowerCase()}</span>`)
+        .join(' · ')}${idle > 0 ? ` · без маршрута: ${idle}` : ''}</div>`
+    : '';
+
   // Две карты одна под другой: общая (вся галактика, горизонтальная)
   // и местная (окно вокруг корабля, крупно).
   return `<div class="card map-card">
       <h2>Галактика ${state.galaxy}</h2>
       <canvas id="map-overview"></canvas>
-      <div class="sub">Рамка — область местной карты ниже.</div>
+      <div class="sub">Рамка — область местной карты ниже.</div>${legend}
     </div>
     <div class="card map-card">
       <h2>Окрестности</h2>
@@ -1207,6 +1225,116 @@ function placeLabels(
  */
 const labelHit: WeakMap<HTMLCanvasElement, { box: { x1: number; y1: number; x2: number; y2: number }; index: number }[]> = new WeakMap();
 
+/**
+ * §112: цвет роли пилота на карте.
+ *
+ * Взят из палитры интерфейса, чтобы карта не заводила свой язык цветов:
+ * торговец — бирюзовый (как всё «ваше» и спокойное), контрабандист —
+ * янтарный (как предупреждения), пират — красный (как опасность),
+ * полицейский — голубой: единственный цвет вне палитры, и это
+ * намеренно, полиция не «вы» и не «опасность», она третий.
+ */
+const PILOT_ROLE_CHART: Record<PilotRole, string> = {
+  trader: '#4fd8c4',
+  smuggler: '#ffd37a',
+  pirate: '#ff8a80',
+  police: '#8fb6ff',
+};
+
+/** Сколько разных линий рисуем максимум: дальше карта превращается в паутину. */
+const MAX_ROUTE_LINES = 40;
+
+/**
+ * §112: маршруты пилотов на карте.
+ *
+ * Зачем на карте: маршрут пилота — это ПАРА СИСТЕМ, и спрашивают про него
+ * всегда одно и то же — «а где он летает?». В карточке пилота ответ есть,
+ * но его надо читать по строкам; на карте он виден сразу.
+ *
+ * Как читается:
+ *   - линия между двумя системами — маршрут, цвет — роль;
+ *   - кольцо вокруг системы — патруль (полицейский летает «в себя»,
+ *     линии у него нет и быть не может);
+ *   - линии, касающиеся выбранной (или текущей) системы, ярче прочих:
+ *     остальные — фон, чтобы 20 маршрутов не спорили с картой;
+ *   - несколько пилотов на одном маршруте — одна линия потолще, а не
+ *     пучок одинаковых.
+ */
+function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
+  const pilots = state.pilots ?? [];
+  if (!pilots.length) return;
+
+  const systems = systemsOf(state.galaxy);
+  const big = view.canvas.dataset.local === '1';
+
+  // Маршруты схлопываем: ключ — «откуда-куда-роль».
+  const lanes = new Map<string, { from: number; to: number; role: PilotRole; n: number }>();
+  for (const p of pilots) {
+    if (!p.route) continue; // без маршрута пилот стоит в ангаре
+    const { from, to } = p.route;
+    if (from >= systems.length || to >= systems.length) continue;
+    const key = `${from}-${to}-${p.role}`;
+    const lane = lanes.get(key);
+    if (lane) lane.n++;
+    else lanes.set(key, { from, to, role: p.role, n: 1 });
+  }
+  if (!lanes.size) return;
+
+  // Фокус — то, на что игрок сейчас смотрит: выбранная система, а если
+  // ничего не выбрано — та, где он стоит.
+  const focus = selected ?? state.system;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  let drawn = 0;
+  for (const lane of lanes.values()) {
+    if (drawn >= MAX_ROUTE_LINES) break;
+    const color = PILOT_ROLE_CHART[lane.role];
+    const touches = lane.from === focus || lane.to === focus;
+
+    if (lane.from === lane.to) {
+      // Патруль: система одна, поэтому кольцо, а не линия.
+      const sys = systems[lane.from];
+      if (!view.visible(sys)) continue;
+      const p = view.screenOf(sys.x, sys.y);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, big ? 11 : 7, 0, Math.PI * 2);
+      ctx.globalAlpha = touches ? 0.95 : 0.5;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = touches ? 2 : 1.4;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      drawn++;
+      continue;
+    }
+
+    const a = systems[lane.from];
+    const b = systems[lane.to];
+    const pa = view.screenOf(a.x, a.y);
+    const pb = view.screenOf(b.x, b.y);
+    /*
+     * На местной карте рисуем маршрут только целиком: оба конца в окне.
+     *
+     * Иначе через круг идут чужие линии, у которых ни начала, ни конца не
+     * видно, — они ничего не объясняют, а карту заслоняют. На общей карте
+     * видно всё, там `visible()` всегда истинно и проверка ничего не режет.
+     */
+    if (big && !(view.visible(a) && view.visible(b))) continue;
+
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.globalAlpha = touches ? 0.9 : 0.38;
+    ctx.strokeStyle = color;
+    // Толще, если на маршруте несколько пилотов: один маршрут — одна линия.
+    ctx.lineWidth = Math.min(3.5, (big ? 2 : 1.2) + (lane.n - 1) * 0.6);
+    ctx.stroke();
+    drawn++;
+  }
+  ctx.restore();
+}
+
 function drawSystems(
   ctx: CanvasRenderingContext2D,
   view: ChartView,
@@ -1298,6 +1426,8 @@ function drawMap(): void {
     const v = overviewView(overview);
     const ctx = prepareCanvas(v);
     if (ctx) {
+      // §112: маршруты пилотов — ПОД точками систем: точки важнее линий.
+      drawPilotRoutes(ctx, v);
       drawSystems(ctx, v, { labels: false });
 
       // Рамка местной карты — чтобы было видно, что именно крупно внизу.
@@ -1333,7 +1463,10 @@ function drawMap(): void {
   if (local) {
     const v = localView(local);
     const ctx = prepareCanvas(v);
-    if (ctx) drawSystems(ctx, v, { labels: true });
+    if (ctx) {
+      drawPilotRoutes(ctx, v);
+      drawSystems(ctx, v, { labels: true });
+    }
   }
 }
 
