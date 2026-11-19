@@ -1868,7 +1868,7 @@ function hangarScreen(): string {
       <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
     ${shipyardCard()}
-    ${pilotsCard()}
+    ${pilotsSummaryCard()}
     ${galacticCard()}`;
 }
 
@@ -1964,15 +1964,86 @@ function shipyardCard(): string {
  * До «Опытного» карточки нет вовсе: как и в рынке, недоступное скрыто, а
  * не подписано «заблокировано».
  */
-function pilotsCard(): string {
-  if (state.kills < PILOT_MIN_KILLS) return '';
+/**
+ * §115: сводные числа флота — по одному месту расчёта.
+ *
+ * Одни и те же цифры нужны и в карточке ангара, и в шапке экрана
+ * «Пилоты». Считать их дважды в двух местах — это гарантированное
+ * расхождение через месяц, поэтому считаем здесь.
+ */
+function fleetTotals(): { count: number; inRoute: number; perHour: number; earned: number } {
+  let perHour = 0;
+  let inRoute = 0;
+  for (const p of state.pilots) {
+    const cycle = pilotCycleMs(state, p);
+    if (cycle <= 0) continue;
+    const income = pilotRunIncome(pilotRouteProfit(state, p), p.id - 1);
+    perHour += Math.round(income / (cycle / 3_600_000) / 10);
+    inRoute++;
+  }
+  return {
+    count: state.pilots.length,
+    inRoute,
+    perHour,
+    earned: state.stats?.pilotIncome ?? 0,
+  };
+}
 
+/**
+ * §115: КАРТОЧКА-СВОДКА в ангаре.
+ *
+ * Раньше весь флот жил прямо в ангаре: список пилотов, наём, список
+ * маршрутов. На трёх-четырёх пилотах ангар превращался в простыню, и
+ * «а сколько у меня всего» приходилось складывать глазами.
+ *
+ * Теперь здесь только сводка и вход на отдельный экран «Пилоты»
+ * (карточка целиком — кнопка: палец должен попадать, а не искать
+ * мелкую надпись в углу).
+ */
+function pilotsSummaryCard(): string {
+  if (state.kills < PILOT_MIN_KILLS) return '';
+  const t = fleetTotals();
+
+  const body = t.count === 0
+    ? `<div class="sub">Пилот не нанят. Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему.</div>`
+    : `<div class="grid">
+        ${stat('Пилотов', String(t.count))}
+        ${stat('В рейсе', String(t.inRoute))}
+        ${stat('Доход в час', `${t.perHour} CR`)}
+      </div>
+      <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Один маршрут — один пилот.</div>`;
+
+  return `<div class="card" data-action="pilots-open" style="cursor:pointer">
+      <div class="row"><h2 style="margin:0">Пилоты</h2><span class="spacer"></span>
+        <span class="chip">${t.count === 0 ? 'никого' : `${t.inRoute} в рейсе`}</span></div>
+      ${body}
+      <div class="row" style="margin-top:12px">
+        <span class="muted">Пилотов ${t.count} · принесли ${cr(t.earned)}</span>
+        <span class="spacer"></span>
+        <button class="btn tonal" data-action="pilots-open">Все пилоты →</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * §115: экран «Пилоты».
+ *
+ * Каждый пилот — своя карточка, как товар в магазине: имя и корабль в
+ * заголовке, ниже три числа (рейс / вам / в час), риск и срок
+ * возвращения. Рядом — кнопка «маршрут», которая раскрывает тот же
+ * список направлений, что был в ангаре.
+ *
+ * Наём переехал сюда же: это часть флота, а не ангара. Иначе игрок
+ * искал бы «нанять» в одном месте, а «сменить маршрут» — в другом.
+ */
+function pilotsScreen(): string {
   const now = Date.now();
   const systems = systemsOf(state.galaxy);
   const docked = !state.flight;
   const economy = currentSystem(state).economy;
+  const t = fleetTotals();
 
-  const rows = state.pilots.map((p) => {
+  const cards = state.pilots.map((p) => {
     const cycle = pilotCycleMs(state, p);
     const profit = pilotRouteProfit(state, p);
     const income = pilotRunIncome(profit, p.id - 1);
@@ -1990,20 +2061,29 @@ function pilotsCard(): string {
       ? (p.role === 'police'
         ? `${PILOT_ROLE_NAMES[p.role]} · патруль ${systems[p.route.to].name}`
         : `${PILOT_ROLE_NAMES[p.role]} · ${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))}`)
-      : '';
+      : `${PILOT_ROLE_NAMES[p.role]} · без маршрута`;
 
-    const line = p.route
-      ? `<div class="muted">${where}</div>
-         <div class="muted">рейс ${cr(profit)} · вам ${cr(income)} (${perHour} CR/ч) · ${risksLine(p.role, p, systems)}</div>
-         <div class="muted">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
-      : '<div class="muted">Маршрут не задан — корабль стоит в ангаре</div>';
+    const body = p.route
+      ? `<div class="grid" style="margin-top:10px">
+           ${stat('Рейс', cr(profit))}
+           ${stat('Вам', cr(income))}
+           ${stat('В час', `${perHour} CR`)}
+         </div>
+         <div class="sub" style="margin-top:8px">${risksLine(p.role, p, systems)}</div>
+         <div class="sub">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
+      : '<div class="sub" style="margin-top:10px">Маршрут не задан — корабль стоит в ангаре</div>';
 
     const panel = routePilot === p.id ? pilotRoutePanel(p, systems) : '';
 
-    return `<div class="good-row" style="margin:10px 0"><div>
-        <div class="name">${p.name} · ${SHIPS[p.ship].name}${p.route ? ` · ${PILOT_ROLE_NAMES[p.role].toLowerCase()}` : ''}</div>${line}</div>
-        <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить' : 'Маршрут'}</button>
-      </div>${panel}`;
+    return `<div class="card">
+        <div class="row"><h2 style="margin:0">${p.name}</h2><span class="spacer"></span>
+          <span class="chip">${SHIPS[p.ship].name}</span></div>
+        <div class="sub" style="margin-top:2px">${where}</div>
+        ${body}
+        <div class="row" style="margin-top:12px"><span class="spacer"></span>
+          <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить маршрут' : 'Назначить маршрут'}</button>
+        </div>${panel}
+      </div>`;
   }).join('');
 
   let hire: string;
@@ -2030,11 +2110,24 @@ function pilotsCard(): string {
         <button class="btn text" data-action="pilot-hire-close">Свернуть</button></div>`;
   }
 
-  return `<div class="card"><h2>Пилоты</h2>
-      <div class="sub">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Рейс — настоящий перелёт туда и обратно плюс два часа отдыха. Один маршрут — один пилот.</div>
-      ${rows}
-      ${hire}</div>`;
+  return `<div class="card">
+      <div class="row"><button class="btn text" data-action="pilots-close">← Назад</button>
+        <span class="spacer"></span>
+        <span class="chip">${t.count} ${plural(t.count, 'пилот', 'пилота', 'пилотов')}</span></div>
+      <div class="grid" style="margin-top:12px">
+        ${stat('В рейсе', `${t.inRoute} из ${t.count}`)}
+        ${stat('Доход в час', `${t.perHour} CR`)}
+        ${stat('Принесли', cr(t.earned))}
+      </div>
+      <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Рейс — настоящий перелёт туда и обратно плюс два часа отдыха. Один маршрут — один пилот.</div>
+    </div>
+    ${cards}
+    <div class="card"><h2>Нанять пилота</h2>
+      <div class="sub">Пилот приходит со своим кораблём: цена = корабль + задаток ${cr(PILOT_HIRE_FEE)}.</div>
+      <div style="margin-top:12px">${hire}</div>
+    </div>`;
 }
+
 
 /**
  * Список маршрутов пилота: только то, куда хватает его бака.
@@ -2556,20 +2649,27 @@ function render(): void {
   // §113: экран отладки — поверх вкладки, но не поверх боя и обломков:
   // там идёт решение, и уводить с него нельзя.
   const showDev = devOpen && !inCombat && !inSalvage;
+  // §115: экран пилотов живёт только поверх ангара — уходя с вкладки, он
+  // закрывается (это делает обработчик вкладок), как и экран отладки.
+  const showPilots = pilotsOpen && !showDev && !inCombat && !inSalvage && tab === 'hangar';
   content.innerHTML = inCombat
     ? combatScreen()
     : inSalvage
       ? salvageScreen()
       : showDev
         ? devScreen()
-        : screens[tab]();
+        : showPilots
+          ? pilotsScreen()
+          : screens[tab]();
   document.getElementById('title')!.textContent = inCombat
     ? 'Бой'
     : inSalvage
       ? 'Обломки'
       : showDev
         ? 'Отладка'
-        : tabLabel(tab);
+        : showPilots
+          ? 'Пилоты'
+          : tabLabel(tab);
   topBar(inCombat || inSalvage);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
@@ -2625,6 +2725,15 @@ function render(): void {
  * «Назад», либо любой вкладкой — состояние экрана не переживает переход.
  */
 let devOpen = false;
+
+/**
+ * §115: экран «Пилоты» — отдельно от ангара.
+ *
+ * Та же схема, что у экрана отладки: не вкладка (их пять), а экран поверх
+ * ангара. Открывается карточкой-сводкой, закрывается «Назад» или любой
+ * вкладкой.
+ */
+let pilotsOpen = false;
 
 /** Строка-подтверждение на экране отладки (после скачивания лога). */
 let devNotice: { ok: boolean; text: string } | null = null;
@@ -2871,6 +2980,7 @@ function onAction(el: HTMLElement): void {
       if (blockedTabs().includes(want)) break;
       tab = want;
       devOpen = false; // §113: экран отладки закрывается любой вкладкой
+      pilotsOpen = false; // §115: экран пилотов — тоже
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
       // §105: то же для найма и открытого списка маршрутов.
@@ -3300,6 +3410,19 @@ function onAction(el: HTMLElement): void {
      * Отдельного пункта в нижней строке нет: пять вкладок — предел для
      * телефона (см. §98), и шестая сжала бы остальные.
      */
+    case 'pilots-open': {
+      pilotsOpen = true;
+      render();
+      break;
+    }
+    case 'pilots-close': {
+      pilotsOpen = false;
+      routePilot = null;
+      hireOpen = false;
+      hireShip = null;
+      render();
+      break;
+    }
     case 'dev-open': {
       devOpen = true;
       devNotice = null;

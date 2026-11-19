@@ -73,11 +73,22 @@ const saved = (w) => JSON.parse(JSON.parse(w.localStorage.getItem('elite-idle-sa
 const log = (w) => JSON.parse(w.localStorage.getItem('elite-idle-save-v1')).log ?? [];
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * §115: флот переехал с ангара на отдельный экран «Пилоты».
+ *
+ * Хелпер открывает и его: проверки про наём и маршруты работают с тем же
+ * набором кнопок, что и раньше, — поменялось только место.
+ */
 async function hangar(opts) {
   const w = boot(save(opts));
   await wait(900);
   click(w, tabBtn(w, 'hangar'));
   await wait(300);
+  const open = byAction(w, 'pilots-open');
+  if (open) {
+    click(w, open);
+    await wait(300);
+  }
   return w;
 }
 
@@ -98,6 +109,41 @@ async function hangar(opts) {
   check('доля объяснена: три четверти вам', /три четверти выручки — вам/.test(text));
   check('задаток назван: 500 CR', /задаток 500\.0 CR/.test(text));
   check('правило «один маршрут — один пилот» сказано', /Один маршрут — один пилот/.test(text));
+  w.close();
+}
+
+/* ---------- §115: сводка в ангаре и отдельный экран ---------- */
+{
+  const w = boot(save());
+  await wait(900);
+  click(w, tabBtn(w, 'hangar'));
+  await wait(300);
+
+  const hangarText = content(w);
+  check('в ангаре карточка-сводка', /Пилоты/.test(hangarText) && /Все пилоты →/.test(hangarText));
+  check('сводка говорит «никого»', /никого/.test(hangarText));
+  check('кнопки найма в ангаре нет', byAction(w, 'pilot-hire-open') === undefined);
+
+  click(w, byAction(w, 'pilots-open'));
+  await wait(300);
+  check('клик открывает экран «Пилоты»', w.document.getElementById('title').textContent === 'Пилоты');
+  check('на экране есть наём', byAction(w, 'pilot-hire-open') !== undefined);
+  check('и кнопка «Назад»', byAction(w, 'pilots-close') !== undefined);
+
+  click(w, byAction(w, 'pilots-close'));
+  await wait(300);
+  const back = w.document.getElementById('title').textContent;
+  check('«Назад» возвращает в ангар', back !== 'Пилоты' && byAction(w, 'pilots-open') !== undefined, back);
+
+  // Уход на другую вкладку закрывает экран: он живёт только над ангаром.
+  click(w, byAction(w, 'pilots-open'));
+  await wait(300);
+  click(w, tabBtn(w, 'map'));
+  await wait(300);
+  click(w, tabBtn(w, 'hangar'));
+  await wait(300);
+  check('вкладка закрывает экран пилотов', byAction(w, 'pilots-close') === undefined
+    && /Все пилоты →/.test(content(w)));
   w.close();
 }
 
@@ -136,9 +182,11 @@ async function hangar(opts) {
   check('карточка показывает маршрут', /LAVE → REORTE/.test(text2), text2.match(/LAVE → REORTE[^·]*/)?.[0] ?? '');
   // §107: торговец запрещёнку не берёт, поэтому его рейс — только законный
   // груз: 51.2 CR выручки, 38.4 CR вам.
-  check('показана выручка рейса', /рейс 51\.2 CR/.test(text2), text2.match(/рейс [\d.]+ CR/)?.[0] ?? '');
-  check('и ваша доля', /вам 38\.4 CR/.test(text2));
-  check('и доход в час целыми кредитами', /14 CR\/ч/.test(text2));
+  // §115: у пилота теперь своя карточка, поэтому подписи стали заголовками
+  // полей («Рейс», «Вам», «В час»), а не строчкой через точку.
+  check('показана выручка рейса', /Рейс\s*51\.2 CR/.test(text2), text2.match(/Рейс\s*[\d.]+ CR/)?.[0] ?? '');
+  check('и ваша доля', /Вам\s*38\.4 CR/.test(text2));
+  check('и доход в час целыми кредитами', /В час\s*14 CR/.test(text2), text2.match(/В час\s*[\d.]+ CR/)?.[0] ?? '');
   check('и время до возвращения', /Вернётся через/.test(text2));
   w.close();
 }
