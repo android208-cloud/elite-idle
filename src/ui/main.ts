@@ -2078,7 +2078,7 @@ function fleetTotals(): { count: number; inRoute: number; perHour: number; earne
   let perHour = 0;
   let inRoute = 0;
   for (const p of state.pilots) {
-    const cycle = pilotCycleMs(state, p);
+    const cycle = pilotCycleMs(state, p, settings);
     if (cycle <= 0) continue;
     const income = pilotRunIncome(pilotRouteProfit(state, p), p.id - 1);
     perHour += Math.round(income / (cycle / 3_600_000) / 10);
@@ -2147,7 +2147,7 @@ function pilotsScreen(): string {
   const t = fleetTotals();
 
   const cards = state.pilots.map((p) => {
-    const cycle = pilotCycleMs(state, p);
+    const cycle = pilotCycleMs(state, p, settings);
     const profit = pilotRouteProfit(state, p);
     const income = pilotRunIncome(profit, p.id - 1);
     // `income` — в десятых кредита, как вся экономика; в час показываем
@@ -2293,7 +2293,7 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
         : role === 'police'
           ? policeBounty(systems[o.i].government)
           : routeProfit(state.galaxy, systems, route, spec.hold, role);
-      const cycle = pilotCycleMs(state, { ...pilot, route });
+      const cycle = pilotCycleMs(state, { ...pilot, route }, settings);
       const income = pilotRunIncome(gross, pilot.id - 1);
       // Полицейский рискует по беззаконию системы, а не по надзору с его же
       // участием — ровно так же считает и `accrueFleet`.
@@ -2438,6 +2438,19 @@ function statsCard(): string {
  *  - выгрузка отладочного файла — полное состояние, настройки, журнал,
  *    среда браузера и расшифровка флота (`buildDebugFile`).
  */
+/** §119: варианты отдыха пилота — от 1 минуты до 3 часов, как просил пользователь. */
+const REST_CHOICES: [string, string][] = [
+  [String(1 * 60_000), '1 мин'],
+  [String(5 * 60_000), '5 мин'],
+  [String(10 * 60_000), '10 мин'],
+  [String(15 * 60_000), '15 мин'],
+  [String(30 * 60_000), '30 мин'],
+  [String(60 * 60_000), '1 час'],
+  [String(90 * 60_000), '1.5 часа'],
+  [String(120 * 60_000), '2 часа'],
+  [String(180 * 60_000), '3 часа'],
+];
+
 function devScreen(): string {
   const sizes = (() => {
     try {
@@ -2462,6 +2475,10 @@ function devScreen(): string {
       <div class="row" style="margin-top:10px"><label>Пилот на маршруте</label><span class="spacer"></span>
         ${select('devPilots', [['on', 'Показан'], ['off', 'Скрыт']], settings.devPilots ? 'on' : 'off')}</div>
       <div class="sub" style="margin:6px 0 4px">Пилот рисуется треугольником по ходу движения на МЕСТНОЙ карте (на общей карте метки не нужны: там им тесно); патрульный — кольцом вокруг системы.</div>
+      <h2 style="margin-top:16px">Экономика флота</h2>
+      <div class="row" style="margin-top:6px"><label>Отдых пилота</label><span class="spacer"></span>
+        ${select('pilotRestMs', REST_CHOICES, String(settings.pilotRestMs))}</div>
+      <div class="sub" style="margin:6px 0 4px">Отдых — главный тормоз флота: перелёт 2.6 св. г. занимает 18 минут, остальное — отдых. На карточке пилота видно «В час» и «Вернётся через»; после смены значения они пересчитываются сразу.</div>
       <div class="sub" style="margin-top:8px;color:var(--dim)">Пилотов: ${pilots.length}, из них в рейсе: ${withRoute}.</div>
     </div>
     <div class="card">
@@ -3767,8 +3784,30 @@ document.addEventListener('change', (ev) => {
     render();
     return;
   }
-  const numeric = ['speed', 'encounterTimeoutMs', 'encounterRate'].includes(key);
+  const numeric = ['speed', 'encounterTimeoutMs', 'encounterRate', 'pilotRestMs'].includes(key);
+  const before = settings;
   settings = { ...settings, [key]: numeric ? Number(el.value) : el.value };
+  /*
+   * §119: СМЕНА ОТДЫХА ПЕРЕСЧИТЫВАЕТ УЖЕ НАЗНАЧЕННЫЕ РЕЙСЫ.
+   *
+   * `nextRunAt` — абсолютное время, и без пересчёта новый отдых применился
+   * бы только после текущего рейса: поставил «1 минуту», а пилот ещё два
+   * часа летает по-старому. Сохраняем не время, а ДОЛЮ оставшегося цикла —
+   * тогда «вернётся через 40 минут» остаётся правдой и при смене отдыха.
+   */
+  if (key === 'pilotRestMs') {
+    const now = Date.now();
+    const pilots = state.pilots.map((p) => {
+      if (!p.route) return p;
+      const oldCycle = pilotCycleMs(state, p, before);
+      const newCycle = pilotCycleMs(state, p, settings);
+      if (oldCycle <= 0 || newCycle <= 0) return p;
+      const left = Math.max(0, p.nextRunAt - now);
+      return { ...p, nextRunAt: now + Math.round((left * newCycle) / oldCycle) };
+    });
+    state = { ...state, pilots };
+    addLog(`Отдых пилота: ${fmtDur(before.pilotRestMs)} → ${fmtDur(settings.pilotRestMs)}; рейсы пересчитаны`);
+  }
   save();
   // Смена темпа должна действовать сразу, не дожидаясь следующего тика:
   // пересчитываем полёт и перерисовываем экран в тот же момент.

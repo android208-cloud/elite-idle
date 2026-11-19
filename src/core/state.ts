@@ -201,6 +201,19 @@ export interface Settings {
   devRoutes: boolean;
   /** Рисовать на маршруте самого пилота — треугольником по ходу движения. */
   devPilots: boolean;
+  /**
+   * §119: отдых пилота между рейсами, миллисекунды (1 минута … 3 часа).
+   *
+   * Отдых — главный тормоз экономики флота: перелёт 2.6 св. г. занимает
+   * 18 минут, а отдых по умолчанию — два часа, то есть 87 % цикла. Раньше
+   * это была константа `PILOT_REST_MS`, и подобрать её можно было только
+   * правкой кода. Пользователь попросил вынести в настройки для
+   * разработчика — от 1 минуты до 3 часов.
+   *
+   * Живёт в `Settings`, поэтому старые сохранения получают значение по
+   * умолчанию (два часа) через `migrateSettings`, как и остальные поля.
+   */
+  pilotRestMs: number;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -240,6 +253,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
    */
   dockingModule: false,
   autoScoop: false,
+  /** §119: два часа — как было константой `PILOT_REST_MS` до выноса в настройки. */
+  pilotRestMs: PILOT_REST_MS,
   /**
    * §113: по умолчанию обе отладочные галочки ВКЛЮЧЕНЫ.
    *
@@ -1309,7 +1324,7 @@ export function pilotCycleMs(
   if (!pilot.route) return 0;
   const systems = systemsOf(state.galaxy);
   const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
-  return 2 * flight + PILOT_REST_MS;
+  return 2 * flight + settings.pilotRestMs;
 }
 
 /**
@@ -1428,7 +1443,7 @@ export function assignPilotRoute(
   );
   if (taken) return { state, error: 'taken' };
 
-  const cycle = 2 * baseJumpDuration(ly, settings) + PILOT_REST_MS;
+  const cycle = 2 * baseJumpDuration(ly, settings) + settings.pilotRestMs;
   /*
    * Роль ставится вместе с маршрутом: пират — это выбор, а не состояние,
    * в которое попадаешь случайно. Смена роли сбрасывает счётчик провалов:
@@ -1500,7 +1515,7 @@ function accrueFleet(
     const legalBefore = legal;
 
     const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
-    const cycle = 2 * flight + PILOT_REST_MS;
+    const cycle = 2 * flight + settings.pilotRestMs;
     if (cycle <= 0) {
       kept.push(pilot);
       continue;

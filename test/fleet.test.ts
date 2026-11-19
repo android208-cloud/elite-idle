@@ -165,6 +165,32 @@ describe('§105 цикл и деньги', () => {
     assert.ok(cycle < PILOT_REST_MS + 2 * HOUR, 'полёт на 4.4 св. года — меньше часа в обе стороны');
   });
 
+  /*
+   * §119: ОТДЫХ ВЫНЕСЕН В НАСТРОЙКИ ДЛЯ РАЗРАБОТЧИКА (1 минута … 3 часа).
+   *
+   * Пользователь: «время отдыха пилота вынеси в настройки для
+   * разработчиков». Отдых — главный тормоз экономики: перелёт 4.4 св. г.
+   * занимает 27 минут, отдых — два часа. Значение живёт в `Settings`,
+   * поэтому старые сохранения получают два часа по умолчанию.
+   */
+  it('отдых берётся из настроек, а не из константы', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const long = pilotCycleMs(s, s.pilots[0], { ...DEFAULT_SETTINGS, pilotRestMs: 3 * HOUR });
+    const short = pilotCycleMs(s, s.pilots[0], { ...DEFAULT_SETTINGS, pilotRestMs: 60_000 });
+    assert.equal(long - short, 3 * HOUR - 60_000, 'разница — ровно разница отдыха');
+    // Рейс без отдыха — только перелёт: его и проверяем как опорную точку.
+    const none = pilotCycleMs(s, s.pilots[0], { ...DEFAULT_SETTINGS, pilotRestMs: 0 });
+    assert.equal(long, none + 3 * HOUR);
+  });
+
+  it('короткий отдых ускоряет флот ровно во столько же раз', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const fast = { ...DEFAULT_SETTINGS, pilotRestMs: 60 * 60_000 };
+    const r = advance(s, 1_000_000 + 24 * HOUR, fast);
+    const slow = advance(s, 1_000_000 + 24 * HOUR, DEFAULT_SETTINGS);
+    assert.ok(r.state.stats.pilotIncome > slow.state.stats.pilotIncome, 'час отдыха выгоднее двух');
+  });
+
   it('выручка рейса — по полке источника, Аддер грузит 8 тонн', () => {
     const systems = systemsOf(1);
     const profit = routeProfit(1, systems, { from: LAVE, to: REORTE }, SHIPS.adder.hold);

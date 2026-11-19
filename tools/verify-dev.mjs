@@ -194,6 +194,45 @@ fillReset();
 await go('map');
 check('треугольников больше нет', markers().length === 0 && overviewMarkers().length === 0, String(markers().length));
 
+/* ---------- §119: отдых пилота ---------- */
+await go('log');
+click(d.querySelector('[data-action="dev-open"]'));
+await new Promise((r) => setTimeout(r, 250));
+const restOptions = (() => {
+  const sel = d.querySelector('select[data-action="setting"][data-key="pilotRestMs"]');
+  return sel ? [...sel.options] : null;
+})();
+check('§119: в отладке есть отдых пилота', Boolean(restOptions));
+check('§119: от 1 минуты до 3 часов', restOptions
+  && restOptions[0].textContent === '1 мин' && restOptions[restOptions.length - 1].textContent === '3 часа',
+  restOptions ? `${restOptions[0].textContent} … ${restOptions[restOptions.length - 1].textContent}` : '');
+
+// Сколько пилоту осталось до возвращения — до смены отдыха.
+const leftBefore = (() => {
+  const raw = JSON.parse(w.localStorage.getItem('elite-idle-save-v1'));
+  const st = JSON.parse(raw.state);
+  return st.pilots[0].nextRunAt - Date.now();
+})();
+await setSelect('pilotRestMs', String(60 * 60_000));
+const restStored = JSON.parse(w.localStorage.getItem('elite-idle-save-v1'));
+check('§119: час отдыха сохранён', restStored.settings.pilotRestMs === 3_600_000, String(restStored.settings.pilotRestMs));
+check('§119: смена записана в журнал', /Отдых пилота: 2 ч → 1 ч/.test(d.getElementById('content').textContent)
+  || /Отдых пилота: 2 ч → 1 ч/.test(JSON.stringify(restStored.log)),
+  JSON.stringify(restStored.log?.[0]?.text ?? '').slice(0, 60));
+
+const leftAfter = (() => {
+  const st = JSON.parse(JSON.parse(w.localStorage.getItem('elite-idle-save-v1')).state);
+  return st.pilots[0].nextRunAt - Date.now();
+})();
+// Пересчёт по доле цикла: отдых 2 ч → 1 ч сокращает остаток примерно на треть
+// (цикл 2.84 ч → 1.84 ч). Точные числа зависят от расстояния, поэтому
+// проверяем порядок: остаток стал заметно меньше, но не обнулился.
+check('§119: назначенные рейсы пересчитаны', leftAfter > 0 && leftAfter < leftBefore,
+  `${Math.round(leftBefore / 60000)} мин → ${Math.round(leftAfter / 60000)} мин`);
+
+// Возвращаем два часа: дальше проверяется лог, а он пишет настройки.
+await setSelect('pilotRestMs', String(120 * 60_000));
+
 /* ---------- возврат и лог ---------- */
 await go('log');
 click(d.querySelector('[data-action="dev-open"]'));
