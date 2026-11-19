@@ -84,6 +84,28 @@ describe('§79: режим пиратства', () => {
     assert.equal(r.state.legal, Math.min(255, 60 + POLICE_KILL_LEGAL), 'статус вырос сильнее');
   });
 
+  /*
+   * §118: ЦЕНА ПОЛИЦЕЙСКОГО — В ЖУРНАЛЕ.
+   *
+   * Пользователь получил «пиратство во время патруля» и не понял откуда:
+   * автобой сбил семь Viper'ов по +64, а журнал писал только «Автобой:
+   * Viper уничтожен». Теперь каждая такая победа говорит, сколько
+   * прибавилось и каким стал статус.
+   */
+  it('убийство полицейского пишет цену в журнал', () => {
+    const r = encounter(60, 'police', 'viper', 'attack');
+    const note = r.events.find((e) => e.type === 'legal');
+    assert.ok(note, 'есть событие о статусе');
+    assert.match(note!.text, /розыск \+64 → 124/);
+    assert.match(note!.text, /Беглец/);
+  });
+
+  it('грабёж торговца тоже называет статус', () => {
+    const r = encounter(60, 'trader', 'cobra3', 'attack');
+    const raided = r.events.find((e) => e.type === 'raided');
+    assert.match(raided!.text, /розыск 92/);
+  });
+
   it('чистый пилот полицию не трогает', () => {
     const r = encounter(0, 'police', 'viper', 'leave');
     assert.ok(!r.events.some((e) => e.type === 'auto-victory'), 'победы нет');

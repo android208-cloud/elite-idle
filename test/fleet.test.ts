@@ -379,6 +379,25 @@ describe('§107 что из этого следует в игре', () => {
     assert.equal(r.state.cash - cash0, p.runs * 1392 + p.failures * (384 - 1000));
   });
 
+  /*
+   * §118: ДОСМОТР ПИЛОТА — ЭТО ВАШ РОЗЫСК.
+   *
+   * Заметка журнала раньше говорила только «1 провал (досмотр)», а статус
+   * рос молча. Теперь видно, сколько добавилось и каким он стал.
+   */
+  it('заметка о досмотре называет розыск', () => {
+    const s = onRoute(DICTATORS.from, DICTATORS.to, 'smuggler');
+    const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);
+    const note = r.events.find((e) => /досмотр/.test(e.text));
+    assert.ok(note, 'заметка есть');
+    // Заметка сводная: за месяц досмотров много, и в ней — общая прибавка.
+    const [, delta, total] = note!.text.match(/розыск \+(\d+) → (\d+)/) ?? [];
+    assert.ok(delta && total, `в заметке есть цифры: ${note!.text}`);
+    const failures = Number(note!.text.match(/^(.*?): (\d+) провал/)?.[2] ?? 0);
+    assert.equal(Number(delta), failures * 2, 'по +2 за каждый досмотр');
+    assert.equal(Number(total), r.state.legal, 'и это итоговый статус');
+  });
+
   it('пирата в полицейской системе в конце концов берут', () => {
     const s = onRoute(POLICE.from, POLICE.to, 'pirate');
     const r = advance(s, 30 * 24 * HOUR, DEFAULT_SETTINGS);

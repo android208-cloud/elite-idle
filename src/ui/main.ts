@@ -38,6 +38,7 @@ import {
   galacticJump,
   DEFAULT_SETTINGS,
   migrateSettings,
+  POLICE_KILL_LEGAL,
   deserialize,
   jumpDuration,
   MAX_FUEL,
@@ -184,8 +185,92 @@ const storageAvailable = (() => {
   }
 })();
 
+/*
+ * §118: ДВЕ ВКЛАДКИ — ОДИН СЕЙВ.
+ *
+ * Так и родилось «внезапное» пиратство из отладочного файла: в двух
+ * экземплярах игры (вкладка и PWA, или две вкладки) жили РАЗНЫЕ состояния
+ * одного сохранения — с разными деньгами, статусом и историей. Каждая
+ * запись затирала чужую, и игрок видел скачки: 108 474 CR в одном файле,
+ * 340 081 в другом через час, при видимых +12 000 торговли.
+ *
+ * Полноценная синхронизация тут не нужна и была бы вредна: idle-игре
+ * достаточно одного хозяина. Поэтому вкладки договариваются, кто играет:
+ *
+ *   - живая вкладка раз в 5 секунд пишет метку времени в свою запись;
+ *   - увидев ЧУЖУЮ свежую метку, вкладка показывает предупреждение и
+ *     ПЕРЕСТАЁТ сохранять — молча затирать чужую игру нельзя;
+ *   - «Играть здесь» забирает хозяина себе (и тогда предупреждение
+ *     появится у соседней вкладки);
+ *   - если сосед замолчал дольше 20 секунд, он закрыт — вкладка снова
+ *     сохраняет сама.
+ */
+const TAB_KEY = 'elite-idle-tab-v1';
+/** Как часто живая вкладка подтверждает, что она жива. */
+const TAB_BEAT_MS = 5000;
+/** Молчание дольше этого — вкладка закрыта, а не просто в фоне. */
+const TAB_STALE_MS = 20000;
+
+/** Свой идентификатор: случайный, чтобы две вкладки не совпали. */
+const tabId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+/** Чужая вкладка жива: показываем предупреждение и не сохраняем. */
+let otherTab = false;
+/** Игрок нажал «Играть здесь»: хозяин сейва переехал в эту вкладку. */
+let tabTaken = false;
+let lastTabBeatAt = 0;
+
+function readTab(): { id: string; at: number } | null {
+  if (!storageAvailable) return null;
+  try {
+    const raw = localStorage.getItem(TAB_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { id?: unknown; at?: unknown };
+    if (typeof v?.id !== 'string' || typeof v.at !== 'number') return null;
+    return { id: v.id, at: v.at };
+  } catch {
+    return null;
+  }
+}
+
+function tabBeat(): void {
+  try {
+    localStorage.setItem(TAB_KEY, JSON.stringify({ id: tabId, at: Date.now() }));
+  } catch {
+    // место кончилось — это не повод ломать игру
+  }
+}
+
+/**
+ * Жива ли другая вкладка. Возвращает true, если состояние изменилось, —
+ * тогда надо перерисовать экран.
+ */
+function checkTabs(): boolean {
+  const other = readTab();
+  const alive = other !== null && other.id !== tabId && Date.now() - other.at < TAB_STALE_MS;
+  if (alive === otherTab) return false;
+  otherTab = alive;
+  return true;
+}
+
+/** Раз в несколько секунд: проверить соседа и подтвердить, что живы мы. */
+function tabsTick(): void {
+  if (Date.now() - lastTabBeatAt < TAB_BEAT_MS) return;
+  lastTabBeatAt = Date.now();
+  const changed = checkTabs();
+  if (!otherTab) tabBeat();
+  if (changed) render();
+}
+
+/**
+ * Сохранение заблокировано, пока хозяин сейва — другая вкладка.
+ *
+ * Именно это и требовалось: «не давать молча затирать сейв». Как только
+ * соседняя вкладка закрылась (или игрок нажал «Играть здесь»), запись
+ * возобновляется сама.
+ */
 function save(): void {
   if (!storageAvailable) return;
+  if (otherTab && !tabTaken) return;
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({ state: serialize(state), log, settings }));
   } catch {
@@ -702,9 +787,23 @@ function flightButtons(): string {
     ? '<button class="btn" data-action="return-from-patrol">Вернуться</button>'
     : `<button class="btn${pirate ? ' danger' : ''}" data-action="patrol" ${patrolReason ? 'disabled' : ''}>${pirate ? 'Пиратство' : 'Патрулировать'}</button>`;
 
+  /*
+   * §118: ПАТРУЛЬ В РОЗЫСКЕ — ЭТО УЖЕ ПИРАТСТВО.
+   *
+   * Пользователь получил «пиратство во время патруля»: статус был выше
+   * нуля, полиция стала враждебной, автобой сбил семь Viper'ов по +64, и
+   * потолок 255 наступил за четыре боя. Кнопка меняла надпись на
+   * «Пиратство», но не объясняла, что будет. Теперь объясняет — до нажатия,
+   * а не в журнале после.
+   */
+  const pirateWarn = pirate
+    ? `<div class="sub" style="margin-top:6px">Вы в розыске: ${state.legal} (${legalLabel(state.legal)}). Полиция будет атаковать, торговцы станут добычей, за каждого сбитого полицейского +${POLICE_KILL_LEGAL} к розыску.</div>`
+    : '';
+
   return `<div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">${jump}${patrol}</div>
     ${jumpReason ? `<div class="sub" style="margin-top:6px">${jumpReason}</div>` : ''}
-    ${patrolReason ? `<div class="sub" style="margin-top:6px">${patrolReason}</div>` : ''}`;
+    ${patrolReason ? `<div class="sub" style="margin-top:6px">${patrolReason}</div>` : ''}
+    ${pirateWarn}`;
 }
 
 /**
@@ -2638,6 +2737,21 @@ function tabLabel(id: Tab): string {
   return TABS.find((t) => t.id === id)!.label;
 }
 
+/**
+ * §118: предупреждение о второй вкладке.
+ *
+ * Не модальное окно: игра продолжает идти, но сохранение стоит. Кнопка
+ * «Играть здесь» переносит хозяина сейва в эту вкладку — соседняя начнёт
+ * предупреждать сама, и игрок сам решит, какую закрыть.
+ */
+function tabWarningCard(): string {
+  return `<div class="card illegal" data-tabs="warn"><h2>Игра открыта в другой вкладке</h2>
+      <div class="sub">Сохранение одно на всех, и две вкладки затирают игру друг друга: так теряются деньги и появляется «внезапный» розыск. Пока эта вкладка не хозяйка сейва, она <b>не сохраняет</b>.</div>
+      <div class="row" style="margin-top:10px"><span class="spacer"></span>
+        <button class="btn tonal" data-action="tab-take">Играть здесь</button></div>
+    </div>`;
+}
+
 function render(): void {
   const content = document.getElementById('content')!;
   const screens: Record<Tab, () => string> = {
@@ -2677,7 +2791,12 @@ function render(): void {
   // §115: экран пилотов живёт только поверх ангара — уходя с вкладки, он
   // закрывается (это делает обработчик вкладок), как и экран отладки.
   const showPilots = pilotsOpen && !showDev && !inCombat && !inSalvage && tab === 'hangar';
-  content.innerHTML = inCombat
+  /*
+   * §118: предупреждение о второй вкладке — поверх ЛЮБОГО экрана, включая
+   * бой: если сохранение сейчас заблокировано, игрок обязан это знать, а
+   * не выяснять через час, куда делся прогресс.
+   */
+  const content0 = inCombat
     ? combatScreen()
     : inSalvage
       ? salvageScreen()
@@ -2686,6 +2805,7 @@ function render(): void {
         : showPilots
           ? pilotsScreen()
           : screens[tab]();
+  content.innerHTML = (otherTab && !tabTaken ? tabWarningCard() : '') + content0;
   document.getElementById('title')!.textContent = inCombat
     ? 'Бой'
     : inSalvage
@@ -3278,7 +3398,7 @@ function onAction(el: HTMLElement): void {
         const pirate = isCriminal(state.legal);
         addLog(
           pirate
-            ? 'Пиратство началось: в зачёт идут все встречные корабли'
+            ? `Пиратство началось: в зачёт идут все встречные корабли. Розыск ${state.legal} (${legalLabel(state.legal)})`
             : 'Патруль начался: ищем встречи в системе',
         );
         tab = 'ship';
@@ -3435,6 +3555,15 @@ function onAction(el: HTMLElement): void {
      * Отдельного пункта в нижней строке нет: пять вкладок — предел для
      * телефона (см. §98), и шестая сжала бы остальные.
      */
+    case 'tab-take': {
+      // §118: хозяином сейва становится эта вкладка; соседняя увидит нашу
+      // метку и покажет предупреждение у себя.
+      tabTaken = true;
+      otherTab = false;
+      tabBeat();
+      render();
+      break;
+    }
     case 'pilots-open': {
       pilotsOpen = true;
       render();
@@ -3694,8 +3823,36 @@ window.addEventListener('resize', () => {
 });
 
 setInterval(tick, 1000);
+// §118: раз в несколько секунд вкладки выясняют, кто хозяин сейва.
+setInterval(tabsTick, 1000);
+/*
+ * §118: перезагрузка — не «вторая вкладка».
+ *
+ * Метка живёт 20 секунд, и без этого обработчика F5 в течение этих
+ * секунд выглядел бы как чужой игрок: страница предупреждала бы сама себя
+ * и не сохраняла прогресс. Уходя, вкладка снимает свою метку; возвращаясь
+ * из кеша браузера — ставит снова.
+ */
+window.addEventListener('pagehide', () => {
+  if (readTab()?.id === tabId) localStorage.removeItem(TAB_KEY);
+});
+window.addEventListener('pageshow', () => {
+  if (checkTabs()) render();
+  if (!otherTab) tabBeat();
+});
+
+window.addEventListener('storage', (ev) => {
+  // Соседняя вкладка записала метку или сейв — перепроверяем сразу, не
+  // дожидаясь тика. `render` вызывает только изменение состояния.
+  if (ev.key === TAB_KEY || ev.key === SAVE_KEY) {
+    if (checkTabs() && !tabTaken) render();
+  }
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) tick();
 });
 
+// §118: при старте выясняем, не играет ли уже кто-то в соседней вкладке.
+checkTabs();
+if (!otherTab) tabBeat();
 render();

@@ -61,6 +61,7 @@ import {
   equipmentAvailable,
   holdCapacity,
   HOLD_BASE,
+  legalLabel,
   maxFuel,
   maxMissiles,
   shipPrice,
@@ -555,7 +556,9 @@ export type GameEventType =
   /** §98.1: посадка с контрабандой — доля статуса не применяется. */
   | 'escape-blocked'
   /** §105: пилоты вернулись с рейсов и принесли деньги. */
-  | 'fleet';
+  | 'fleet'
+  /** §118: изменился правовой статус — с цифрой и причиной. */
+  | 'legal';
 
 export interface GameEvent {
   type: GameEventType;
@@ -1493,6 +1496,8 @@ function accrueFleet(
       kept.push(pilot);
       continue;
     }
+    // §118: с чего начали — чтобы в заметке показать, сколько добавили.
+    const legalBefore = legal;
 
     const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
     const cycle = 2 * flight + PILOT_REST_MS;
@@ -1617,7 +1622,18 @@ function accrueFleet(
         : pilot.role === 'smuggler' ? 'досмотр'
           : pilot.role === 'police' ? 'потрёпан'
             : 'ограблен';
-      notes.push(`${pilot.name}: ${failures} ${plural(failures, 'провал', 'провала', 'провалов')} (${why})`);
+      /*
+       * §118: ЦЕНА ПРОВАЛА — В ТОЙ ЖЕ СТРОКЕ.
+       *
+       * Досмотр контрабандиста поднимает ВАШ розыск на 2 и стоит штраф.
+       * Раньше журнал писал только «1 провал (досмотр)», и статус рос
+       * молча: игрок узнавал о преступлении, лишь когда полиция начинала
+       * стрелять. Теперь видно и цифру статуса, и откуда он взялся.
+       */
+      const legalNote = legal > legalBefore
+        ? `, розыск +${legal - legalBefore} → ${legal} (${legalLabel(legal)})`
+        : '';
+      notes.push(`${pilot.name}: ${failures} ${plural(failures, 'провал', 'провала', 'провалов')} (${why})${legalNote}`);
     }
 
     kept.push({
@@ -2086,12 +2102,30 @@ function autoDecision(
         at,
         text:
           looted > 0
-            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником${why}`
+            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником, розыск ${legal} (${legalLabel(legal)})${why}`
             : `Торговец уничтожен, но груз не взят — трюм полон${why}`,
       });
     }
   } else if (won && enc.role === 'police') {
+    /*
+     * §118: ПОЛИЦЕЙСКИЙ — ЕДИНСТВЕННЫЙ, КТО СТОИТ ДОРОГО.
+     *
+     * Пользователь получил «пиратство во время патруля»: автобой сам
+     * сбивал полицейские Viper'ы, каждый давал +64 к статусу, и после
+     * четырёх боёв статус упирался в потолок 255. В журнале при этом было
+     * только «Автобой: Viper уничтожен» — ни слова о последствиях.
+     *
+     * Теперь каждое такое убийство пишет цену: сколько прибавилось и каким
+     * стал статус. Решение оставляем прежним (пользователь выбрал
+     * «предупредить, но не менять»), меняется только видимость.
+     */
+    const before = legal;
     legal = Math.min(255, legal + POLICE_KILL_LEGAL);
+    events.push({
+      type: 'legal',
+      at,
+      text: `Полицейский уничтожен: розыск +${legal - before} → ${legal} (${legalLabel(legal)})`,
+    });
   }
 
   /*
