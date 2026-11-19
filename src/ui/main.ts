@@ -37,6 +37,7 @@ import {
   currentSystem,
   galacticJump,
   DEFAULT_SETTINGS,
+  migrateSettings,
   deserialize,
   jumpDuration,
   MAX_FUEL,
@@ -207,7 +208,8 @@ function load(): void {
        */
       state = { ...state, careerAt: 0 };
       log = data.log ?? [];
-      settings = { ...DEFAULT_SETTINGS, ...data.settings };
+      // §117: старые сохранения несут прежнее умолчание скорости прыжка.
+      settings = migrateSettings(data.settings);
       return;
     }
   } catch {
@@ -2396,7 +2398,7 @@ function logScreen(): string {
       : '<span class="muted">Уведомления не поддерживаются</span>';
   return `${statsCard()}<div class="card"><h2>Настройки</h2>
       <div class="row"><label>Темп игры</label><span class="spacer"></span>${select('speed', speeds, String(settings.speed))}</div>
-      <div class="sub" style="margin:6px 0 12px">Прыжок 7 св. лет: ${fmtDur(jumpDuration(settings, 7))} · 3 св. года: ${fmtDur(jumpDuration(settings, 3))}</div>
+      <div class="sub" style="margin:6px 0 12px">Прыжок 7 св. лет: ${fmtDur(jumpDuration(settings, 70))} · 3 св. года: ${fmtDur(jumpDuration(settings, 30))}</div>
       <div class="row"><label>Бой</label><span class="spacer"></span>${select('combatMode', [['auto', 'Автоматический'], ['manual', 'С вмешательством']], settings.combatMode)}</div>
       <div class="row" style="margin-top:10px"><label>Чужой корабль исчезает через</label><span class="spacer"></span>${select('encounterTimeoutMs', timeouts, String(settings.encounterTimeoutMs))}</div>
       <div class="row" style="margin-top:10px"><label>Частота встреч</label><span class="spacer"></span>${select('encounterRate', rates, String(settings.encounterRate))}</div>

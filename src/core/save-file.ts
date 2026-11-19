@@ -21,7 +21,7 @@
 import { GALAXY_COUNT, type StarSystem } from './galaxy.ts';
 import { COMMODITIES } from './market.ts';
 import { rankOf } from './ships.ts';
-import { deserialize, systemsOf, type GameState, type Settings, DEFAULT_SETTINGS } from './state.ts';
+import { deserialize, systemsOf, migrateSettings, type GameState, type Settings } from './state.ts';
 
 /** Метка формата в файле: чтобы отличить нашу выгрузку от любого другого JSON. */
 export const SAVE_FILE_APP = 'elite-idle';
@@ -182,7 +182,11 @@ export function importSaveFile(text: string, now = Date.now()): ImportResult {
   const problem = validateState(state);
   if (problem) return fail(problem);
 
-  const settings: Settings = { ...DEFAULT_SETTINGS, ...(file.settings ?? {}) };
+  /*
+   * §117: настройки проходят через миграцию — в старых файлах лежит
+   * прежнее умолчание темпа прыжка, и оно не должно перекрывать текущее.
+   */
+  const settings: Settings = migrateSettings(file.settings);
   const log = Array.isArray(file.log)
     ? file.log.filter((e) => e && typeof e.text === 'string' && typeof e.at === 'number')
     : [];

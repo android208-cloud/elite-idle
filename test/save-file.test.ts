@@ -11,7 +11,7 @@ import {
   saveFileName,
   summarize,
 } from '../src/core/save-file.ts';
-import { DEFAULT_SETTINGS, newGame, serialize, startJump, systemsOf } from '../src/core/state.ts';
+import { DEFAULT_SETTINGS, migrateSettings, newGame, serialize, startJump, systemsOf } from '../src/core/state.ts';
 import { distance } from '../src/core/galaxy.ts';
 
 /** Ближайшая другая система — прыжок всегда возможен. */
@@ -123,6 +123,44 @@ test('настройки из файла применяются, недоста�
   if (!r.ok) return;
   assert.equal(r.settings.speed, 100);
   assert.equal(r.settings.dockingModule, DEFAULT_SETTINGS.dockingModule, 'остальное — по умолчанию');
+});
+
+/*
+ * §117: СТАРОЕ УМОЛЧАНИЕ ТЕМПА ПРЫЖКА.
+ *
+ * `baseJumpMs` — не выбор игрока (поля нет в интерфейсе), а константа темпа,
+ * которая один раз менялась: 15 минут → 33 минуты. Но она лежит в
+ * `Settings`, а настройки сохраняются целиком — значит у всех старых сейвов
+ * игра молча жила на прежней, вдвое быстрой скорости прыжка.
+ */
+test('старое умолчание baseJumpMs заменяется текущим', () => {
+  const r = migrateSettings({ baseJumpMs: 15 * 60 * 1000 });
+  assert.equal(r.baseJumpMs, DEFAULT_SETTINGS.baseJumpMs, '15 минут — это наше прежнее умолчание');
+});
+
+test('выбор игрока в настройках миграция не трогает', () => {
+  const chosen = { ...DEFAULT_SETTINGS, speed: 100, encounterRate: 2, autoScoop: true };
+  const r = migrateSettings(chosen);
+  assert.equal(r.speed, 100);
+  assert.equal(r.encounterRate, 2);
+  assert.equal(r.autoScoop, true);
+  assert.equal(r.baseJumpMs, DEFAULT_SETTINGS.baseJumpMs);
+});
+
+test('незнакомое значение baseJumpMs сохраняется как есть', () => {
+  const r = migrateSettings({ baseJumpMs: 1_000_000 });
+  assert.equal(r.baseJumpMs, 1_000_000, 'миграция знает только наши прежние умолчания');
+});
+
+test('старый файл сохранения читается с новым темпом прыжка', () => {
+  const file = {
+    ...buildSaveFile(newGame(1), log, DEFAULT_SETTINGS),
+    settings: { ...DEFAULT_SETTINGS, baseJumpMs: 15 * 60 * 1000 },
+  };
+  const r = importSaveFile(JSON.stringify(file));
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  assert.equal(r.settings.baseJumpMs, DEFAULT_SETTINGS.baseJumpMs);
 });
 
 test('мусор в логе отбрасывается, а не ломает загрузку', () => {
