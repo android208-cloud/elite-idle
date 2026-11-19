@@ -47,7 +47,12 @@ function save(pilots) {
     },
     kills: 128, legal: 0, encounter: null, combat: null, salvage: null,
     pilots, nextPilotId: pilots.length + 1,
-    stats: { kills: 128, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0, tradeProfit: 0 },
+    stats: {
+      kills: 128, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0, tradeProfit: 0,
+      jumps: 4, dockings: 2, dockingFails: 0, patrols: 0, raided: 0,
+      // §114: доход флота копится в статистике — проверяем, что она его показывает.
+      pilotIncome: 1234,
+    },
     cargoBasis: Array(17).fill(0), cargoOrigin: [], escapeRoute: [], escapeStatus: -1,
     careerMs: 0, careerAt: 0,
   };
@@ -115,7 +120,9 @@ function boot(saved) {
 
 const ROLES = ['#4fd8c4', '#ffd37a', '#ff8a80', '#8fb6ff'];
 const lanes = () => strokes.filter((s) => s.canvas === 'map-overview' && ROLES.includes(s.style) && s.segs.length === 1);
-const markers = () => fills.filter((f) => f.canvas === 'map-overview' && ROLES.includes(f.style) && f.pts.length === 3);
+/* §114: треугольники — только на местной карте; на общей их нет. */
+const markers = () => fills.filter((f) => f.canvas === 'map-local' && ROLES.includes(f.style) && f.pts.length === 3);
+const overviewMarkers = () => fills.filter((f) => f.canvas === 'map-overview' && ROLES.includes(f.style) && f.pts.length === 3);
 
 const w = boot(save([
   pilot(1, 'trader', LAVE, REORTE),
@@ -135,8 +142,16 @@ const go = async (name) => {
 /* ---------- карта до всякой отладки ---------- */
 await go('map');
 check('§112: линии маршрутов есть', lanes().length >= 3, String(lanes().length));
-check('§113: пилоты на маршрутах — треугольники', markers().length >= 3, String(markers().length));
+check('§114: на общей карте меток пилотов НЕТ', overviewMarkers().length === 0, String(overviewMarkers().length));
+check('§113: на местной карте пилот — треугольник', markers().length >= 1, String(markers().length));
 check('треугольник указывает направление (три точки, не круг)', markers().every((m) => m.pts.length === 3));
+
+/* ---------- §114: доход флота в статистике ---------- */
+await go('log');
+const statsText = d.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('§114: в статистике есть «Доход флота»', /Доход флота/.test(statsText), statsText.slice(0, 120));
+check('§114: доход флота показан в кредитах', /Доход флота\s*123\.4 CR/.test(statsText),
+  statsText.match(/Доход флота[^А-Я]{0,12}/)?.[0] ?? 'нет');
 
 /* ---------- экран отладки ---------- */
 await go('log');
@@ -165,9 +180,10 @@ await setSelect('devRoutes', 'off');
 const stored = JSON.parse(w.localStorage.getItem('elite-idle-save-v1'));
 check('«линии» выключены и сохранены', stored.settings.devRoutes === false, String(stored.settings.devRoutes));
 strokeReset();
+fillReset();
 await go('map');
 check('линий больше нет', lanes().length === 0, String(lanes().length));
-check('а пилоты остались', markers().length >= 3, String(markers().length));
+check('а пилоты остались', markers().length >= 1, String(markers().length));
 
 /* ---------- галочка «пилот» ---------- */
 await go('log');
@@ -176,7 +192,7 @@ await new Promise((r) => setTimeout(r, 200));
 await setSelect('devPilots', 'off');
 fillReset();
 await go('map');
-check('треугольников больше нет', markers().length === 0, String(markers().length));
+check('треугольников больше нет', markers().length === 0 && overviewMarkers().length === 0, String(markers().length));
 
 /* ---------- возврат и лог ---------- */
 await go('log');

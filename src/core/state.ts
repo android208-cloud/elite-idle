@@ -469,6 +469,14 @@ export interface GameStats {
   raided: number;
   /** Патрулей проведено (§78). */
   patrols: number;
+  /**
+   * §114: сколько принёс флот — ВАША доля, в десятых кредита.
+   *
+   * Именно доля, а не выручка: пилоту уходит 75 % (PILOT_WAGE), и
+   * показывать в статистике чужое было бы обманом. Считается там же,
+   * где деньги приходят на счёт, — в `accrueFleet`, одной суммой.
+   */
+  pilotIncome: number;
 }
 
 export const ZERO_STATS: GameStats = {
@@ -483,6 +491,7 @@ export const ZERO_STATS: GameStats = {
   dockingFails: 0,
   patrols: 0,
   raided: 0,
+  pilotIncome: 0,
 };
 
 export type GameEventType =
@@ -1603,7 +1612,14 @@ function accrueFleet(
     });
   }
 
-  return { ...state, cash: cash + gained, legal, rng, pilots: kept };
+  /* §114: доход флота копится в статистике той же суммой, что уходит на
+   * счёт. Один источник правды: если когда-нибудь изменится доля пилота,
+   * статистика поедет вместе с деньгами, а не отдельно. */
+  const stats: GameStats = {
+    ...state.stats,
+    pilotIncome: (state.stats.pilotIncome ?? 0) + gained,
+  };
+  return { ...state, cash: cash + gained, legal, rng, pilots: kept, stats };
 }
 
 /* ---------- Галактический гиперпрыжок ---------- */
@@ -2876,6 +2892,8 @@ export function deserialize(json: string): GameState {
   // Совместимость: в сохранениях до §70 статистики ещё не было.
   // Без этого старый файл даст undefined там, где читается stats.kills.
   if (!state.stats) state.stats = { ...ZERO_STATS };
+  // §114: в сохранениях до этой правки дохода флота в статистике нет.
+  if (typeof state.stats.pilotIncome !== 'number') state.stats.pilotIncome = 0;
   if (!state.cargoBasis) state.cargoBasis = COMMODITIES.map(() => 0);
   /*
    * §105: флот. В сохранениях до него полей нет — пустой ангар и счётчик

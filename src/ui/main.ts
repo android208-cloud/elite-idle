@@ -1348,7 +1348,16 @@ function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
    * Так положение всегда согласовано с теми же числами, по которым
    * платят деньги (`pilotCycleMs`), и его нельзя «рассинхронизировать».
    */
-  if (settings.devPilots) {
+  /*
+   * §114: на ОБЩЕЙ карте меток нет.
+   *
+   * Там 256 систем на двухсот с небольшим пикселях: треугольник размером
+   * в 5 px наезжает на соседние точки и читается как ещё одна система.
+   * Направление видно на местной карте, где маршрут — это две подписи и
+   * десятки пикселей между ними. Пользователь: «на глобальной карте метки
+   * пилотов не нужны».
+   */
+  if (settings.devPilots && big) {
     const now = Date.now();
     for (const pilot of pilots) {
       if (!pilot.route || pilot.route.from === pilot.route.to) continue; // патруль — кольцом
@@ -2187,6 +2196,7 @@ function statsCard(): string {
       ${stat('Стыковок', `${st.dockings}${st.dockingFails ? ` / ${st.dockingFails} ✗` : ''}`)}
       ${stat('Бегств', String(st.fled))}
       ${stat('Пропущено', String(st.skipped))}
+      ${stat('Доход флота', cr(st.pilotIncome ?? 0))}
     </div>
     <h2 style="margin-top:14px">Торговля</h2>
     <div class="grid">
@@ -2234,7 +2244,7 @@ function devScreen(): string {
         ${select('devRoutes', [['on', 'Показаны'], ['off', 'Скрыты']], settings.devRoutes ? 'on' : 'off')}</div>
       <div class="row" style="margin-top:10px"><label>Пилот на маршруте</label><span class="spacer"></span>
         ${select('devPilots', [['on', 'Показан'], ['off', 'Скрыт']], settings.devPilots ? 'on' : 'off')}</div>
-      <div class="sub" style="margin:6px 0 4px">Пилот рисуется треугольником по ходу движения; патрульный — кольцом вокруг системы.</div>
+      <div class="sub" style="margin:6px 0 4px">Пилот рисуется треугольником по ходу движения на МЕСТНОЙ карте (на общей карте метки не нужны: там им тесно); патрульный — кольцом вокруг системы.</div>
       <div class="sub" style="margin-top:8px;color:var(--dim)">Пилотов: ${pilots.length}, из них в рейсе: ${withRoute}.</div>
     </div>
     <div class="card">

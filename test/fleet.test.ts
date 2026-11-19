@@ -200,6 +200,31 @@ describe('§105 цикл и деньги', () => {
     assert.equal(r.state.cash - cash0, p.runs * 384);
   });
 
+  it('§114: доход флота копится в статистике — ровно то, что пришло на счёт', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const cash0 = s.cash;
+    const stats0 = s.stats.pilotIncome;
+    const r = advance(s, 1_000_000 + 24 * HOUR, DEFAULT_SETTINGS);
+    const [p] = r.state.pilots;
+    assert.equal(r.state.cash - cash0, p.runs * 384);
+    // В статистике — ВАША доля, та же сумма, а не выручка целиком.
+    assert.equal(r.state.stats.pilotIncome - stats0, p.runs * 384);
+  });
+
+  it('§114: без рейсов доход флота не растёт', () => {
+    const s = hired();
+    const r = advance(s, 1_000_000 + 100 * HOUR, DEFAULT_SETTINGS);
+    assert.equal(r.state.stats.pilotIncome, s.stats.pilotIncome);
+  });
+
+  it('§114: старое сохранение без дохода флота читается', () => {
+    const s = assignPilotRoute(hired(), 1, REORTE, 1_000_000).state;
+    const raw = JSON.parse(serialize(s));
+    delete raw.stats.pilotIncome;
+    const back = deserialize(JSON.stringify(raw));
+    assert.equal(back.stats.pilotIncome, 0, 'счётчик начинается с нуля, а не с NaN');
+  });
+
   it('пилот без маршрута не приносит ничего', () => {
     const s = hired();
     const r = advance(s, 1_000_000 + 100 * HOUR, DEFAULT_SETTINGS);
