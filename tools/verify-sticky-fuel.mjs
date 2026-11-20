@@ -75,23 +75,30 @@ check('§131: карточка топлива на месте', fuel !== undefin
 check('§131: она внутри липкой обёртки', wrap !== null);
 
 /*
- * §131.1: липнет ОБЁРТКА, а не карточка.
+ * §131.10: ОБЁРТКА ПРОЗРАЧНАЯ — НИКАКОЙ ТЁМНОЙ ПОДЛОЖКИ.
  *
- * Пользователь (скриншот): «сверху видно нижние карточки в зазоре между
- * „топливо“ и шапкой». Лечится не координатами, а фоном: обёртка красится
- * цветом страницы и имеет собственный отступ сверху — он и закрывает щель.
+ * Пользователь (скриншот): «Карточка остаётся непрозрачным прямоугольником
+ * тёмного цвета с нарисованным поверх скруглённым прямоугольником зелёного
+ * цвета. Я хотел убрать тёмную подложку, сделав её прозрачной».
+ *
+ * Обёртка нужна только ради `position: sticky`. Любой её фон, отступ или
+ * отрицательное поле — это уже нарисованный прямоугольник вокруг карточки,
+ * и именно он просвечивал в дугах нижних углов.
  */
 const ws = w.getComputedStyle(wrap);
 check('§131: position: sticky', ws.position === 'sticky', ws.position);
 check('§131: прилипает к верху области прокрутки (top: 0)', ws.top === '0px', ws.top);
-check('§131.1: у обёртки есть закрашенный отступ сверху', parseFloat(ws.paddingTop) >= 6, ws.paddingTop);
-// §131.3: снизу полотна быть не должно — оно закрывало нижний край карточки.
-check('§131.3: снизу у обёртки полотна нет', parseFloat(ws.paddingBottom) === 0, ws.paddingBottom);
-check('§131.1: фон обёртки — цвет страницы, а не прозрачность',
-  ws.backgroundColor !== '' && ws.backgroundColor !== 'transparent' && ws.backgroundColor !== 'rgba(0, 0, 0, 0)', ws.backgroundColor);
-check('§131.1: обёртка выходит в поля main, чтобы закрыть и боковые щели',
-  parseFloat(ws.marginLeft) <= -8 && parseFloat(ws.marginRight) <= -8, `${ws.marginLeft} / ${ws.marginRight}`);
-check('§131: у самой карточки полей нет — зазор даёт обёртка',
+check('§131.10: обёртка ничего не красит — фон прозрачный',
+  /rgba\(0, 0, 0, 0\)|transparent/.test(ws.backgroundColor) && ws.backgroundImage === 'none',
+  `${ws.backgroundColor} / ${ws.backgroundImage}`);
+check('§131.10: у неё нет отступов — иначе вокруг карточки снова была бы рамка',
+  parseFloat(ws.paddingTop) === 0 && parseFloat(ws.paddingBottom) === 0 &&
+  parseFloat(ws.paddingLeft) === 0 && parseFloat(ws.paddingRight) === 0,
+  `${ws.paddingTop} ${ws.paddingRight} ${ws.paddingBottom} ${ws.paddingLeft}`);
+check('§131.10: и нет полей, в том числе отрицательных',
+  parseFloat(ws.marginTop) === 0 && parseFloat(ws.marginLeft) === 0 && parseFloat(ws.marginRight) === 0,
+  `${ws.marginTop} / ${ws.marginLeft} / ${ws.marginRight}`);
+check('§131: у самой карточки полей нет — иначе сверху была бы щель',
   w.getComputedStyle(fuel).marginTop === '0px' && w.getComputedStyle(fuel).marginLeft === '0px');
 check('§131: она выше остальных карточек', Number(ws.zIndex) >= 1, ws.zIndex);
 
@@ -110,9 +117,13 @@ check('§131: под топливом остальной список',
  */
 check('§131.2: у области прокрутки нет верхнего отступа',
   w.getComputedStyle(main).paddingTop === '0px', w.getComputedStyle(main).paddingTop);
-check('§131.3: у следующей карточки обычное поле — полотно его больше не заменяет',
+check('§131.10: у следующей карточки обычное поле',
   w.getComputedStyle(wrap.nextElementSibling).marginTop === '10px',
   w.getComputedStyle(wrap.nextElementSibling).marginTop);
+// §131.10: обёртка больше не даёт отступ — его снова даёт сама модель корабля.
+check('§131.10: у модели корабля нижнее поле вернулось',
+  w.getComputedStyle(main.querySelector('.ship-view')).marginBottom === '10px',
+  w.getComputedStyle(main.querySelector('.ship-view')).marginBottom);
 
 /*
  * §131.9: форма карточки не зависит от прокрутки.
