@@ -79,6 +79,7 @@ import {
   contrabandLevel,
   escapeProgress,
   settleWonEncounter,
+  type EncounterRole,
 } from '../core/state.ts';
 import {
   formatSpan,
@@ -489,6 +490,24 @@ const icons = {
   hangar: '<path d="M15.5 4.5a4.6 4.6 0 0 0-4 6.9L4.6 18.3a1.6 1.6 0 0 0 2.2 2.2l6.9-6.9a4.6 4.6 0 0 0 5.8-6.1l-2.6 2.6-2.6-.7-.7-2.6 2.4-2.4a4.6 4.6 0 0 0-.5-.3Z"/>',
   /** Журнал: лист с линиями. */
   log: '<path d="M6 3.5h8.5L19 8v12.5H6V3.5Z"/><path d="M14 3.5V8h4.5"/><path d="M9 12h7"/><path d="M9 15.5h5"/>',
+
+  /*
+   * §130: ЗНАЧКИ РОЛЕЙ.
+   *
+   * Пользователь: «нарисуй векторные минималистичные значки для торговца
+   * (знак доллара), пирата (череп), полиции (щит), охотника (пара скрещенных
+   * мечей), контрабандист (придумай сам)». Контрабандисту досталась маска:
+   * он не воюет и не торгует в открытую — он ездит с чужим лицом.
+   *
+   * Рисунок тот же, что у вкладок: viewBox 24, обводка `currentColor`,
+   * никакой заливки, кроме зрачков. Значок не заменяет слово, а помогает
+   * найти строку глазом: роль читается раньше имени.
+   */
+  trader: '<path d="M12 3.5v17"/><path d="M16.2 7.4c-.7-1.5-2.4-2.4-4.2-2.4-2.3 0-4 1.2-4 3s1.7 2.8 4 3.2 4 1.3 4 3.1-1.7 3-4 3c-1.9 0-3.6-.9-4.2-2.4"/>',
+  pirate: '<path d="M12 3.4c-3.9 0-6.8 2.8-6.8 6.4 0 2.1 1 3.6 2.4 4.4v2.4c0 1 .8 1.8 1.8 1.8h5.2c1 0 1.8-.8 1.8-1.8v-2.4c1.4-.8 2.4-2.3 2.4-4.4 0-3.6-2.9-6.4-6.8-6.4Z"/><circle cx="9.4" cy="9.9" r="1.35" fill="currentColor" stroke="none"/><circle cx="14.6" cy="9.9" r="1.35" fill="currentColor" stroke="none"/><path d="M10.6 15.6v2.2M13.4 15.6v2.2"/>',
+  police: '<path d="M12 3.6 19 6.4v5.3c0 4.1-2.9 7-7 8.8-4.1-1.8-7-4.7-7-8.8V6.4L12 3.6Z"/>',
+  hunter: '<path d="M6.6 17.4 17.4 6.6"/><path d="M4.4 15.4l4.2 4.2"/><path d="M17.4 17.4 6.6 6.6"/><path d="M19.6 15.4l-4.2 4.2"/>',
+  smuggler: '<path d="M3.6 10c2.6-1.7 5.4-2.3 8.4-2.3s5.8.6 8.4 2.3c-.6 2.7-2.9 4.5-5.6 4.5-1.4 0-2.3-.8-2.8-1.6-.5.8-1.4 1.6-2.8 1.6-2.7 0-5-1.8-5.6-4.5Z"/><circle cx="8.6" cy="10.2" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.4" cy="10.2" r="1.1" fill="currentColor" stroke="none"/>',
 } as const;
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
@@ -506,6 +525,18 @@ const icon = (body: string): string =>
   `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
      aria-hidden="true" focusable="false">${body}</svg>`;
+
+/**
+ * §130: значок роли перед именем.
+ *
+ * Одна функция на обе роли — пилота (`PilotRole`) и встречи (`EncounterRole`):
+ * торговец, пират и полиция есть и там, и там, и два разных набора значков
+ * для одного слова были бы ошибкой. `data-role` нужен проверкам: искать
+ * картинку по цвету обводки — плохая идея.
+ */
+function roleIcon(role: PilotRole | EncounterRole): string {
+  return `<span class="role-ico" data-role="${role}">${icon(icons[role])}</span>`;
+}
 
 /**
  * Блок журнала, который можно свернуть.
@@ -703,7 +734,7 @@ function encounterCard(): string {
   const model = FLEET[enemy.id]
     ? `<canvas class="enc-model" data-ship="${enemy.id}" aria-label="Модель корабля ${enemy.name}"></canvas>`
     : '';
-  return `<div class="card${tone}"><h2>В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
+  return `<div class="card${tone}"><h2>${roleIcon(e.role)}В радиусе: ${ROLE_NAMES[e.role]} (${enemy.name})</h2>
     ${model}
     <div class="sub">${hostile ? 'Враждебен' : 'Не враждебен'} · Решение через <span id="enc-eta"></span></div>
     <div class="row" style="margin-top:12px">
@@ -2028,7 +2059,15 @@ function marketScreen(): string {
   }).join('');
   const tons = cargoTons(state);
   const cap = tons + state.holdSpace;
-  return `<div class="card"><h2>Рынок: ${currentSystem(state).name}</h2>
+  /*
+   * §130: на рынке заголовок — «Станция», а не «Рынок».
+   *
+   * Пользователь: «на экране рынок, в блоке „рынок“ замени слово „рынок“ на
+   * „Станция“». Так честнее: в карточке не только цены, но и покупка станции —
+   * место называется тем, чем оно является. Вкладка внизу остаётся «Рынок»:
+   * по ней игрок ищет торговлю.
+   */
+  return `<div class="card"><h2>Станция: ${currentSystem(state).name}</h2>
     <div class="sub">Деньги: ${cr(state.cash)} · Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     ${stationBuyRow()}
@@ -2320,7 +2359,7 @@ function pilotsScreen(): string {
       perHour,
       income,
       html: `<div class="card">
-        <div class="row"><h2 style="margin:0">${p.name}</h2><span class="spacer"></span>
+        <div class="row"><h2 style="margin:0">${roleIcon(p.role)}${p.name}</h2><span class="spacer"></span>
           <span class="chip">${SHIPS[p.ship].name}</span></div>
         <div class="sub" style="margin-top:2px">${where}</div>
         ${body}

@@ -112,9 +112,16 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
 
   /* Бедный игрок: кнопка есть, она серая и молчит. */
   const poor = await openMarket(5000);
-  const poorCard = [...poor.document.querySelectorAll('#content .card')].find((c) => /Рынок:/.test(c.textContent));
+  const poorCard = [...poor.document.querySelectorAll('#content .card')].find((c) => /Станция:/.test(c.textContent));
   const poorBtn = poorCard?.querySelector('[data-action="station-buy"]');
-  check('§127: кнопка станции — в карточке «Рынок»', poorBtn !== undefined && poorBtn !== null);
+  check('§127: кнопка станции — в карточке «Станция»', poorBtn !== undefined && poorBtn !== null);
+  /*
+   * §130: на рынке заголовок карточки — «Станция», а не «Рынок».
+   * Вкладка внизу остаётся «Рынок»: по ней ищут торговлю.
+   */
+  check('§130: заголовок карточки — «Станция: LAVE»', /Станция: LAVE/.test(poorCard?.textContent ?? ''));
+  const stillMarket = [...poor.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === 'market');
+  check('§130: вкладка по-прежнему «Рынок»', /Рынок/.test(stillMarket?.textContent ?? ''));
   const bar = poorCard?.querySelector('.progress');
   check('§127: кнопка ниже полосы трюма',
     poorBtn && bar !== undefined && bar !== null
@@ -131,7 +138,9 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
    * выдавала тему раньше самой кнопки.
    */
   const poorText = poorCard?.textContent ?? '';
-  check('§127.1: цены станции на рынке нет', !/Станция:/.test(poorText) && !/477 400/.test(poorText));
+  // §130: заголовок теперь сам начинается со слова «Станция», поэтому
+  // проверяем не слово, а цену: её на рынке быть не должно.
+  check('§127.1: цены станции на рынке нет', !/477 400/.test(poorText) && !/Станция: LAVE[\s\S]*?CR/.test(poorText.replace(/Деньги:[^·]*/, '')));
   check('§127.1: кнопка стоит слева, первой в строке',
     poorBtn !== undefined && poorBtn !== null && poorBtn.parentElement.children[0] === poorBtn);
   poor.close();
