@@ -531,5 +531,38 @@ async function hangar(opts) {
   w.close();
 }
 
+/* ---------- §129: полицейский на линии торговца ---------- */
+{
+  const far = Date.now() + 1e9;
+  const trader = {
+    id: 1, name: 'Альфа', ship: 'adder', home: LAVE, route: { from: LAVE, to: REORTE },
+    nextRunAt: far, role: 'trader', runs: 2, failures: 0, transfer: null,
+  };
+  const cop = {
+    id: 2, name: 'Бета', ship: 'adder', home: LAVE, route: null,
+    nextRunAt: far, role: 'trader', runs: 0, failures: 0, transfer: null,
+  };
+  const w = await hangar({ pilots: [trader, cop], nextPilotId: 3, cash: 500_000 });
+
+  // Открываем маршруты второму пилоту и выбираем роль «Полицейский».
+  click(w, byAction(w, 'pilot-route', { i: 2 }));
+  await wait(300);
+  const roleBtn = byAction(w, 'pilot-role', { role: 'police' });
+  check('§129: роль «Полицейский» есть в панели', roleBtn !== undefined);
+  click(w, roleBtn);
+  await wait(300);
+
+  const toTraderLane = byAction(w, 'pilot-route-set', { i: 2, to: REORTE });
+  check('§129: линия торговца для полицейского открыта', toTraderLane !== undefined);
+  check('§129: и не подписана «маршрут занят»', !/маршрут занят/.test(content(w)));
+
+  click(w, toTraderLane);
+  await wait(400);
+  const s = saved(w);
+  const placed = s.pilots.find((p) => p.id === 2);
+  check('§129: полицейский встал на ту же линию', placed?.route?.to === REORTE && placed?.role === 'police');
+  w.close();
+}
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad > 0 ? 1 : 0);

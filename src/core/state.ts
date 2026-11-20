@@ -30,6 +30,7 @@ import {
   POLICE_SURVEILLANCE_BONUS,
   SMUGGLER_FINE,
   SMUGGLER_LEGAL,
+  laneBusy,
   laneSurveillance,
   pirateLoot,
   policeBounty,
@@ -1548,10 +1549,9 @@ export function assignPilotRoute(
   const ly = distance(systems[pilot.home], systems[to]);
   if (ly > SHIPS[pilot.ship].range) return { state, error: 'range' };
 
-  const taken = state.pilots.some(
-    (p) => p.id !== pilot.id && p.route?.from === pilot.home && p.route?.to === to,
-  );
-  if (taken) return { state, error: 'taken' };
+  // §129: линию делят только пилоты одного типа — полицейский торговцу не
+  // конкурент, он эту линию и прикрывает.
+  if (laneBusy(state.pilots, pilot, to, role)) return { state, error: 'taken' };
 
   const cycle = 2 * baseJumpDuration(ly, settings) + settings.pilotRestMs;
   /*

@@ -82,6 +82,7 @@ import {
 } from '../core/state.ts';
 import {
   formatSpan,
+  laneBusy,
   laneSurveillance,
   PIRATE_LEGAL_PER_RUN,
   policeBounty,
@@ -2487,12 +2488,12 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
   }
 
   const rows = options.map((o) => {
-    const taken = state.pilots.some(
-      (q) => q.id !== pilot.id && q.route?.from === pilot.home && q.route?.to === o.i,
-    );
+    // §129: та же проверка, что в ядре — иначе витрина обещает запрет,
+    // которого нет, или разрешает то, что ядро отклонит.
+    const taken = laneBusy(state.pilots, pilot, o.i, role);
     const isCurrent = pilot.route?.to === o.i && pilot.role === role;
     const action = isCurrent
-      ? '<span class="chip">летает здесь</span>'
+      ? `<span class="chip">${role === 'police' ? 'дежурит здесь' : 'летает здесь'}</span>`
       : taken
         ? '<span class="chip dear">маршрут занят</span>'
         : `<button class="btn" data-action="pilot-route-set" data-i="${pilot.id}" data-to="${o.i}" data-role="${role}">Лететь</button>`;

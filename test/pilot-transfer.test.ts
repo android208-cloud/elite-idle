@@ -161,3 +161,56 @@ describe('§128: смена корабля пилота', () => {
     assert.equal(refitPilot(poor, 1, 'cobra3', NOW).error, 'cash');
   });
 });
+
+/**
+ * §129: полицейский и торговец не конкуренты на одной линии.
+ *
+ * Пользователь: «сейчас я не могу поставить полицейского на один маршрут с
+ * торговцем?» — не мог, и правило «одна линия — один пилот» тут было лишним:
+ * оно про торговую цену, а полицейский не торгует, он дежурит.
+ */
+describe('§129: линия делится только внутри своего типа', () => {
+  const veteranState = (): GameState => ({
+    ...newGame(1), kills: 128, cash: 5_000_000, pilots: [], nextPilotId: 1,
+  });
+
+  /** Двое: торговец на LAVE → REORTE и второй пилот рядом. */
+  const pair = (): GameState => {
+    const a = hirePilot(veteranState(), 'adder', NOW);
+    const b = hirePilot(a.state, 'adder', NOW);
+    const routed = assignPilotRoute(b.state, 1, REORTE, NOW, 'trader');
+    assert.equal(routed.error, undefined);
+    return routed.state;
+  };
+
+  it('полицейского ставят туда, где летает торговец', () => {
+    const state = pair();
+    const r = assignPilotRoute(state, 2, REORTE, NOW, 'police');
+    assert.equal(r.error, undefined);
+    assert.deepEqual(r.pilot!.route, { from: LAVE, to: REORTE });
+  });
+
+  it('второго торговца — по-прежнему нельзя', () => {
+    const state = pair();
+    assert.equal(assignPilotRoute(state, 2, REORTE, NOW, 'trader').error, 'taken');
+    assert.equal(assignPilotRoute(state, 2, REORTE, NOW, 'smuggler').error, 'taken');
+  });
+
+  it('торговец встаёт на линию, где уже дежурит полицейский', () => {
+    const police = assignPilotRoute(pair(), 2, REORTE, NOW, 'police').state;
+    // Теперь меняем роли местами: пилот 1 — полицейский, пилот 2 — торговец.
+    const swapped = assignPilotRoute(
+      { ...police, pilots: police.pilots.map((p) => ({ ...p, route: null })) },
+      1, REORTE, NOW, 'police',
+    );
+    assert.equal(swapped.error, undefined);
+    const trade = assignPilotRoute(swapped.state, 2, REORTE, NOW, 'trader');
+    assert.equal(trade.error, undefined);
+  });
+
+  it('двое полицейских на одну и ту же пару систем — занято', () => {
+    const state = assignPilotRoute(pair(), 2, REORTE, NOW, 'police').state;
+    const again = { ...state, pilots: state.pilots.map((p) => (p.id === 1 ? { ...p, route: null } : p)) };
+    assert.equal(assignPilotRoute(again, 1, REORTE, NOW, 'police').error, 'taken');
+  });
+});
