@@ -126,11 +126,13 @@ check('§131.10: у модели корабля нижнее поле верну
   w.getComputedStyle(main.querySelector('.ship-view')).marginBottom);
 
 /*
- * §131.11: у прилипшей карточки гасятся ТОЛЬКО верхние углы.
+ * §131.12: скругления не пропадают, а уголки закрашиваются фоном.
  *
- * Пользователь: «А сможешь сделать чтобы сверху карточки такого эффекта не
- * было? … (снизу всё идеально!)». Снизу сквозь дуги видно уползающую карточку,
- * и это нравится; сверху карточка висит на шапке, и мелькать там нечему.
+ * Пользователь: «Те уголки, которые дорисовываются сверху вместо скруглений
+ * должны быть в цвет фона, скругления не должны пропадать». Значит радиусы у
+ * прилипшей карточки остаются такими же, как у едущей, а под верхними углами
+ * лежит полоса цвета страницы — под карточкой, чтобы видно её было только в
+ * дырках углов.
  */
 const css = (w.document.querySelector('style')?.textContent ?? '') + html;
 const rectOf = (top) => ({ top, bottom: top + 100, left: 0, right: 0, width: 100, height: 100, x: 0, y: top });
@@ -139,28 +141,32 @@ const place = (wrapTop) => {
   main.getBoundingClientRect = () => rectOf(0);
   main.dispatchEvent(new w.Event('scroll'));
 };
+const radius = () => String(w.getComputedStyle(fuel).borderRadius);
 const topLeft = () => String(w.getComputedStyle(fuel).borderTopLeftRadius);
 const bottomLeft = () => String(w.getComputedStyle(fuel).borderBottomLeftRadius);
 
 place(320);
-check('§131.9: пока карточка едет — все углы круглые',
-  /^16px$/.test(topLeft()) && /^16px$/.test(bottomLeft()), `${topLeft()} / ${bottomLeft()}`);
+check('§131.9: пока карточка едет — все углы круглые', /^16px$/.test(radius()), radius());
 
 place(0);
-check('§131.11: залипла — класс `stuck` появился', wrap.classList.contains('stuck'), wrap.className);
-check('§131.11: верхние углы погашены', topLeft().startsWith('0px'), topLeft());
-check('§131.11: а нижние остались круглыми — там «нежный эффект»',
-  bottomLeft().startsWith('16px'), bottomLeft());
+check('§131.12: залипла — класс `stuck` появился', wrap.classList.contains('stuck'), wrap.className);
+check('§131.12: верхний угол не пропал', topLeft().startsWith('16px'), topLeft());
+check('§131.12: и нижний тоже', bottomLeft().startsWith('16px'), bottomLeft());
+check('§131.12: правило, гасившее верхние радиусы, удалено',
+  !/\.sticky-fuel\.stuck\s*>\s*\.card\s*\{[^}]*border-radius/.test(css), 'правила нет');
 check('§131.11: тень у карточки на месте',
   String(w.getComputedStyle(fuel).boxShadow).includes('12px'), String(w.getComputedStyle(fuel).boxShadow));
+
+const strip = css.match(/\.sticky-fuel\.stuck::?before\s*\{[^}]*\}/)?.[0] ?? '';
+check('§131.12: под верхними углами есть полоса подложки', strip !== '', strip ? 'правило найдено' : 'правила нет');
+check('§131.12: она цвета страницы', /background:\s*var\(--bg\)/.test(strip));
+check('§131.12: она высотой в радиус — ровно дуга угла', /height:\s*calc\(var\(--radius\)\s*\+\s*2px\)/.test(strip), strip.slice(0, 80));
+check('§131.12: лежит ПОД карточкой, иначе закрасила бы её саму', /z-index:\s*-1/.test(strip));
+check('§131.12: шириной во всю карточку и не перехватывает нажатия',
+  /left:\s*0/.test(strip) && /right:\s*0/.test(strip) && /pointer-events:\s*none/.test(strip));
 check('§131.10: «подошвы» под карточкой нет', !/\.sticky-fuel\.stuck::?after/.test(css), 'правила нет');
 check('§131.10: обёртка по-прежнему ничего не красит',
   !/\.sticky-fuel\s*\{[^}]*background/.test(css), 'фона нет');
-// §131.11: узкая полоска подложки только над верхним краем карточки.
-const strip = css.match(/\.sticky-fuel\.stuck::?before\s*\{[^}]*\}/)?.[0] ?? '';
-check('§131.11: над верхним краем есть узкая полоска подложки', strip !== '', strip ? 'правило найдено' : 'правила нет');
-check('§131.11: она выше карточки на пару пикселей и цвета страницы',
-  /top:\s*-2px/.test(strip) && /height:\s*2px/.test(strip) && /background:\s*var\(--bg\)/.test(strip), strip.slice(0, 60));
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
