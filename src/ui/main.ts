@@ -110,6 +110,7 @@ import {
   shipSpec,
   type ShipId,
 } from '../core/ships.ts';
+import { stationPrice } from '../core/station.ts';
 import { topValue } from './top-bar.ts';
 
 /* ---------- Сохранение ---------- */
@@ -342,6 +343,16 @@ const UNITS = ['т', 'кг', 'г'];
 const cr = (n: number): string => `${(n / 10).toFixed(1)} CR`;
 const ly = (n: number): string => `${(n / 10).toFixed(1)} св. г.`;
 
+/*
+ * §125: цена станции — сотни тысяч кредитов.
+ *
+ * `cr()` показывает копейки: «477 420.0 CR» на такой сумме читается как
+ * выписка из бухгалтерии, да ещё и без разрядов. Для цены станции —
+ * целые кредиты с пробелами между разрядами: «477 400 CR».
+ */
+const cash = (n: number): string =>
+  `${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} CR`;
+
 /**
  * Длительность человеческим языком.
  *
@@ -539,7 +550,8 @@ function systemInfo(index: number): string {
   const pop = (s.population * 256) / 1000;
   const popText = pop >= 1 ? `${pop.toFixed(1)} млрд` : `${Math.round(pop * 1000)} млн`;
   return `${ECONOMIES[s.economy]}, ${GOVERNMENTS[s.government]}<br>
-    Техуровень ${s.techLevel + 1} · Население ${popText} · Продуктивность ${s.productivity}`;
+    Техуровень ${s.techLevel + 1} · Население ${popText} · Продуктивность ${s.productivity}<br>
+    Станция · цена ${cash(stationPrice(s))}`;
 }
 
 function flightCard(): string {
