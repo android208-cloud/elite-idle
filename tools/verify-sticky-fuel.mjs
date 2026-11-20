@@ -115,22 +115,36 @@ check('§131.3: у следующей карточки обычное поле �
   w.getComputedStyle(wrap.nextElementSibling).marginTop);
 
 /*
- * §131.7: низ круглый, тень мягкая — как в первой версии.
+ * §131.8: у прилипшей карточки низ прямой, у едущей — круглый.
  *
- * Пользователь выбрал: «углы круглые и сквозь них видно карточку под ними
- * (пусть и притенённую) и хорошую тень». Значит не должно остаться ничего,
- * что скругляет углы «по состоянию» или дорисовывает полосы под карточкой:
- * ни `.stuck`, ни «подошвы».
+ * Пользователь сравнил два вида рядом: «у нас сейчас, как на первом скрине,
+ * а надо как на втором». На первом сквозь дугу нижних углов просвечивала
+ * карточка под ними. Проверяем оба состояния: rect'ы в jsdom нулевые,
+ * поэтому подменяем их и дёргаем настоящую прокрутку.
  */
-check('§131.7: низ у карточки круглый, как у всех', /^16px( 16px){0,3}$/.test(String(w.getComputedStyle(fuel).borderRadius)),
-  String(w.getComputedStyle(fuel).borderRadius));
-check('§131.7: тень мягкая и своя у карточки', String(w.getComputedStyle(fuel).boxShadow).includes('12px'),
-  String(w.getComputedStyle(fuel).boxShadow));
+const rectOf = (top) => ({ top, bottom: top + 100, left: 0, right: 0, width: 100, height: 100, x: 0, y: top });
+const place = (wrapTop) => {
+  wrap.getBoundingClientRect = () => rectOf(wrapTop);
+  main.getBoundingClientRect = () => rectOf(0);
+  main.dispatchEvent(new w.Event('scroll'));
+};
+const radius = () => String(w.getComputedStyle(fuel).borderRadius);
 const css = (w.document.querySelector('style')?.textContent ?? '') + html;
-check('§131.7: класса `stuck` больше нет — ни правила, ни разметки',
-  !/\.sticky-fuel\.stuck/.test(css) && !wrap.classList.contains('stuck'), wrap.className);
-check('§131.7: «подошвы» под карточкой тоже нет',
-  !/\.sticky-fuel\.stuck::?after/.test(css), 'правила нет');
+
+place(320);
+check('§131.8: пока карточка едет — низ круглый, как у всех', /^16px( 16px){0,3}$/.test(radius()), radius());
+
+place(0);
+check('§131.8: залипла — появился класс `stuck`', wrap.classList.contains('stuck'), wrap.className);
+check('§131.8: и низ у неё прямой',
+  String(w.getComputedStyle(fuel).borderBottomLeftRadius).startsWith('0px') &&
+  String(w.getComputedStyle(fuel).borderBottomRightRadius).startsWith('0px'),
+  `${w.getComputedStyle(fuel).borderBottomLeftRadius} / ${w.getComputedStyle(fuel).borderBottomRightRadius}`);
+check('§131.8: а верх остаётся круглым',
+  String(w.getComputedStyle(fuel).borderTopLeftRadius) === '16px', w.getComputedStyle(fuel).borderTopLeftRadius);
+check('§131.8: тень осталась у самой карточки',
+  String(w.getComputedStyle(fuel).boxShadow).includes('12px'), String(w.getComputedStyle(fuel).boxShadow));
+check('§131.8: «подошвы» под карточкой нет', !/\.sticky-fuel\.stuck::?after/.test(css), 'правила нет');
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
