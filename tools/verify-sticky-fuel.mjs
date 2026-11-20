@@ -85,7 +85,8 @@ const ws = w.getComputedStyle(wrap);
 check('§131: position: sticky', ws.position === 'sticky', ws.position);
 check('§131: прилипает к верху области прокрутки (top: 0)', ws.top === '0px', ws.top);
 check('§131.1: у обёртки есть закрашенный отступ сверху', parseFloat(ws.paddingTop) >= 6, ws.paddingTop);
-check('§131.2: и такой же снизу — под карточку уползает следующая', parseFloat(ws.paddingBottom) >= 6, ws.paddingBottom);
+// §131.3: снизу полотна быть не должно — оно закрывало нижний край карточки.
+check('§131.3: снизу у обёртки полотна нет', parseFloat(ws.paddingBottom) === 0, ws.paddingBottom);
 check('§131.1: фон обёртки — цвет страницы, а не прозрачность',
   ws.backgroundColor !== '' && ws.backgroundColor !== 'transparent' && ws.backgroundColor !== 'rgba(0, 0, 0, 0)', ws.backgroundColor);
 check('§131.1: обёртка выходит в поля main, чтобы закрыть и боковые щели',
@@ -109,8 +110,8 @@ check('§131: под топливом остальной список',
  */
 check('§131.2: у области прокрутки нет верхнего отступа',
   w.getComputedStyle(main).paddingTop === '0px', w.getComputedStyle(main).paddingTop);
-check('§131.2: следующей карточке верхнее поле не нужно — его даёт обёртка',
-  w.getComputedStyle(wrap.nextElementSibling).marginTop === '0px',
+check('§131.3: у следующей карточки обычное поле — полотно его больше не заменяет',
+  w.getComputedStyle(wrap.nextElementSibling).marginTop === '10px',
   w.getComputedStyle(wrap.nextElementSibling).marginTop);
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
