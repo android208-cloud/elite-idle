@@ -2143,6 +2143,9 @@ function hangarScreen(): string {
    * Обёртка нужна только ради `position: sticky`: она прозрачна, без полей и
    * отступов (§131.10), поэтому видна ровно карточка — со своим скруглением и
    * тенью, и сквозь дуги её нижних углов видно то, что под неё уползает.
+   *
+   * §131.11: у прилипшей карточки верхние углы гасятся — она висит на шапке,
+   * и в верхних дугах не должно мелькать то, что едет под ней.
    */
   return `${model}<div class="sticky-fuel"><div class="card"><h2>Топливо</h2>
       <div class="sub">${ly(state.fuel)} из ${ly(tank)} · цена 0.2 CR за св. год</div>
@@ -3213,6 +3216,26 @@ function render(): void {
     if (routeCardEl) content.scrollTop = Math.max(0, routeCardEl.offsetTop - 8);
   }
 
+  // §131.11: разметка новая — прежний класс `stuck` уехал вместе со старой.
+  syncStickyFuel();
+}
+
+/**
+ * §131.11: залипла карточка «Топливо» или ещё едет.
+ *
+ * Нужно ради верхних углов: у прилипшей карточки они прямые. Снизу углы при
+ * этом не трогаются — сквозь них должно быть видно уползающую карточку.
+ *
+ * Признак прилипания простой: верх обёртки сравнялся с верхом области
+ * прокрутки. Считать по смещению нельзя — оно зависит от браузера.
+ */
+function syncStickyFuel(): void {
+  const content = document.getElementById('content');
+  if (!content) return;
+  const wrap = content.querySelector<HTMLElement>('.sticky-fuel');
+  if (!wrap) return;
+  const stuck = wrap.getBoundingClientRect().top <= content.getBoundingClientRect().top + 0.5;
+  wrap.classList.toggle('stuck', stuck);
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -4278,6 +4301,12 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
     onMapTap(ev as PointerEvent, target as HTMLCanvasElement);
   }
 });
+
+/*
+ * §131.11: прокрутка меняет только верхние углы карточки — пересобирать экран
+ * ради этого нельзя, поэтому отдельный слушатель.
+ */
+document.getElementById('content')!.addEventListener('scroll', syncStickyFuel, { passive: true });
 
 window.addEventListener('resize', () => {
   if (tab === 'map' && !state.combat) drawMap();
