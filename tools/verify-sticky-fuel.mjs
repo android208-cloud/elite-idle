@@ -69,20 +69,37 @@ click(w, byAction(w, 'tab', { tab: 'hangar' }));
 await wait(400);
 
 const main = w.document.getElementById('content');
-const fuel = [...main.querySelectorAll('.card')].find((c) => /^Топливо/.test(c.textContent.trim()));
-check('§131: карточка топлива на месте', fuel !== undefined);
+const wrap = main.querySelector('.sticky-fuel');
+const fuel = wrap?.querySelector('.card');
+check('§131: карточка топлива на месте', fuel !== undefined && fuel !== null);
+check('§131: она внутри липкой обёртки', wrap !== null);
 
-const style = w.getComputedStyle(fuel);
-check('§131: position: sticky', style.position === 'sticky', style.position);
-check('§131: прилипает к верху области прокрутки (top: 0)', style.top === '0px', style.top);
-check('§131: у неё нулевой верхний отступ — иначе над ней щель', style.marginTop === '0px', style.marginTop);
-check('§131: она выше остальных карточек', Number(style.zIndex) >= 1, style.zIndex);
+/*
+ * §131.1: липнет ОБЁРТКА, а не карточка.
+ *
+ * Пользователь (скриншот): «сверху видно нижние карточки в зазоре между
+ * „топливо“ и шапкой». Лечится не координатами, а фоном: обёртка красится
+ * цветом страницы и имеет собственный отступ сверху — он и закрывает щель.
+ */
+const ws = w.getComputedStyle(wrap);
+check('§131: position: sticky', ws.position === 'sticky', ws.position);
+check('§131: прилипает к верху области прокрутки (top: 0)', ws.top === '0px', ws.top);
+check('§131.1: у обёртки есть закрашенный отступ сверху', parseFloat(ws.paddingTop) >= 8, ws.paddingTop);
+check('§131.1: фон обёртки — цвет страницы, а не прозрачность',
+  ws.backgroundColor !== '' && ws.backgroundColor !== 'transparent' && ws.backgroundColor !== 'rgba(0, 0, 0, 0)', ws.backgroundColor);
+check('§131.1: обёртка выходит в поля main, чтобы закрыть и боковые щели',
+  parseFloat(ws.marginLeft) <= -8 && parseFloat(ws.marginRight) <= -8, `${ws.marginLeft} / ${ws.marginRight}`);
+check('§131: у самой карточки полей нет — зазор даёт обёртка',
+  w.getComputedStyle(fuel).marginTop === '0px' && w.getComputedStyle(fuel).marginLeft === '0px');
+check('§131: она выше остальных карточек', Number(ws.zIndex) >= 1, ws.zIndex);
 
 // Порядок: сперва модель корабля, потом топливо, потом всё остальное.
 const cards = [...main.querySelectorAll(':scope > .card')];
-const fuelIndex = cards.indexOf(fuel);
-check('§131: карточка корабля идёт раньше топлива', fuelIndex > 0 && /корабль в ангаре/.test(cards[0].textContent), `${fuelIndex}`);
-check('§131: под топливом остальной список', cards.length > fuelIndex + 1 && /Оборудование/.test(cards[fuelIndex + 1].textContent));
+check('§131: карточка корабля идёт раньше топлива', /корабль в ангаре/.test(cards[0]?.textContent ?? ''));
+const order = [...main.children];
+check('§131: топливо — после модели корабля', order.indexOf(wrap) === 1, `${order.indexOf(wrap)}`);
+check('§131: под топливом остальной список',
+  /Оборудование/.test(order[2]?.textContent ?? ''), order[2]?.className);
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
@@ -90,10 +107,10 @@ check('§131: прокрутка — в main', w.getComputedStyle(main).overflow
 // На других вкладках липкой карточки нет.
 click(w, byAction(w, 'tab', { tab: 'market' }));
 await wait(300);
-check('§131: на рынке липкой карточки нет', w.document.querySelectorAll('.sticky-card').length === 0);
+check('§131: на рынке липкой карточки нет', w.document.querySelectorAll('.sticky-fuel').length === 0);
 click(w, byAction(w, 'tab', { tab: 'ship' }));
 await wait(300);
-check('§131: на экране корабля её тоже нет', w.document.querySelectorAll('.sticky-card').length === 0);
+check('§131: на экране корабля её тоже нет', w.document.querySelectorAll('.sticky-fuel').length === 0);
 
 w.close();
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
