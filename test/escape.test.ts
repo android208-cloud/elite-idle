@@ -17,6 +17,7 @@ import {
   ESCAPE_PLANETS_OFFENDER,
   ESCAPE_PLANETS_FUGITIVE,
   escapePlanetsFor,
+  escapeProgress,
   MAX_FUEL,
   newGame,
   startJump,
@@ -228,5 +229,30 @@ describe('§80: побег от статуса', () => {
     const s = deserialize(JSON.stringify({ ...old, version: 2 }));
     assert.deepEqual(s.escapeRoute, [], 'маршрут пуст');
     assert.equal(s.escapeStatus, -1, 'побега нет');
+  });
+
+  /*
+   * §121: СЧЁТЧИК ПОБЕГА.
+   *
+   * Правила не менялись — менялась только видимость. Пользователь второй
+   * раз оказался «Беглецом» и не знал, что с этим делать: маршрут побега
+   * был пуст, а в интерфейсе о нём не было ни слова.
+   */
+  it('§121: до старта счётчик называет нужное число планет', () => {
+    const fugitive: GameState = { ...newGame(1), legal: 255, escapeRoute: [], escapeStatus: -1 };
+    assert.deepEqual(escapeProgress(fugitive), { done: 0, need: 12 }, '65535 не бывает: 12 планет');
+    const offender: GameState = { ...fugitive, legal: 20 };
+    assert.deepEqual(escapeProgress(offender), { done: 0, need: 6 }, 'нарушителю хватит шести');
+  });
+
+  it('§121: в пути счётчик показывает пройденное', () => {
+    const r = escapeRun(255, 5);
+    assert.deepEqual(escapeProgress(r.state), { done: 5, need: 12 }, '5 из 12');
+  });
+
+  it('§121: после победы счётчик пуст', () => {
+    const r = escapeRun(255, 12);
+    assert.deepEqual(escapeProgress(r.state), { done: 0, need: 0 }, 'статус чист — бежать не от чего');
+    assert.equal(r.state.legal, 0);
   });
 });

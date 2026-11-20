@@ -141,6 +141,26 @@ export function escapePlanetsFor(legal: number): number {
   return legal >= 50 ? ESCAPE_PLANETS_FUGITIVE : ESCAPE_PLANETS_OFFENDER;
 }
 
+/**
+ * §121: СКОЛЬКО ПЛАНЕТ ОСТАЛОСЬ ДО ЧИСТОТЫ — одним числом для интерфейса.
+ *
+ * Пользователь второй раз оказался «Беглецом» и не знал, что с этим
+ * делать: механика побега (§84) работала, но её прогресс нигде не был
+ * виден, кроме строки в журнале. Счётчик на экране карты — единственное
+ * изменение: правила те же.
+ *
+ * `escapeStatus` — это снимок статуса на старте маршрута, и ступень
+ * (6 или 12 планет) выбирается именно по нему. Если маршрут ещё не
+ * начат, считаем по текущему статусу: игроку нужно видеть, что его ждёт.
+ */
+export function escapeProgress(state: GameState): { done: number; need: number } {
+  // Чистому игроку бежать не от чего: `need: 0` — это «ничего не нужно»,
+  // а не «шесть планет». Иначе счётчик после победы показывал бы «0/6».
+  if (state.legal === 0 && state.escapeRoute.length === 0) return { done: 0, need: 0 };
+  const start = state.escapeStatus >= 0 ? state.escapeStatus : state.legal;
+  return { done: state.escapeRoute.length, need: escapePlanetsFor(start) };
+}
+
 /** Обратная совместимость: самый строгий порог. */
 export const ESCAPE_PLANETS = ESCAPE_PLANETS_FUGITIVE;
 
@@ -1713,7 +1733,7 @@ function accrueFleet(
        * стрелять. Теперь видно и цифру статуса, и откуда он взялся.
        */
       const legalNote = legal > legalBefore
-        ? `, розыск +${legal - legalBefore} → ${legal} (${legalLabel(legal)})`
+        ? `, ваш розыск +${legal - legalBefore} → ${legal} (${legalLabel(legal)})`
         : '';
       notes.push(`${pilot.name}: ${failures} ${plural(failures, 'провал', 'провала', 'провалов')} (${why})${legalNote}`);
     }

@@ -72,6 +72,7 @@ import {
   PATROL_MISSILES_REQUIRED,
   PATROL_RETURN_RESERVE,
   contrabandLevel,
+  escapeProgress,
 } from '../core/state.ts';
 import {
   formatSpan,
@@ -91,6 +92,7 @@ import {
   PILOT_RANK_RISK,
   PILOT_RANK_RUNS,
   PILOT_ROLE_NAMES,
+  SMUGGLER_LEGAL,
   routeDistance,
   routeProfit,
   surveillanceOf,
@@ -728,8 +730,34 @@ function shipScreen(): string {
       ${stat('Ранг', rankOf(state.kills))}
       ${stat('Статус', legalLabel(state.legal))}
     </div>
+    ${isCriminal(state.legal)
+      ? `<div class="card warn"><h2>Розыск: ${state.legal} (${legalLabel(state.legal)})</h2>${escapeWarn()}</div>`
+      : ''}
     <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
     <div class="card${smuggling ? ' danger' : ''}"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
+}
+
+/**
+ * §121: СЧЁТЧИК ПОБЕГА.
+ *
+ * Пользователь второй раз оказался в розыске 255 и не знал, что делать:
+ * правило «12 новых планет — и статус чист» (§84) существует, но его
+ * видно только в журнале, куда игрок не смотрит. Здесь — та же цифра, но
+ * на экране, рядом с причиной: и «ещё не начал», и «сколько осталось», и
+ * «нельзя, в трюме запрещёнка».
+ */
+function escapeWarn(): string {
+  const { done, need } = escapeProgress(state);
+  if (done === 0 && !isCriminal(state.legal)) return '';
+  const banned = contrabandLevel(state.cargo);
+  if (banned > 0) {
+    return `<div class="sub" style="margin-top:6px">Побег невозможен: в трюме ${banned} ${plural(banned, 'тонна', 'тонны', 'тонн')} запрещённого товара. Сбросьте его во вкладке «Трюм» — иначе статус не снизится.</div>`;
+  }
+  if (done === 0) {
+    return `<div class="sub" style="margin-top:6px">Побег не начат: ${need} ${plural(need, 'новая планета', 'новые планеты', 'новых планет')} без возврата — и розыск сгорит. Первый прыжок откроет маршрут.</div>`;
+  }
+  const left = need - done;
+  return `<div class="sub" style="margin-top:6px">Побег: <b data-escape="${done}/${need}">${done}/${need}</b> · ещё ${left} ${plural(left, 'планета', 'планеты', 'планет')} — и розыск сгорит. На посещённые не возвращайтесь: маршрут начнётся заново.</div>`;
 }
 
 /**
@@ -804,7 +832,7 @@ function flightButtons(): string {
    * а не в журнале после.
    */
   const pirateWarn = pirate
-    ? `<div class="sub" style="margin-top:6px">Вы в розыске: ${state.legal} (${legalLabel(state.legal)}). Полиция будет атаковать, торговцы станут добычей, за каждого сбитого полицейского +${POLICE_KILL_LEGAL} к розыску.</div>`
+    ? `<div class="sub" style="margin-top:6px">Вы в розыске: ${state.legal} (${legalLabel(state.legal)}). Полиция будет атаковать, торговцы станут добычей, за каждого сбитого полицейского +${POLICE_KILL_LEGAL} к розыску.</div>${escapeWarn()}`
     : '';
 
   return `<div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">${jump}${patrol}</div>
@@ -2281,7 +2309,7 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
   const hint = role === 'pirate'
     ? `Каждый рейс: +${PIRATE_LEGAL_PER_RUN} к розыску. Перехват — корабль и пилот потеряны, трепка — ремонт.`
     : role === 'smuggler'
-      ? 'Возит законный груз и запрещёнку. Досмотр: запрещёнка конфискована, штраф 100 CR, +2 к розыску.'
+      ? `Возит законный груз и запрещёнку. Досмотр: запрещёнка конфискована, штраф 100 CR, ваш розыск +${SMUGGLER_LEGAL} — а с ним полиция становится враждебной.`
       : role === 'police'
         ? `Дежурит в системе: +${POLICE_SURVEILLANCE_BONUS} к надзору — вашим торговцам спокойнее, вашим пиратам и контрабандистам здесь тесно. Плата — награды за поимку.`
         : 'Запрещёнку не берёт вовсе. Риск — пираты на линии.';
@@ -2373,7 +2401,12 @@ function rankLine(p: Pilot): string {
 /** Риски роли одной строкой — то, что игрок читает ПЕРЕД назначением. */
 function riskLabel(role: PilotRole, risk: ReturnType<typeof pilotRisk>): string {
   if (role === 'pirate') return `перехват ${pct(risk.police)} · трепка ${pct(risk.damage)}`;
-  if (role === 'smuggler') return risk.inspect > 0 ? `досмотр ${pct(risk.inspect)}` : 'досмотр маловероятен';
+  if (role === 'smuggler') {
+    if (risk.inspect <= 0) return 'досмотр маловероятен';
+    // §121: цена досмотра — не только штраф, но и ВАШ розыск. Игрок должен
+    // видеть это до назначения роли, а не узнавать из журнала.
+    return `досмотр ${pct(risk.inspect)} · при досмотре ваш розыск +${SMUGGLER_LEGAL}`;
+  }
   if (role === 'police') return `гибель ${pct(risk.death)} · трепка ${pct(risk.beaten)}`;
   return risk.raid > 0 ? `пираты ${pct(risk.raid)}` : 'линия спокойная';
 }
