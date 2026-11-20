@@ -2154,9 +2154,10 @@ function hangarScreen(): string {
    * У `<main>` верхнего отступа тоже нет: любая полоска над прилипшей
    * карточкой — это дыра, в которой видно чужие строки.
    *
-   * §131.8: у прилипшей карточки низ прямой, у едущей — круглый. Сквозь дугу
-   * нижних углов видно то, что уползает под карточку, и это читается как
-   * «уголки врезались в нижнюю»; поэтому у залипшей карточки низ гасится.
+   * §131.9: форма карточки не зависит от прокрутки — углы круглые всегда.
+   * Сквозь дугу нижних углов видно то, что уползает под карточку; тень это
+   * притеняет. Прямой низ по состоянию (`.stuck`) убран: на ходу он выглядел
+   * как «углы дёргаются».
    */
   return `${model}<div class="sticky-fuel"><div class="card"><h2>Топливо</h2>
       <div class="sub">${ly(state.fuel)} из ${ly(tank)} · цена 0.2 CR за св. год</div>
@@ -3227,28 +3228,6 @@ function render(): void {
     if (routeCardEl) content.scrollTop = Math.max(0, routeCardEl.offsetTop - 8);
   }
 
-  // §131.8: разметка новая — прежний класс `stuck` уехал вместе со старой.
-  syncStickyFuel();
-}
-
-/**
- * §131.8: залипла карточка «Топливо» или ещё едет.
- *
- * Нужно ровно для одного: у прилипшей карточки гасится нижнее закругление.
- * Под ней уползает следующая карточка с такими же радиусами, и два закругления
- * встык читаются как «уголки верхней врезались в нижнюю». У едущей карточки низ
- * круглый — она такая же, как все.
- *
- * Признак прилипания простой: верх обёртки сравнялся с верхом области
- * прокрутки. Считать по смещению нельзя — оно зависит от браузера.
- */
-function syncStickyFuel(): void {
-  const content = document.getElementById('content');
-  if (!content) return;
-  const wrap = content.querySelector<HTMLElement>('.sticky-fuel');
-  if (!wrap) return;
-  const stuck = wrap.getBoundingClientRect().top <= content.getBoundingClientRect().top + 0.5;
-  wrap.classList.toggle('stuck', stuck);
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -4314,12 +4293,6 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
     onMapTap(ev as PointerEvent, target as HTMLCanvasElement);
   }
 });
-
-/*
- * §131.8: прокрутка меняет только вид прилипшей карточки — пересобирать экран
- * ради этого нельзя, поэтому отдельный слушатель.
- */
-document.getElementById('content')!.addEventListener('scroll', syncStickyFuel, { passive: true });
 
 window.addEventListener('resize', () => {
   if (tab === 'map' && !state.combat) drawMap();
