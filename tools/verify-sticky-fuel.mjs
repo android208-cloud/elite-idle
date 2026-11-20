@@ -115,55 +115,22 @@ check('§131.3: у следующей карточки обычное поле �
   w.getComputedStyle(wrap.nextElementSibling).marginTop);
 
 /*
- * §131.4: у ПРИЛИПШЕЙ карточки низ прямой.
+ * §131.7: низ круглый, тень мягкая — как в первой версии.
  *
- * Пользователь (скриншот): «Вот эти уголки, закрывающие нижнюю карточку можно
- * убрать?» Под прилипшей карточкой уползает следующая, и её верхние
- * закругления совпадают с вырезами нижних углов — два радиуса встык.
- *
- * Проверяем поведение, а не только правило: подменяем rect'ы (в jsdom они
- * нулевые) и дёргаем прокрутку — карточка «едет» и «залипла».
+ * Пользователь выбрал: «углы круглые и сквозь них видно карточку под ними
+ * (пусть и притенённую) и хорошую тень». Значит не должно остаться ничего,
+ * что скругляет углы «по состоянию» или дорисовывает полосы под карточкой:
+ * ни `.stuck`, ни «подошвы».
  */
-const rectOf = (top) => ({ top, bottom: top + 100, left: 0, right: 0, width: 100, height: 100, x: 0, y: top });
-const place = (wrapTop) => {
-  wrap.getBoundingClientRect = () => rectOf(wrapTop);
-  main.getBoundingClientRect = () => rectOf(0);
-  main.dispatchEvent(new w.Event('scroll'));
-};
-const radius = () => String(w.getComputedStyle(fuel).borderRadius);
-
-place(320);
-check('§131.4: пока карточка едет — класс `stuck` не стоит', !wrap.classList.contains('stuck'), wrap.className);
-check('§131.4: и низ у неё круглый, как у всех карточек',
-  /^16px( 16px){0,3}$/.test(radius()), radius());
-
-place(0);
-check('§131.4: доехала до верха — класс `stuck` появился', wrap.classList.contains('stuck'), wrap.className);
-check('§131.4: у прилипшей карточки низ прямой',
-  String(w.getComputedStyle(fuel).borderBottomLeftRadius).startsWith('0px') &&
-  String(w.getComputedStyle(fuel).borderBottomRightRadius).startsWith('0px'),
-  `${w.getComputedStyle(fuel).borderBottomLeftRadius} / ${w.getComputedStyle(fuel).borderBottomRightRadius}`);
-check('§131.4: а верх остаётся круглым',
-  String(w.getComputedStyle(fuel).borderTopLeftRadius) === '16px', w.getComputedStyle(fuel).borderTopLeftRadius);
-
-/*
- * §131.5: «подошва» — полоса цвета карточки под панелью и тень на её нижнем
- * крае. Это псевдоэлемент, в DOM его нет и `getComputedStyle` его не видит,
- * поэтому правило проверяем в собранном файле — но проверяем все три вещи,
- * без которых эффекта не будет: цвет карточки, тень и то, что полоса не
- * перехватывает нажатия.
- */
+check('§131.7: низ у карточки круглый, как у всех', /^16px( 16px){0,3}$/.test(String(w.getComputedStyle(fuel).borderRadius)),
+  String(w.getComputedStyle(fuel).borderRadius));
+check('§131.7: тень мягкая и своя у карточки', String(w.getComputedStyle(fuel).boxShadow).includes('12px'),
+  String(w.getComputedStyle(fuel).boxShadow));
 const css = (w.document.querySelector('style')?.textContent ?? '') + html;
-// В собранном файле минификатор пишет `:after` вместо `::after` — берём оба.
-const sole = css.match(/\.sticky-fuel\.stuck::?after\s*\{[^}]*\}/)?.[0] ?? '';
-check('§131.5: у прилипшей карточки есть «подошва»', sole !== '', sole ? 'правило найдено' : 'правила нет');
-check('§131.5: она цвета карточки, а не фона', /background:\s*var\(--surface-2\)/.test(sole));
-check('§131.5: тень стоит на её нижнем крае', /box-shadow:/.test(sole));
-check('§131.5: она не перехватывает нажатия', /pointer-events:\s*none/.test(sole));
-check('§131.5: и она той же ширины, что карточка', /left:\s*16px/.test(sole) && /right:\s*16px/.test(sole));
-check('§131.5: высота «подошвы» — ровно радиус карточки', /height:\s*var\(--radius\)/.test(sole));
-check('§131.5: «подошва» есть только у прилипшей — селектор с `.stuck`',
-  /\.sticky-fuel\.stuck::?after/.test(sole) && sole !== '');
+check('§131.7: класса `stuck` больше нет — ни правила, ни разметки',
+  !/\.sticky-fuel\.stuck/.test(css) && !wrap.classList.contains('stuck'), wrap.className);
+check('§131.7: «подошвы» под карточкой тоже нет',
+  !/\.sticky-fuel\.stuck::?after/.test(css), 'правила нет');
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
