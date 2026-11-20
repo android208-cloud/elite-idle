@@ -149,6 +149,14 @@ let confirmShip: ShipId | null = null;
 let hireOpen = false;
 let hireShip: ShipId | null = null;
 let routePilot: number | null = null;
+
+/*
+ * §126: блок маршрута переехал над списком, и после открытия его надо
+ * показать. Иначе нажатие «Назначить маршрут» у десятого пилота ничего не
+ * меняло на экране: панель появлялась выше прокрутки, вне поля зрения.
+ * Флаг съедается один раз — в первом рендере после открытия.
+ */
+let scrollToRoute = false;
 /** §107: какую роль показывать в открытом списке маршрутов. */
 let routeRole: PilotRole = 'trader';
 
@@ -2229,8 +2237,6 @@ function pilotsScreen(): string {
          <div class="sub">Вернётся через <span data-pilot-next="${p.id}">${formatSpan(p.nextRunAt - now)}</span> · рейсов ${p.runs}${p.failures > 0 ? ` · провалов ${p.failures}` : ''}</div>`
       : '<div class="sub" style="margin-top:10px">Маршрут не задан — корабль стоит в ангаре</div>';
 
-    const panel = routePilot === p.id ? pilotRoutePanel(p, systems) : '';
-
     return {
       perHour,
       income,
@@ -2241,7 +2247,7 @@ function pilotsScreen(): string {
         ${body}
         <div class="row" style="margin-top:12px"><span class="spacer"></span>
           <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить маршрут' : 'Назначить маршрут'}</button>
-        </div>${panel}
+        </div>
       </div>`,
     };
   })
@@ -2286,6 +2292,22 @@ function pilotsScreen(): string {
         <button class="btn text" data-action="pilot-hire-close">Свернуть</button></div>`;
   }
 
+  /*
+   * §126: МАРШРУТ — ТОЖЕ НАД СПИСКОМ.
+   *
+   * Пользователь: «ранее мы переместили блок „нанять пилота“, но теперь
+   * блок с выбором маршрута для него остался внизу списка. Перенеси его
+   * так же».
+   *
+   * Панель рисовалась ВНУТРИ карточки пилота, а нанятый пилот без маршрута
+   * приносит ноль и по правилу §116 оказывается в самом низу. То есть
+   * сразу после найма следующий шаг — назначить маршрут — уезжал под весь
+   * флот. Теперь панель стоит отдельной карточкой под блоком найма, над
+   * списком, и подписана именем пилота: видно, кому назначаем.
+   */
+  const routed = routePilot === null ? undefined : state.pilots.find((p) => p.id === routePilot);
+  const routeCard = routed ? pilotRoutePanel(routed, systems) : '';
+
   return `<div class="card">
       <div class="row"><button class="btn text" data-action="pilots-close">← Назад</button>
         <span class="spacer"></span>
@@ -2302,6 +2324,7 @@ function pilotsScreen(): string {
       <div class="sub">Пилот приходит со своим кораблём: цена = корабль + задаток ${cr(PILOT_HIRE_FEE)}.</div>
       <div style="margin-top:12px">${hire}</div>
     </div>
+    ${routeCard}
     ${cards}`;
 }
 
@@ -2364,8 +2387,13 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
     })
     .sort((a, b) => b.perHour - a.perHour);
 
+  const head = `<div class="row"><h2 style="margin:0">Маршрут: ${pilot.name}</h2>
+      <span class="chip">${spec.name}</span><span class="spacer"></span>
+      <button class="btn text" data-action="pilot-route-close">Свернуть</button></div>`;
+
   if (options.length === 0) {
-    return `<div class="muted" style="margin:6px 0 12px 4px">В радиусе бака нет ни одной системы — этому кораблю отсюда не улететь.</div>`;
+    return `<div class="card" data-route-card style="margin:0 0 14px">${head}
+      <div class="muted" style="margin:6px 0 4px">В радиусе бака нет ни одной системы — этому кораблю отсюда не улететь.</div></div>`;
   }
 
   const rows = options.map((o) => {
@@ -2384,7 +2412,8 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
         <div class="muted">${riskLabel(role, o.risk)}</div></div>${action}</div>`;
   }).join('');
 
-  return `<div class="card" style="margin:8px 0 14px;background:rgba(255,255,255,0.03)">
+  return `<div class="card" data-route-card style="margin:0 0 14px;background:rgba(255,255,255,0.03)">
+      ${head}
       <div class="sub">Маршрут из ${systems[pilot.home].name}, в пределах ${ly(spec.range)}.</div>
       <div class="row" style="gap:6px;margin:6px 0 10px">${roles}</div>
       <div class="sub" style="color:var(--dim)">${hint}</div>
@@ -2951,6 +2980,19 @@ function render(): void {
     if (again && document.activeElement !== again) again.blur();
   }
   content.scrollTop = scrollTop;
+
+  /*
+   * §126: открыли маршрут — показываем его.
+   *
+   * Панель теперь над списком, а игрок мог стоять в самом низу. Восстановленная
+   * прокрутка оставила бы его там, и нажатие «Назначить маршрут» выглядело бы
+   * как «ничего не произошло». Подводим контейнер к карточке маршрута.
+   */
+  if (scrollToRoute) {
+    scrollToRoute = false;
+    const routeCardEl = content.querySelector<HTMLElement>('[data-route-card]');
+    if (routeCardEl) content.scrollTop = Math.max(0, routeCardEl.offsetTop - 8);
+  }
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -3335,6 +3377,7 @@ function onAction(el: HTMLElement): void {
         // Сразу открываем маршруты: нанятый без дела пилот — это просто
         // потраченные деньги, и игрок должен увидеть следующий шаг.
         routePilot = r.pilot!.id;
+        scrollToRoute = true;
       }
       break;
     }
@@ -3351,6 +3394,7 @@ function onAction(el: HTMLElement): void {
         break;
       }
       routePilot = i;
+      scrollToRoute = true;
       // Открывая список, показываем ту роль, которой пилот летает сейчас.
       const pilot = state.pilots.find((p) => p.id === i);
       routeRole = pilot?.role ?? 'trader';

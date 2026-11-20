@@ -405,5 +405,62 @@ async function hangar(opts) {
   b.close();
 }
 
+/* ---------- §126: маршрут — тоже над списком ---------- */
+{
+  const far = Date.now() + 1e9;
+  const flying = {
+    id: 1, name: 'Альфа', ship: 'adder', home: LAVE, route: { from: LAVE, to: REORTE },
+    nextRunAt: far, role: 'trader', runs: 0, failures: 0,
+  };
+  const idle = {
+    id: 2, name: 'Бета', ship: 'adder', home: LAVE, route: null,
+    nextRunAt: far, role: 'trader', runs: 0, failures: 0,
+  };
+  const w = await hangar({ pilots: [flying, idle], nextPilotId: 3 });
+
+  check('§126: пока маршрут не открыт, панели нет', w.document.querySelector('[data-route-card]') === null);
+
+  click(w, byAction(w, 'pilot-route', { i: 2 }));
+  await wait(300);
+
+  const panel = w.document.querySelector('[data-route-card]');
+  check('§126: панель маршрута открылась', panel !== null);
+  check('§126: панель подписана именем пилота', /Маршрут: Бета/.test(content(w)));
+  check('§126: панель — отдельная карточка, а не внутри пилота',
+    panel !== null && panel.parentElement === w.document.getElementById('content'));
+
+  const firstPilot = byAction(w, 'pilot-route', { i: 1 });
+  check('§126: панель выше первой карточки пилота',
+    panel !== null && firstPilot !== undefined
+      && (panel.compareDocumentPosition(firstPilot) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+
+  const text = content(w);
+  check('§126: блок найма по-прежнему выше маршрута',
+    text.indexOf('Нанять пилота') >= 0 && text.indexOf('Нанять пилота') < text.indexOf('Маршрут: Бета'));
+
+  // REORTE занят Альфой (§105: один маршрут — один пилот), поэтому берём
+  // первую свободную строку панели и сверяем маршрут именно с ней.
+  const free = byAction(w, 'pilot-route-set', { i: 2 });
+  const freeTo = Number(free.dataset.to);
+  click(w, free);
+  await wait(300);
+  const s = saved(w);
+  check('§126: маршрут назначается прямо из верхней панели',
+    s.pilots.find((x) => x.id === 2)?.route?.to === freeTo);
+
+  // Назначение маршрута закрывает панель само — это подтверждение действия.
+  check('§126: после назначения панель закрылась', w.document.querySelector('[data-route-card]') === null);
+
+  // А кнопка «Свернуть» нужна для отказа: открыли и передумали.
+  click(w, byAction(w, 'pilot-route', { i: 2 }));
+  await wait(300);
+  const close = byAction(w, 'pilot-route-close');
+  check('§126: в панели есть «Свернуть»', close !== undefined);
+  click(w, close);
+  await wait(300);
+  check('§126: «Свернуть» закрывает панель', w.document.querySelector('[data-route-card]') === null);
+  w.close();
+}
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad > 0 ? 1 : 0);
