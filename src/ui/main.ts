@@ -73,6 +73,7 @@ import {
   PATROL_RETURN_RESERVE,
   contrabandLevel,
   escapeProgress,
+  settleWonEncounter,
 } from '../core/state.ts';
 import {
   formatSpan,
@@ -3427,6 +3428,19 @@ function onAction(el: HTMLElement): void {
         encounter: null,
         combat: null,
       };
+      /*
+       * §122: ЦЕНА ПОБЕДЫ — ТА ЖЕ, ЧТО В АВТОБОЕ.
+       *
+       * Ручное «Напасть» раньше не давало ни груза с торговца, ни +64 за
+       * полицейского: последствия жили только в автобое. Пока нападать на
+       * мирных было нельзя, это не проявлялось; §122 открыл кнопку — и
+       * цена должна считаться там же, где и в автобое.
+       */
+      if (won) {
+        const settled: GameEvent[] = [];
+        next = settleWonEncounter(next, enc, Date.now(), settled);
+        for (const e of settled) addLog(e.text);
+      }
       /*
        * §77: капсулы нет, но правило побега осталось — оно про бегство,
        * а не про предмет. Уходя от боя, игрок сбрасывает груз (кроме

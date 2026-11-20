@@ -22,6 +22,7 @@ import {
   bestLaserOf,
   damageShare,
   isWeak,
+  isLegalTarget,
   roundsToDie,
   roundsToKill,
 } from '../src/core/one-decision.ts';
@@ -67,11 +68,23 @@ test('без лазера нападать не на кого', () => {
   }
 });
 
-test('нейтральный корабль слабым не считается', () => {
-  // Viper — полиция, pirate: false. Атака на него — преступление.
+test('§122: сила врага не зависит от того, пиратская ли это модель', () => {
+  /*
+   * Пользователь: «в розыске при перелёте я не могу атаковать корабли
+   * вручную». Причина была здесь: `isWeak` возвращал false для любой
+   * модели без флага `pirate`, то есть для полицейского Viper'а и торговой
+   * Cobra — даже когда они сами атакуют. Законность цели решает
+   * вызывающий (`isLegalTarget`), сила — эта функция.
+   */
   const viper = enemyById('viper');
-  assert.equal(viper.pirate, false);
-  assert.equal(isWeak(viper, 'military'), false);
+  assert.equal(viper.pirate, false, 'флаг модели остался прежним');
+  assert.equal(isWeak(viper, 'military'), true, 'по силе Viper — лёгкая цель');
+
+  // А вот законность — отдельный вопрос, и ответ на него даёт роль встречи.
+  assert.equal(isLegalTarget('police', false), false, 'мирная полиция — не цель');
+  assert.equal(isLegalTarget('police', true), true, 'напавшая полиция — цель');
+  assert.equal(isLegalTarget('trader', false), false);
+  assert.equal(isLegalTarget('trader', true), true, 'грабёж в пиратстве — цель');
 });
 
 test('доля урона растёт с силой врага', () => {

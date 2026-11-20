@@ -2035,6 +2035,96 @@ function spawnEncounter(state: GameState, at: number, settings: Settings, events
 }
 
 /**
+ * §122: ЧТО СЛЕДУЕТ ИЗ ПОБЕДЫ НАД МИРНЫМ КОРАБЛЁМ.
+ *
+ * Одно место на два пути — автобой и ручное «Напасть». Раньше эти
+ * последствия жили только в автобое, поэтому ручное нападение на торговца
+ * (когда оно стало возможным) не давало ни груза, ни розыска, а убийство
+ * полицейского — не давало +64. Игрок видел, что «награда есть, а цены
+ * нет», и это был бы готовый способ качаться без последствий.
+ *
+ * Возвращает новое состояние: розыск, трюм, манифест груза и счётчик
+ * ограблений. Награда за голову и счётчики убийств остаются вызывающему:
+ * они одинаковы для всех ролей.
+ */
+export function settleWonEncounter(
+  state: GameState,
+  enc: Encounter,
+  at: number,
+  events: GameEvent[],
+): GameState {
+  let next = state;
+  let legal = state.legal;
+
+  if (enc.role === 'trader') {
+    /*
+     * Груз торговца. Сколько контейнеров — по блюпринту корабля, товар —
+     * из ассортимента системы, как и в обычных обломках (§73). Разница
+     * только в том, что это не «выпало», а «отобрано».
+     */
+    const count = canisterCount(enc.enemyId, 'trader');
+    if (count > 0) {
+      const rolled = rollCanisters(count, state.market, state.rng);
+      legal = Math.min(255, legal + RAID_LEGAL);
+      const got = autoScoop(state.cargo, state.holdSpace, rolled.canisters);
+      /*  §93: запрещёнку автоподбор не берёт — говорим об этом прямо.
+       *
+       * Молчаливое «подобрано 1 контейнер» при трёх выпавших выглядело бы
+       * потерей груза. Причина другая: рабы и наркотики в трюме сделали бы
+       * преступником без выбора игрока, а контрабанда ещё и запрещает
+       * побег (§80.1). Поэтому пишем, что осталось и почему.
+       */
+      const banned = countContraband(rolled.canisters);
+      const why = banned > 0
+        ? `. В обломках был${banned === 1 ? '' : 'о'} ${banned} ${plural(banned, 'контейнер', 'контейнера', 'контейнеров')} с запрещённым товаром — оставлен${banned === 1 ? '' : 'о'}: такой груз делает преступником`
+        : '';
+      next = {
+        ...next,
+        rng: rolled.rng,
+        legal,
+        cargo: got.cargo,
+        holdSpace: got.holdSpace,
+        cargoOrigin: noteFromCanisters(next.cargoOrigin, rolled.canisters),
+        stats: {
+          ...next.stats,
+          raided: next.stats.raided + (got.taken > 0 ? 1 : 0),
+        },
+      };
+      events.push({
+        type: 'raided',
+        at,
+        text:
+          got.taken > 0
+            ? `Ограблен торговец: в трюм ${got.taken} ${plural(got.taken, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником, розыск ${legal} (${legalLabel(legal)})${why}`
+            : `Торговец уничтожен, но груз не взят — трюм полон${why}`,
+      });
+      return next;
+    }
+    return next;
+  }
+
+  if (enc.role === 'police') {
+    /*
+     * §118: ПОЛИЦЕЙСКИЙ — ЕДИНСТВЕННЫЙ, КТО СТОИТ ДОРОГО.
+     *
+     * Каждое такое убийство пишет цену: сколько прибавилось и каким стал
+     * статус. §122 распространил это и на ручное решение: цена не должна
+     * зависеть от того, кто нажал кнопку — игрок или таймер.
+     */
+    const before = legal;
+    legal = Math.min(255, legal + POLICE_KILL_LEGAL);
+    events.push({
+      type: 'legal',
+      at,
+      text: `Полицейский уничтожен: розыск +${legal - before} → ${legal} (${legalLabel(legal)})`,
+    });
+    return { ...next, legal };
+  }
+
+  return next;
+}
+
+/**
  * Разрешает встречу автобоем, когда игрок не успел решить (§40).
  *
  * Безопасный режим: слабый враждебный → победа, иначе → пропуск.
@@ -2166,69 +2256,19 @@ function autoDecision(
    * Статус растёт: нападение на мирного — преступление. За убийство
    * полицейского — сильнее (POLICE_KILL_LEGAL).
    */
-  let cash = state.cash + r.bounty;
-  let legal = state.legal;
-  let cargo = state.cargo;
-  let holdSpace = state.holdSpace;
-  let looted = 0;
-
-  if (won && enc.role === 'trader') {
-    /*
-     * Груз торговца. Сколько контейнеров — по блюпринту корабля, товар —
-     * из ассортимента системы, как и в обычных обломках (§73). Разница
-     * только в том, что это не «выпало», а «отобрано».
-     */
-    const count = canisterCount(enc.enemyId, 'trader');
-    if (count > 0) {
-      const rolled = rollCanisters(count, state.market, state.rng);
-      legal = Math.min(255, legal + RAID_LEGAL);
-      const got = autoScoop(cargo, holdSpace, rolled.canisters);
-      cargo = got.cargo;
-      holdSpace = got.holdSpace;
-      looted = got.taken;
-      state = { ...state, cargoOrigin: noteFromCanisters(state.cargoOrigin, rolled.canisters) };
-      /*
-       * §93: запрещёнку автоподбор не берёт — говорим об этом прямо.
-       *
-       * Молчаливое «подобрано 1 контейнер» при трёх выпавших выглядело бы
-       * потерей груза. Причина другая: рабы и наркотики в трюме сделали бы
-       * преступником без выбора игрока, а контрабанда ещё и запрещает
-       * побег (§80.1). Поэтому пишем, что осталось и почему.
-       */
-      const banned = countContraband(rolled.canisters);
-      const why = banned > 0
-        ? `. В обломках был${banned === 1 ? '' : 'о'} ${banned} ${plural(banned, 'контейнер', 'контейнера', 'контейнеров')} с запрещённым товаром — оставлен${banned === 1 ? '' : 'о'}: такой груз делает преступником`
-        : '';
-      events.push({
-        type: 'raided',
-        at,
-        text:
-          looted > 0
-            ? `Ограблен торговец: в трюм ${looted} ${plural(looted, 'контейнер', 'контейнера', 'контейнеров')}. Вы стали преступником, розыск ${legal} (${legalLabel(legal)})${why}`
-            : `Торговец уничтожен, но груз не взят — трюм полон${why}`,
-      });
-    }
-  } else if (won && enc.role === 'police') {
-    /*
-     * §118: ПОЛИЦЕЙСКИЙ — ЕДИНСТВЕННЫЙ, КТО СТОИТ ДОРОГО.
-     *
-     * Пользователь получил «пиратство во время патруля»: автобой сам
-     * сбивал полицейские Viper'ы, каждый давал +64 к статусу, и после
-     * четырёх боёв статус упирался в потолок 255. В журнале при этом было
-     * только «Автобой: Viper уничтожен» — ни слова о последствиях.
-     *
-     * Теперь каждое такое убийство пишет цену: сколько прибавилось и каким
-     * стал статус. Решение оставляем прежним (пользователь выбрал
-     * «предупредить, но не менять»), меняется только видимость.
-     */
-    const before = legal;
-    legal = Math.min(255, legal + POLICE_KILL_LEGAL);
-    events.push({
-      type: 'legal',
-      at,
-      text: `Полицейский уничтожен: розыск +${legal - before} → ${legal} (${legalLabel(legal)})`,
-    });
-  }
+  /*
+   * §122: ПОСЛЕДСТВИЯ ПОБЕДЫ — В ОДНОЙ ФУНКЦИИ.
+   *
+   * Раньше грабёж торговца и убийство полицейского разбирались только
+   * здесь, в автобое. Ручное решение «Напасть» их не получало вовсе: ни
+   * груза с торговца, ни +64 за полицейского. Пока нападать на них было
+   * нельзя (§122 — `isWeak` запрещал), расхождение не проявлялось; теперь
+   * проявлялось бы сразу, и пират качался бы без последствий.
+   */
+  let settled = state;
+  if (won) settled = settleWonEncounter(settled, enc, at, events);
+  const cash = settled.cash + r.bounty;
+  const legal = settled.legal;
 
   /*
    * §80: новый грабёж обнуляет маршрут побега. Начал грабить — беги
@@ -2238,7 +2278,7 @@ function autoDecision(
   const escaped = legal > state.legal ? { route: [], status: -1 } : { route: state.escapeRoute, status: state.escapeStatus };
 
   return {
-    ...state,
+    ...settled,
     cash,
     fuel,
     ship,
@@ -2246,14 +2286,11 @@ function autoDecision(
     legal,
     escapeRoute: escaped.route,
     escapeStatus: escaped.status,
-    cargo,
-    holdSpace,
-    kills: state.kills + (won ? 1 : 0),
+    kills: settled.kills + (won ? 1 : 0),
     stats: {
-      ...state.stats,
-      kills: state.stats.kills + (won ? 1 : 0),
-      skipped: state.stats.skipped + (skipped ? 1 : 0),
-      raided: state.stats.raided + (looted > 0 ? 1 : 0),
+      ...settled.stats,
+      kills: settled.stats.kills + (won ? 1 : 0),
+      skipped: settled.stats.skipped + (skipped ? 1 : 0),
     },
     encounter: null,
     combat: null,

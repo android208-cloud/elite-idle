@@ -16,6 +16,7 @@ import {
   startPatrol,
   RAID_LEGAL,
   POLICE_KILL_LEGAL,
+  settleWonEncounter,
   type GameState,
 } from '../src/core/state.ts';
 import { isCriminal, canBeat } from '../src/core/one-decision.ts';
@@ -119,5 +120,47 @@ describe('§79: режим пиратства', () => {
 
     const vip = ENEMIES.find((e) => e.id === 'viper')!;
     assert.equal(canBeat(vip, kit, 'military'), true, 'полицию тоже');
+  });
+});
+
+/*
+ * §122: ЦЕНА ПОБЕДЫ — ОДНА ДЛЯ АВТОБОЯ И РУЧНОГО РЕШЕНИЯ.
+ *
+ * Пока на мирных нельзя было напасть вручную (`isWeak` запрещал), эти
+ * последствия жили только в автобое. §122 открыл кнопку, поэтому цена
+ * считается в общей функции — иначе ручной пират качался бы без розыска
+ * и без груза.
+ */
+describe('§122: последствия победы', () => {
+  const enc = (role: 'trader' | 'police' | 'pirate', enemyId: string) => ({
+    role, enemyId, detectedAt: NOW, resolveAt: NOW + 1, outcome: 'attack' as const,
+  });
+
+  it('полицейский: +64 к розыску и запись с ценой', () => {
+    const base: GameState = { ...newGame(1), legal: 128 };
+    const events: { type: string; text: string }[] = [];
+    const after = settleWonEncounter(base, enc('police', 'viper'), NOW, events as never);
+    assert.equal(after.legal, 128 + POLICE_KILL_LEGAL);
+    assert.ok(events.some((e) => /розыск \+64 → 192/.test(e.text)), events.map((e) => e.text).join(' | '));
+  });
+
+  it('торговец: груз в трюм и +32 к розыску', () => {
+    const base: GameState = { ...newGame(1), legal: 60 };
+    const events: { type: string; text: string }[] = [];
+    const after = settleWonEncounter(base, enc('trader', 'cobra3'), NOW, events as never);
+    const tons = after.cargo.reduce((a, b) => a + b, 0);
+    assert.ok(tons > 0, `в трюме ${tons} т`);
+    assert.equal(after.legal, 60 + RAID_LEGAL);
+    assert.equal(after.stats.raided, base.stats.raided + 1, 'ограбление в статистике');
+    assert.ok(events.some((e) => /Ограблен торговец/.test(e.text)));
+  });
+
+  it('пират: ни розыска, ни груза — только награда за голову', () => {
+    const base: GameState = { ...newGame(1), legal: 0 };
+    const events: { type: string; text: string }[] = [];
+    const after = settleWonEncounter(base, enc('pirate', 'sidewinder'), NOW, events as never);
+    assert.equal(after.legal, base.legal, 'пират — законная цель');
+    assert.equal(after.cargo.reduce((a, b) => a + b, 0), 0);
+    assert.equal(events.length, 0, 'ни одной записи о преступлении');
   });
 });
