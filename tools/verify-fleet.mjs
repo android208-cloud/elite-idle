@@ -168,9 +168,23 @@ async function hangar(opts) {
   await wait(300);
 
   const names = [...w.document.querySelectorAll('#content h2')].map((h) => h.textContent);
-  check('пилот с маршрутом — первым', names[0] === 'Альфа', names.join(' · '));
-  check('пилот без маршрута — в конце', names[1] === 'Бета');
+  /*
+   * §124: «Нанять пилота» теперь первая карточка экрана — иначе с ростом
+   * флота она уезжала вниз на десяток экранов. Поэтому порядок проверяем
+   * по списку БЕЗ неё.
+   */
+  check('§124: «Нанять пилота» — первой карточкой', names[0] === 'Нанять пилота', names.join(' · '));
+  const pilots = names.filter((n) => n !== 'Нанять пилота');
+  check('пилот с маршрутом — первым', pilots[0] === 'Альфа', pilots.join(' · '));
+  check('пилот без маршрута — в конце', pilots[1] === 'Бета');
   check('в шапке сказано, в каком порядке', /Сверху — кто приносит больше в час/.test(content(w)));
+
+  // Кнопка найма действительно выше первой карточки пилота в разметке.
+  const hire = byAction(w, 'pilot-hire-open');
+  const firstPilot = byAction(w, 'pilot-route');
+  check('§124: кнопка найма выше списка пилотов',
+    hire !== undefined && firstPilot !== undefined
+      && (hire.compareDocumentPosition(firstPilot) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
   w.close();
 }
 
