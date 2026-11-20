@@ -2066,9 +2066,13 @@ function marketScreen(): string {
    * „Станция“». Так честнее: в карточке не только цены, но и покупка станции —
    * место называется тем, чем оно является. Вкладка внизу остаётся «Рынок»:
    * по ней игрок ищет торговлю.
+   *
+   * §130.1: «убери двоеточие после слова „станция“, убери оттуда деньги,
+   * замени слово „занято“ на „Трюм“». Деньги и так висят в шапке экрана, а
+   * строка здесь — про трюм, и начинаться она должна с трюма.
    */
-  return `<div class="card"><h2>Станция: ${currentSystem(state).name}</h2>
-    <div class="sub">Деньги: ${cr(state.cash)} · Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
+  return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+    <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     ${stationBuyRow()}
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div>${rows}`;

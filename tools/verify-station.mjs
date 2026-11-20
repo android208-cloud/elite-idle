@@ -112,14 +112,22 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
 
   /* Бедный игрок: кнопка есть, она серая и молчит. */
   const poor = await openMarket(5000);
-  const poorCard = [...poor.document.querySelectorAll('#content .card')].find((c) => /Станция:/.test(c.textContent));
+  const poorCard = [...poor.document.querySelectorAll('#content .card')].find((c) => /Станция /.test(c.textContent));
   const poorBtn = poorCard?.querySelector('[data-action="station-buy"]');
   check('§127: кнопка станции — в карточке «Станция»', poorBtn !== undefined && poorBtn !== null);
   /*
    * §130: на рынке заголовок карточки — «Станция», а не «Рынок».
    * Вкладка внизу остаётся «Рынок»: по ней ищут торговлю.
    */
-  check('§130: заголовок карточки — «Станция: LAVE»', /Станция: LAVE/.test(poorCard?.textContent ?? ''));
+  /*
+   * §130.1: «убери двоеточие после слова „станция“, убери оттуда деньги,
+   * замени слово „занято“ на „Трюм“».
+   */
+  const cardText = poorCard?.textContent ?? '';
+  check('§130.1: заголовок «Станция LAVE» без двоеточия', /Станция LAVE/.test(cardText) && !/Станция:/.test(cardText));
+  check('§130.1: денег в карточке нет', !/Деньги:/.test(cardText));
+  check('§130.1: строка трюма начинается со слова «Трюм»', /Трюм \d+ из \d+ т/.test(cardText), cardText.match(/Трюм[^·]*/)?.[0] ?? '');
+  check('§130.1: слова «Занято» в карточке больше нет', !/Занято/.test(cardText));
   const stillMarket = [...poor.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === 'market');
   check('§130: вкладка по-прежнему «Рынок»', /Рынок/.test(stillMarket?.textContent ?? ''));
   const bar = poorCard?.querySelector('.progress');
@@ -140,7 +148,7 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
   const poorText = poorCard?.textContent ?? '';
   // §130: заголовок теперь сам начинается со слова «Станция», поэтому
   // проверяем не слово, а цену: её на рынке быть не должно.
-  check('§127.1: цены станции на рынке нет', !/477 400/.test(poorText) && !/Станция: LAVE[\s\S]*?CR/.test(poorText.replace(/Деньги:[^·]*/, '')));
+  check('§127.1: цены станции на рынке нет', !/477 400/.test(poorText));
   check('§127.1: кнопка стоит слева, первой в строке',
     poorBtn !== undefined && poorBtn !== null && poorBtn.parentElement.children[0] === poorBtn);
   poor.close();
