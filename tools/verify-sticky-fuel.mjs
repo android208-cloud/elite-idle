@@ -161,6 +161,7 @@ check('§131.5: она цвета карточки, а не фона', /backgrou
 check('§131.5: тень стоит на её нижнем крае', /box-shadow:/.test(sole));
 check('§131.5: она не перехватывает нажатия', /pointer-events:\s*none/.test(sole));
 check('§131.5: и она той же ширины, что карточка', /left:\s*16px/.test(sole) && /right:\s*16px/.test(sole));
+check('§131.5: высота «подошвы» — ровно радиус карточки', /height:\s*var\(--radius\)/.test(sole));
 check('§131.5: «подошва» есть только у прилипшей — селектор с `.stuck`',
   /\.sticky-fuel\.stuck::?after/.test(sole) && sole !== '');
 
