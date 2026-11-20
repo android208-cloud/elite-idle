@@ -206,3 +206,21 @@ test('раунды считаются по модели combat.ts', () => {
   assert.equal(roundsToDie(0), Number.POSITIVE_INFINITY);
   assert.ok(roundsToDie(8) > roundsToDie(31), 'под сильным огнём держишься меньше');
 });
+
+/*
+ * §123: БЕЗ ЛАЗЕРА ПРИЧИНА ОТКАЗА — «НЕЧЕМ СТРЕЛЯТЬ».
+ *
+ * Пользователь купил Анаконду, получил голый корпус и всюду читал
+ * «Корабль слишком силён». Корабль был не силён — у него не было лазера.
+ */
+test('§123: без лазера сказано прямо, что стрелять нечем', () => {
+  const viper = enemyById('viper');
+  const can = availableDecisions(viper, 'none', true, true);
+  assert.equal(can.attack, false, 'без лазера не напасть');
+  assert.match(can.attackReason ?? '', /Нет лазера/);
+
+  // С лазером та же цель доступна — значит дело было именно в лазере.
+  const armed = availableDecisions(viper, 'pulse', true, true);
+  assert.equal(armed.attack, true);
+  assert.equal(armed.attackReason, undefined);
+});

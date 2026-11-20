@@ -29,7 +29,7 @@ const LAVE = 7;
 const SAVE_KEY = 'elite-idle-save-v1';
 
 /** Встреча посреди перелёта: полёт не даёт прибыть, пока идёт разбор. */
-function save({ legal = 0, role = 'police', enemyId = 'viper', hostile = true, cargo }) {
+function save({ legal = 0, role = 'police', enemyId = 'viper', hostile = true, cargo, laser = 'pulse', model = 'cobra3' }) {
   const now = Date.now();
   const state = {
     version: 4, galaxy: 1, system: LAVE, cash: 50_000, fuel: 60, holdSpace: 12,
@@ -41,7 +41,7 @@ function save({ legal = 0, role = 'police', enemyId = 'viper', hostile = true, c
       remainingBaseMs: 9e9, elapsedBaseMs: 0, dueAt: now, pending: [],
     },
     ship: {
-      model: 'cobra3', laser: 'pulse', missiles: 2, ecm: false, energyBomb: false,
+      model, laser, missiles: 2, ecm: false, energyBomb: false,
       energyUnit: false, fuelScoops: false, dockingComputer: false,
       galacticHyperdrive: false, cargoBayExtended: false,
     },
@@ -149,6 +149,47 @@ const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: t
     log(w).some((l) => /Ограблен торговец/.test(l.text)),
     log(w).find((l) => /Ограблен торговец/.test(l.text))?.text.slice(0, 60) ?? '');
   check('§122: ограбление попало в статистику', s.stats.raided === 1, `raided ${s.stats.raided}`);
+  w.close();
+}
+
+/* ---------- 6. §123: без лазера причина названа честно ---------- */
+{
+  /*
+   * Пользователь купил Анаконду, оборудование слетело (это сказано в
+   * подтверждении покупки), и кнопка «Напасть» навсегда писала «Корабль
+   * слишком силён». Настоящая причина — нечем стрелять.
+   */
+  const w = boot(save({ legal: 233, role: 'police', enemyId: 'viper', hostile: true, laser: 'none', model: 'anaconda' }));
+  await wait(900);
+  const btn = attackBtn(w);
+  check('§123: без лазера «Напасть» недоступна', btn !== null && btn.disabled === true);
+  check('§123: и причина названа прямо', /Нет лазера: стрелять нечем/.test(content(w)),
+    content(w).match(/Нет лазера[^.]*/)?.[0] ?? '');
+  check('§123: и не враньё про «слишком силён»', !/слишком силён/.test(content(w)));
+  w.close();
+}
+
+/* ---------- 7. §123: предупреждение на экране «Корабль» ---------- */
+{
+  const w = boot(save({ legal: 233, role: 'police', enemyId: 'viper', hostile: true, laser: 'none', model: 'anaconda' }));
+  await wait(900);
+  const tab = [...w.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === 'ship');
+  tab?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  const text = content(w);
+  check('§123: на экране «Корабль» карточка «Лазера нет»', /Лазера нет/.test(text));
+  check('§123: сказано, что делать', /Купите лазер в ангаре/.test(text));
+  w.close();
+}
+
+/* ---------- 8. §123: с лазером предупреждения нет ---------- */
+{
+  const w = boot(save({ legal: 233, role: 'police', enemyId: 'viper', hostile: true }));
+  await wait(900);
+  const tab = [...w.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === 'ship');
+  tab?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  check('§123: с лазером карточки нет', !/Лазера нет/.test(content(w)));
   w.close();
 }
 

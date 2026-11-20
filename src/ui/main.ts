@@ -734,6 +734,10 @@ function shipScreen(): string {
     ${isCriminal(state.legal)
       ? `<div class="card warn"><h2>Розыск: ${state.legal} (${legalLabel(state.legal)})</h2>${escapeWarn()}</div>`
       : ''}
+    ${state.ship.laser === 'none'
+      ? `<div class="card warn"><h2>Лазера нет</h2>
+      <div class="sub">Без лазера вы не можете ни нападать, ни обороняться: карточка встречи предложит только «Бежать» и «Пропустить», а автобой не выиграет ни одного боя. Купите лазер в ангаре, пока стоите у причала.</div></div>`
+      : ''}
     <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
     <div class="card${smuggling ? ' danger' : ''}"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
 }
@@ -2062,7 +2066,7 @@ function shipyardCard(): string {
 
     const left = state.cash + tradeIn - price;
     const confirm = confirmShip === id
-      ? `<div class="muted" style="margin-top:6px">Оборудование и ракеты слетят — останется голый ${spec.name}${state.ship.galacticHyperdrive ? ' и галактический двигатель' : ''}. Груз (${cargoTons(state)} т) останется. ${
+      ? `<div class="muted" style="margin-top:6px">Оборудование и ракеты слетят — останется голый ${spec.name}: без лазера вы не сможете ни нападать, ни обороняться, пока не купите его заново${state.ship.galacticHyperdrive ? ' и галактический двигатель' : ''}. Груз (${cargoTons(state)} т) останется. ${
           left >= 0 ? `Денег останется ${cr(left)}.` : `Не хватает ${cr(-left)}.`
         }</div>`
       : '';
