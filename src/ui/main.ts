@@ -1939,8 +1939,18 @@ function holdScreen(): string {
  *
  * Пустая серая кнопка — не забытая надпись, а решение: «Купить станцию»
  * рядом с ценой в сотни тысяч, которую нечем закрыть, читается как обещание
- * или как поломка. Молчаливая серая плашка честнее — рядом стоит цена, и
- * видно, сколько не хватает.
+ * или как поломка.
+ *
+ * §127.1: ЦЕНЫ ЗДЕСЬ НЕТ ВОВСЕ, И ЭТО НАРОЧНО.
+ *
+ * Пользователь: «кнопка „Купить станцию“ будет слева, по образцу карточки
+ * ниже, цену там же убери, оставим интригу, пусть игрок не догадывается,
+ * что станцию можно купить». Строка с ценой выдавала тему до того, как
+ * игрок вообще заметил кнопку. Теперь цена называется один раз — на
+ * подтверждении, когда решение уже принято и прятать её было бы обманом.
+ *
+ * Кнопка стоит слева, как «−1/+1» в товарных строках ниже: это действие
+ * с товаром станции, а не кнопка в углу.
  *
  * Покупка в два нажатия, как корабль (§102.4) и пилот (§105): сумма такая,
  * что случайный тап по экрану не должен её тратить.
@@ -1950,22 +1960,18 @@ function stationBuyRow(): string {
   const price = stationPrice(system);
 
   if (state.stations.includes(state.system)) {
-    return `<div class="row" style="margin-top:10px">
-      <span class="chip">Ваша станция</span>
-      <span class="spacer"></span>
-      <span class="muted">${cash(price)}</span></div>`;
+    return `<div class="row" style="margin-top:10px"><span class="chip">Ваша станция</span></div>`;
   }
 
   const affordable = state.cash >= price * 10;
   if (stationBuyOpen && affordable) {
+    // Цена — только здесь: решение уже принято, а платить вслепую нельзя.
     return `<div class="row" style="margin-top:10px">
-      <span class="muted">Станция: ${cash(price)}</span><span class="spacer"></span>
-      <button class="btn danger" data-action="station-buy-confirm">Подтвердить</button>
+      <button class="btn danger" data-action="station-buy-confirm">Подтвердить · ${cash(price)}</button>
       <button class="btn text" data-action="station-buy-cancel">Отмена</button></div>`;
   }
 
   return `<div class="row" style="margin-top:10px">
-    <span class="muted">Станция: ${cash(price)}</span><span class="spacer"></span>
     <button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : ''}</button></div>`;
 }
 

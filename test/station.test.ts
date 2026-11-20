@@ -107,8 +107,9 @@ describe('§127: покупка станции', () => {
       flight: {
         from: 7, to: 8, departAt: 0, arriveAt: 1e9,
         remainingBaseMs: 1e9, elapsedBaseMs: 0, dueAt: 0, pending: [],
+        fuelUsed: 10, encounters: 0, lastEncounterAt: 0,
       },
-    } as ReturnType<typeof rich>;
+    };
     assert.equal(buyStation(flying).error, 'in-flight');
   });
 

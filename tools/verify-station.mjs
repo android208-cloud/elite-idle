@@ -121,7 +121,15 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
       && (bar.compareDocumentPosition(poorBtn) & poor.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
   check('§127: без денег кнопка серая', poorBtn?.disabled === true);
   check('§127: без денег кнопка без надписи', (poorBtn?.textContent ?? 'x').trim() === '');
-  check('§127: цена станции на рынке видна всё равно', /Станция: 477 400 CR/.test(poorCard?.textContent ?? ''));
+  /*
+   * §127.1: цены на рынке нет вовсе — «оставим интригу, пусть игрок не
+   * догадывается, что станцию можно купить». Строка «Станция: 477 400 CR»
+   * выдавала тему раньше самой кнопки.
+   */
+  const poorText = poorCard?.textContent ?? '';
+  check('§127.1: цены станции на рынке нет', !/Станция:/.test(poorText) && !/477 400/.test(poorText));
+  check('§127.1: кнопка стоит слева, первой в строке',
+    poorBtn !== undefined && poorBtn !== null && poorBtn.parentElement.children[0] === poorBtn);
   poor.close();
 
   /* Богатый игрок: кнопка подписана и покупает в два нажатия. */
@@ -132,7 +140,9 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
 
   buy.dispatchEvent(new rich.MouseEvent('click', { bubbles: true }));
   await wait(300);
-  check('§127: первый клик только спрашивает', rich.document.querySelector('[data-action="station-buy-confirm"]') !== null);
+  const confirm = rich.document.querySelector('[data-action="station-buy-confirm"]');
+  check('§127: первый клик только спрашивает', confirm !== null);
+  check('§127.1: цена называется на подтверждении', /477 400 CR/.test(confirm?.textContent ?? ''), (confirm?.textContent ?? '').trim());
   check('§127: и денег ещё не списал', saved(rich).cash === 6_000_000);
 
   rich.document.querySelector('[data-action="station-buy-confirm"]')
