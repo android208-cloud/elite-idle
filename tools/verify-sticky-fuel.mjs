@@ -146,6 +146,24 @@ check('§131.4: у прилипшей карточки низ прямой',
 check('§131.4: а верх остаётся круглым',
   String(w.getComputedStyle(fuel).borderTopLeftRadius) === '16px', w.getComputedStyle(fuel).borderTopLeftRadius);
 
+/*
+ * §131.5: «подошва» — полоса цвета карточки под панелью и тень на её нижнем
+ * крае. Это псевдоэлемент, в DOM его нет и `getComputedStyle` его не видит,
+ * поэтому правило проверяем в собранном файле — но проверяем все три вещи,
+ * без которых эффекта не будет: цвет карточки, тень и то, что полоса не
+ * перехватывает нажатия.
+ */
+const css = (w.document.querySelector('style')?.textContent ?? '') + html;
+// В собранном файле минификатор пишет `:after` вместо `::after` — берём оба.
+const sole = css.match(/\.sticky-fuel\.stuck::?after\s*\{[^}]*\}/)?.[0] ?? '';
+check('§131.5: у прилипшей карточки есть «подошва»', sole !== '', sole ? 'правило найдено' : 'правила нет');
+check('§131.5: она цвета карточки, а не фона', /background:\s*var\(--surface-2\)/.test(sole));
+check('§131.5: тень стоит на её нижнем крае', /box-shadow:/.test(sole));
+check('§131.5: она не перехватывает нажатия', /pointer-events:\s*none/.test(sole));
+check('§131.5: и она той же ширины, что карточка', /left:\s*16px/.test(sole) && /right:\s*16px/.test(sole));
+check('§131.5: «подошва» есть только у прилипшей — селектор с `.stuck`',
+  /\.sticky-fuel\.stuck::?after/.test(sole) && sole !== '');
+
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
 
