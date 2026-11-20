@@ -3227,6 +3227,30 @@ function render(): void {
     const routeCardEl = content.querySelector<HTMLElement>('[data-route-card], [data-move-card], [data-refit-card]');
     if (routeCardEl) content.scrollTop = Math.max(0, routeCardEl.offsetTop - 8);
   }
+
+  // §131.4: разметка новая — прежний класс `stuck` уехал вместе со старой.
+  syncStickyFuel();
+}
+
+/**
+ * §131.4: залипла карточка «Топливо» или ещё едет.
+ *
+ * Нужно это ровно для одного: у прилипшей карточки гасится нижнее
+ * закругление. Под ней уползает следующая карточка с такими же радиусами,
+ * и два закругления встык читаются как «уголки верхней врезались в нижнюю».
+ * У едущей карточки низ круглый — она такая же, как все.
+ *
+ * Признак прилипания простой: верх обёртки сравнялся с верхом области
+ * прокрутки. Считать по смещению нельзя — оно зависит от браузера, а
+ * сравнивать два `rect` можно где угодно.
+ */
+function syncStickyFuel(): void {
+  const content = document.getElementById('content');
+  if (!content) return;
+  const wrap = content.querySelector<HTMLElement>('.sticky-fuel');
+  if (!wrap) return;
+  const stuck = wrap.getBoundingClientRect().top <= content.getBoundingClientRect().top + 0.5;
+  wrap.classList.toggle('stuck', stuck);
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -4292,6 +4316,12 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
     onMapTap(ev as PointerEvent, target as HTMLCanvasElement);
   }
 });
+
+/*
+ * §131.4: прокрутка меняет только вид прилипшей карточки — пересобирать
+ * экран ради этого нельзя, поэтому отдельный слушатель.
+ */
+document.getElementById('content')!.addEventListener('scroll', syncStickyFuel, { passive: true });
 
 window.addEventListener('resize', () => {
   if (tab === 'map' && !state.combat) drawMap();

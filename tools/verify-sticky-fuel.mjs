@@ -114,6 +114,38 @@ check('§131.3: у следующей карточки обычное поле �
   w.getComputedStyle(wrap.nextElementSibling).marginTop === '10px',
   w.getComputedStyle(wrap.nextElementSibling).marginTop);
 
+/*
+ * §131.4: у ПРИЛИПШЕЙ карточки низ прямой.
+ *
+ * Пользователь (скриншот): «Вот эти уголки, закрывающие нижнюю карточку можно
+ * убрать?» Под прилипшей карточкой уползает следующая, и её верхние
+ * закругления совпадают с вырезами нижних углов — два радиуса встык.
+ *
+ * Проверяем поведение, а не только правило: подменяем rect'ы (в jsdom они
+ * нулевые) и дёргаем прокрутку — карточка «едет» и «залипла».
+ */
+const rectOf = (top) => ({ top, bottom: top + 100, left: 0, right: 0, width: 100, height: 100, x: 0, y: top });
+const place = (wrapTop) => {
+  wrap.getBoundingClientRect = () => rectOf(wrapTop);
+  main.getBoundingClientRect = () => rectOf(0);
+  main.dispatchEvent(new w.Event('scroll'));
+};
+const radius = () => String(w.getComputedStyle(fuel).borderRadius);
+
+place(320);
+check('§131.4: пока карточка едет — класс `stuck` не стоит', !wrap.classList.contains('stuck'), wrap.className);
+check('§131.4: и низ у неё круглый, как у всех карточек',
+  /^16px( 16px){0,3}$/.test(radius()), radius());
+
+place(0);
+check('§131.4: доехала до верха — класс `stuck` появился', wrap.classList.contains('stuck'), wrap.className);
+check('§131.4: у прилипшей карточки низ прямой',
+  String(w.getComputedStyle(fuel).borderBottomLeftRadius).startsWith('0px') &&
+  String(w.getComputedStyle(fuel).borderBottomRightRadius).startsWith('0px'),
+  `${w.getComputedStyle(fuel).borderBottomLeftRadius} / ${w.getComputedStyle(fuel).borderBottomRightRadius}`);
+check('§131.4: а верх остаётся круглым',
+  String(w.getComputedStyle(fuel).borderTopLeftRadius) === '16px', w.getComputedStyle(fuel).borderTopLeftRadius);
+
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
 
