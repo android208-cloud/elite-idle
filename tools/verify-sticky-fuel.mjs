@@ -84,7 +84,8 @@ check('§131: она внутри липкой обёртки', wrap !== null);
 const ws = w.getComputedStyle(wrap);
 check('§131: position: sticky', ws.position === 'sticky', ws.position);
 check('§131: прилипает к верху области прокрутки (top: 0)', ws.top === '0px', ws.top);
-check('§131.1: у обёртки есть закрашенный отступ сверху', parseFloat(ws.paddingTop) >= 8, ws.paddingTop);
+check('§131.1: у обёртки есть закрашенный отступ сверху', parseFloat(ws.paddingTop) >= 6, ws.paddingTop);
+check('§131.2: и такой же снизу — под карточку уползает следующая', parseFloat(ws.paddingBottom) >= 6, ws.paddingBottom);
 check('§131.1: фон обёртки — цвет страницы, а не прозрачность',
   ws.backgroundColor !== '' && ws.backgroundColor !== 'transparent' && ws.backgroundColor !== 'rgba(0, 0, 0, 0)', ws.backgroundColor);
 check('§131.1: обёртка выходит в поля main, чтобы закрыть и боковые щели',
@@ -100,6 +101,17 @@ const order = [...main.children];
 check('§131: топливо — после модели корабля', order.indexOf(wrap) === 1, `${order.indexOf(wrap)}`);
 check('§131: под топливом остальной список',
   /Оборудование/.test(order[2]?.textContent ?? ''), order[2]?.className);
+
+/*
+ * §131.2: главная причина щели — верхний отступ у самой области прокрутки.
+ * Sticky выравнивается по её внутреннему краю, и эти 4px оставались дырой
+ * над обёрткой: в неё и было видно уползающие строки. Отступа больше нет.
+ */
+check('§131.2: у области прокрутки нет верхнего отступа',
+  w.getComputedStyle(main).paddingTop === '0px', w.getComputedStyle(main).paddingTop);
+check('§131.2: следующей карточке верхнее поле не нужно — его даёт обёртка',
+  w.getComputedStyle(wrap.nextElementSibling).marginTop === '0px',
+  w.getComputedStyle(wrap.nextElementSibling).marginTop);
 
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
