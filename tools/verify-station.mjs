@@ -9,7 +9,9 @@
  *   2. цена записана целыми кредитами с разрядами, без «.0»;
  *   3. у LAVE цена 477 400 CR (родная система, знакомое число);
  *   4. у другой станции цена другая — это не константа в вёрстке;
- *   5. цена не зависит от денег игрока.
+ *   5. цена не зависит от денег игрока;
+ *   6. §127: «Купить станцию» лежит на рынке под полосой трюма, без денег
+ *      это серая кнопка без надписи, с деньгами — покупка в два нажатия.
  */
 import { readFileSync } from 'node:fs';
 import { JSDOM, VirtualConsole } from 'jsdom';
@@ -93,6 +95,55 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
   check('на CEESXE цена своя: 2 962 500 CR', /Станция · цена 2 962 500 CR/.test(text), text.slice(0, 160));
   check('CEESXE дороже LAVE', text.includes('2 962 500'));
   w.close();
+}
+
+/* ---------- §127: покупка станции с рынка ---------- */
+{
+  const SAVE = 'elite-idle-save-v1';
+  const saved = (w) => JSON.parse(JSON.parse(w.localStorage.getItem(SAVE)).state);
+  const marketTab = (w) => [...w.document.querySelectorAll('[data-action="tab"]')].find((b) => b.dataset.tab === 'market');
+  const openMarket = async (cash) => {
+    const w = boot(state(cash));
+    await wait(900);
+    marketTab(w).click();
+    await wait(300);
+    return w;
+  };
+
+  /* Бедный игрок: кнопка есть, она серая и молчит. */
+  const poor = await openMarket(5000);
+  const poorCard = [...poor.document.querySelectorAll('#content .card')].find((c) => /Рынок:/.test(c.textContent));
+  const poorBtn = poorCard?.querySelector('[data-action="station-buy"]');
+  check('§127: кнопка станции — в карточке «Рынок»', poorBtn !== undefined && poorBtn !== null);
+  const bar = poorCard?.querySelector('.progress');
+  check('§127: кнопка ниже полосы трюма',
+    poorBtn && bar !== undefined && bar !== null
+      && (bar.compareDocumentPosition(poorBtn) & poor.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  check('§127: без денег кнопка серая', poorBtn?.disabled === true);
+  check('§127: без денег кнопка без надписи', (poorBtn?.textContent ?? 'x').trim() === '');
+  check('§127: цена станции на рынке видна всё равно', /Станция: 477 400 CR/.test(poorCard?.textContent ?? ''));
+  poor.close();
+
+  /* Богатый игрок: кнопка подписана и покупает в два нажатия. */
+  const rich = await openMarket(6_000_000);
+  const buy = rich.document.querySelector('[data-action="station-buy"]');
+  check('§127: с деньгами кнопка подписана', (buy?.textContent ?? '').trim() === 'Купить станцию');
+  check('§127: с деньгами кнопка доступна', buy?.disabled === false);
+
+  buy.dispatchEvent(new rich.MouseEvent('click', { bubbles: true }));
+  await wait(300);
+  check('§127: первый клик только спрашивает', rich.document.querySelector('[data-action="station-buy-confirm"]') !== null);
+  check('§127: и денег ещё не списал', saved(rich).cash === 6_000_000);
+
+  rich.document.querySelector('[data-action="station-buy-confirm"]')
+    .dispatchEvent(new rich.MouseEvent('click', { bubbles: true }));
+  await wait(400);
+  const after = saved(rich);
+  check('§127: второй клик покупает станцию', after.stations.includes(LAVE), JSON.stringify(after.stations));
+  check('§127: списана цена станции', 6_000_000 - after.cash === 4_774_000, `${(6_000_000 - after.cash) / 10} CR`);
+  check('§127: вместо кнопки — «Ваша станция»', /Ваша станция/.test(content(rich)));
+  check('§127: повторно купить нельзя', rich.document.querySelector('[data-action="station-buy"]') === null);
+  rich.close();
 }
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);

@@ -27,6 +27,7 @@ import {
   buy,
   buyEquipment,
   buyShip,
+  buyStation,
   cargoTons,
   combatAction,
   combatAutoplay,
@@ -147,6 +148,9 @@ let confirmShip: ShipId | null = null;
  * `routePilot` — чей список маршрутов раскрыт.
  */
 let hireOpen = false;
+
+/* §127: подтверждение покупки станции — живёт только на экране рынка. */
+let stationBuyOpen = false;
 let hireShip: ShipId | null = null;
 let routePilot: number | null = null;
 
@@ -415,6 +419,13 @@ const PILOT_ERRORS: Record<PilotError, string> = {
   taken: 'Этой линией уже летает ваш пилот — они собьют друг другу цену',
 };
 
+/* §127: почему станцию купить не вышло — три разных ответа, не один. */
+const STATION_BUY_ERRORS: Record<'in-flight' | 'owned' | 'cash', string> = {
+  'in-flight': 'Покупать станцию можно только на причале',
+  owned: 'Эта станция уже ваша',
+  cash: 'Не хватает денег на эту станцию',
+};
+
 const EQUIPMENT_ERRORS: Record<EquipmentError, string> = {
   'in-flight': 'Покупки возможны только на станции',
   model: 'На этот корабль такое не ставится',
@@ -559,7 +570,7 @@ function systemInfo(index: number): string {
   const popText = pop >= 1 ? `${pop.toFixed(1)} млрд` : `${Math.round(pop * 1000)} млн`;
   return `${ECONOMIES[s.economy]}, ${GOVERNMENTS[s.government]}<br>
     Техуровень ${s.techLevel + 1} · Население ${popText} · Продуктивность ${s.productivity}<br>
-    Станция · цена ${cash(stationPrice(s))}`;
+    Станция · цена ${cash(stationPrice(s))}${state.stations.includes(index) ? ' · ваша' : ''}`;
 }
 
 function flightCard(): string {
@@ -1919,6 +1930,45 @@ function holdScreen(): string {
     ${logCard()}`;
 }
 
+/**
+ * §127: «Купить станцию» — в карточке «Рынок», под полосой трюма.
+ *
+ * Пользователь: «Кнопка „Купить станцию“ — на экране рынок в карточке
+ * „рынок“ под полосой трюма (если у игрока нет денег на покупку, то кнопка
+ * будет просто серой и без надписи)».
+ *
+ * Пустая серая кнопка — не забытая надпись, а решение: «Купить станцию»
+ * рядом с ценой в сотни тысяч, которую нечем закрыть, читается как обещание
+ * или как поломка. Молчаливая серая плашка честнее — рядом стоит цена, и
+ * видно, сколько не хватает.
+ *
+ * Покупка в два нажатия, как корабль (§102.4) и пилот (§105): сумма такая,
+ * что случайный тап по экрану не должен её тратить.
+ */
+function stationBuyRow(): string {
+  const system = currentSystem(state);
+  const price = stationPrice(system);
+
+  if (state.stations.includes(state.system)) {
+    return `<div class="row" style="margin-top:10px">
+      <span class="chip">Ваша станция</span>
+      <span class="spacer"></span>
+      <span class="muted">${cash(price)}</span></div>`;
+  }
+
+  const affordable = state.cash >= price * 10;
+  if (stationBuyOpen && affordable) {
+    return `<div class="row" style="margin-top:10px">
+      <span class="muted">Станция: ${cash(price)}</span><span class="spacer"></span>
+      <button class="btn danger" data-action="station-buy-confirm">Подтвердить</button>
+      <button class="btn text" data-action="station-buy-cancel">Отмена</button></div>`;
+  }
+
+  return `<div class="row" style="margin-top:10px">
+    <span class="muted">Станция: ${cash(price)}</span><span class="spacer"></span>
+    <button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : ''}</button></div>`;
+}
+
 function marketScreen(): string {
   // §98: в полёте рынок недоступен, но вкладка не пустует — это «Трюм».
   if (state.flight) return holdScreen();
@@ -1962,6 +2012,7 @@ function marketScreen(): string {
   return `<div class="card"><h2>Рынок: ${currentSystem(state).name}</h2>
     <div class="sub">Деньги: ${cr(state.cash)} · Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
+    ${stationBuyRow()}
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div>${rows}`;
 }
 
@@ -2286,7 +2337,7 @@ function pilotsScreen(): string {
         : '';
       return `<div class="good-row" style="margin:10px 0"><div>
           <div class="name">${SHIPS[id].name}</div>
-          <div class="muted">Трюм ${SHIPS[id].hold} т · ${cr(price)} всего</div>${confirm}</div>${action}</div>`;
+          <div class="muted">Трюм ${SHIPS[id].hold} т · Радиус ${ly(SHIPS[id].range)} · ${cr(price)}</div>${confirm}</div>${action}</div>`;
     }).join('');
     hire = `${hire}<div class="row" style="margin-top:8px">
         <button class="btn text" data-action="pilot-hire-close">Свернуть</button></div>`;
@@ -3268,6 +3319,8 @@ function onAction(el: HTMLElement): void {
       hireShip = null;
       routePilot = null;
       routeRole = 'trader';
+      // §127: подтверждение покупки станции живёт только на рынке.
+      stationBuyOpen = false;
       break;
     }
     case 'go-map':
@@ -3422,6 +3475,23 @@ function onAction(el: HTMLElement): void {
         const legal = role === 'pirate' ? ' Пират: каждый рейс +2 к розыску.' : '';
         addLog(`${r.pilot!.name} (${PILOT_ROLE_NAMES[role].toLowerCase()}) вышел на маршрут ${systems[r.pilot!.route!.from].name} → ${systems[to].name}.${legal}`);
         routePilot = null;
+      }
+      break;
+    }
+    case 'station-buy':
+      stationBuyOpen = true;
+      break;
+    case 'station-buy-cancel':
+      stationBuyOpen = false;
+      break;
+    case 'station-buy-confirm': {
+      const bought = buyStation(state);
+      stationBuyOpen = false;
+      if (bought.error) {
+        addLog(STATION_BUY_ERRORS[bought.error]);
+      } else {
+        state = bought.state;
+        addLog(`Куплена станция в ${currentSystem(state).name} за ${cash((bought.paid ?? 0) / 10)}.`);
       }
       break;
     }

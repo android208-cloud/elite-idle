@@ -55,6 +55,7 @@ import {
   needsMissile,
 } from './one-decision.ts';
 import { loneHunter, pirateFromGroup } from './spawn.ts';
+import { stationPrice } from './station.ts';
 import {
   ENEMIES,
   enemyById,
@@ -504,6 +505,18 @@ export interface GameState {
    */
   escapeRoute: number[];
   escapeStatus: number;
+
+  /*
+   * §127: КУПЛЕННЫЕ СТАНЦИИ.
+   *
+   * Номера систем, где станция принадлежит игроку. Доход и влияние на
+   * экономику отложены («пока без экономики», решение пользователя), но
+   * покупка уже настоящая: деньги уходят, станция становится своей, и это
+   * переживает сохранение.
+   *
+   * Массив, а не одна станция: ограничения по числу нет — как и у флота.
+   */
+  stations: number[];
 }
 
 /**
@@ -646,6 +659,7 @@ export function newGame(rngSeed: number): GameState {
     cargoBasis: COMMODITIES.map(() => 0),
     escapeRoute: [],
     escapeStatus: -1,
+    stations: [],
     // §89: время карьеры. `careerAt: 0` — «точки отсчёта ещё нет»:
     // первый `advance` только выставит её, не начислив разницу.
     careerMs: 0,
@@ -1300,6 +1314,41 @@ export function buyShip(state: GameState, id: ShipId): ShipResult {
       fuel: Math.min(state.fuel, spec.range),
       holdSpace: holdCapacity(ship) - tons,
       ship,
+    },
+  };
+}
+
+/*
+ * §127: ПОКУПКА СТАНЦИИ.
+ *
+ * Пользователь: «кнопка „Купить станцию“ — на экране рынок, в карточке
+ * „Рынок“, под полосой трюма». Цена считается формулой §125 и одинакова
+ * у всех игроков с той же галактикой, поэтому в сейве лежит только факт
+ * владения — номера систем.
+ *
+ * Ошибки различаются по причине, как и в остальных покупках: игрок должен
+ * знать, чего именно не хватает — денег, причала или станция уже своя.
+ */
+export type StationBuyError = 'in-flight' | 'owned' | 'cash';
+
+export interface StationBuyResult {
+  state: GameState;
+  error?: StationBuyError;
+  /** Уплачено, в десятых кредита. */
+  paid?: number;
+}
+
+export function buyStation(state: GameState): StationBuyResult {
+  if (state.flight) return { state, error: 'in-flight' };
+  if (state.stations.includes(state.system)) return { state, error: 'owned' };
+  const price = stationPrice(currentSystem(state)) * 10;
+  if (state.cash < price) return { state, error: 'cash' };
+  return {
+    paid: price,
+    state: {
+      ...state,
+      cash: state.cash - price,
+      stations: [...state.stations, state.system],
     },
   };
 }
@@ -3104,6 +3153,8 @@ export function deserialize(json: string): GameState {
    * `version: 3` уже после появления флота, и падать на них нельзя.
    */
   if (!Array.isArray(state.pilots)) state.pilots = [];
+  // §127: в сохранениях до покупки станций поля нет — станций не было.
+  if (!Array.isArray(state.stations)) state.stations = [];
   // §107: в сохранениях шага 1 роли и счётчика провалов нет.
   state.pilots = state.pilots.map((p) => ({
     ...p,
