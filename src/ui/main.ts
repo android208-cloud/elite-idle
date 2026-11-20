@@ -28,6 +28,10 @@ import {
   buyEquipment,
   buyShip,
   buyStation,
+  movePilot,
+  pilotTransferCost,
+  pilotTransferMs,
+  refitPilot,
   cargoTons,
   combatAction,
   combatAutoplay,
@@ -151,6 +155,10 @@ let hireOpen = false;
 
 /* §127: подтверждение покупки станции — живёт только на экране рынка. */
 let stationBuyOpen = false;
+
+/* §128: чьи панели «перелёт» и «корабль» раскрыты (одна за раз). */
+let movePilotFor: number | null = null;
+let refitPilotFor: number | null = null;
 let hireShip: ShipId | null = null;
 let routePilot: number | null = null;
 
@@ -417,6 +425,8 @@ const PILOT_ERRORS: Record<PilotError, string> = {
   self: 'Это его же система — летать некуда',
   range: 'Далеко для его бака',
   taken: 'Этой линией уже летает ваш пилот — они собьют друг другу цену',
+  busy: 'Пилот ещё в перелёте — дождитесь прилёта',
+  same: 'Этот корабль у него уже стоит',
 };
 
 /* §127: почему станцию купить не вышло — три разных ответа, не один. */
@@ -1937,9 +1947,11 @@ function holdScreen(): string {
  * „рынок“ под полосой трюма (если у игрока нет денег на покупку, то кнопка
  * будет просто серой и без надписи)».
  *
- * Пустая серая кнопка — не забытая надпись, а решение: «Купить станцию»
- * рядом с ценой в сотни тысяч, которую нечем закрыть, читается как обещание
- * или как поломка.
+ * Без денег на кнопке стоит «--»: «Купить станцию» рядом с ценой в сотни
+ * тысяч, которую нечем закрыть, читается как обещание или как поломка, а
+ * пустая плашка была меньше соседних кнопок. Пользователь: «поместим внутрь
+ * этой кнопки „--“, чтобы придать ей размер как на карточке ниже».
+ * Смысла в этих двух чёрточках нет — и это нарочно: интрига (§127.1).
  *
  * §127.1: ЦЕНЫ ЗДЕСЬ НЕТ ВОВСЕ, И ЭТО НАРОЧНО.
  *
@@ -1972,7 +1984,7 @@ function stationBuyRow(): string {
   }
 
   return `<div class="row" style="margin-top:10px">
-    <button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : ''}</button></div>`;
+    <button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : '--'}</button></div>`;
 }
 
 function marketScreen(): string {
@@ -2277,13 +2289,22 @@ function pilotsScreen(): string {
      * маршрута: обращение к p.route до проверки роняло рендер у пилота,
      * который ещё стоит в ангаре.
      */
-    const where = p.route
+    /*
+     * §128: перелёт показывается раньше маршрута — в это время маршрута
+     * нет вовсе, и «без маршрута» читалось бы как «стоит без дела».
+     */
+    const transfer = p.transfer && now < p.transfer.until ? p.transfer : null;
+    const where = transfer
+      ? `${PILOT_ROLE_NAMES[p.role]} · летит ${systems[transfer.from].name} → ${systems[p.home].name} · прибудет через ${formatSpan(transfer.until - now)}`
+      : p.route
       ? (p.role === 'police'
         ? `${PILOT_ROLE_NAMES[p.role]} · патруль ${systems[p.route.to].name}`
         : `${PILOT_ROLE_NAMES[p.role]} · ${systems[p.route.from].name} → ${systems[p.route.to].name} · ${ly(routeDistance(systems, p.route))}`)
       : `${PILOT_ROLE_NAMES[p.role]} · без маршрута`;
 
-    const body = p.route
+    const body = transfer
+      ? '<div class="sub" style="margin-top:10px">В пути: рейсов не делает, маршрут можно назначить после прилёта.</div>'
+      : p.route
       ? `<div class="grid" style="margin-top:10px">
            ${stat('Рейс', cr(profit))}
            ${stat('Вам', cr(income))}
@@ -2302,8 +2323,10 @@ function pilotsScreen(): string {
           <span class="chip">${SHIPS[p.ship].name}</span></div>
         <div class="sub" style="margin-top:2px">${where}</div>
         ${body}
-        <div class="row" style="margin-top:12px"><span class="spacer"></span>
+        <div class="row" style="margin-top:12px">
+          <button class="btn tonal" data-action="pilot-move" data-i="${p.id}">Сменить планету</button>
           <button class="btn tonal" data-action="pilot-route" data-i="${p.id}">${p.route ? 'Сменить маршрут' : 'Назначить маршрут'}</button>
+          <button class="btn text" data-action="pilot-refit" data-i="${p.id}">Сменить корабль</button>
         </div>
       </div>`,
     };
@@ -2362,8 +2385,16 @@ function pilotsScreen(): string {
    * флот. Теперь панель стоит отдельной карточкой под блоком найма, над
    * списком, и подписана именем пилота: видно, кому назначаем.
    */
+  /*
+   * §128: три панели живут над списком по одному правилу — та, что открыта,
+   * стоит над карточками, а не внутри них (§124, §126).
+   */
   const routed = routePilot === null ? undefined : state.pilots.find((p) => p.id === routePilot);
+  const moving = movePilotFor === null ? undefined : state.pilots.find((p) => p.id === movePilotFor);
+  const refitting = refitPilotFor === null ? undefined : state.pilots.find((p) => p.id === refitPilotFor);
   const routeCard = routed ? pilotRoutePanel(routed, systems) : '';
+  const moveCard = moving ? pilotMovePanel(moving, systems) : '';
+  const refitCard = refitting ? pilotRefitPanel(refitting) : '';
 
   return `<div class="card">
       <div class="row"><button class="btn text" data-action="pilots-close">← Назад</button>
@@ -2382,6 +2413,8 @@ function pilotsScreen(): string {
       <div style="margin-top:12px">${hire}</div>
     </div>
     ${routeCard}
+    ${moveCard}
+    ${refitCard}
     ${cards}`;
 }
 
@@ -2475,6 +2508,80 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
       <div class="row" style="gap:6px;margin:6px 0 10px">${roles}</div>
       <div class="sub" style="color:var(--dim)">${hint}</div>
       ${rows}</div>`;
+}
+
+/**
+ * §128: ПЕРЕЛЁТ ПИЛОТА НА ДРУГУЮ ПЛАНЕТУ.
+ *
+ * Пользователь: «кнопка слева „Сменить планету“ рядом с „сменить маршрут“,
+ * а внутри будут маршруты планеты расположения игрока. Пилот будет
+ * добираться туда сам, честно. Топливо ему за перелёт оплатим мы».
+ *
+ * Поэтому список — планеты, до которых дотягивается САМ ИГРОК: он задаёт
+ * точку, пилот летит к ней своим ходом. Видно три вещи, и все три важны
+ * перед нажатием: расстояние, топливо (платит командир) и время в пути.
+ * Время считается по настоящей формуле прыжка, а если путь длиннее бака
+ * пилота — по сумме отрезков: короткий бак действительно замедляет переезд.
+ */
+function pilotMovePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
+  const spec = SHIPS[pilot.ship];
+  const reach = maxFuel(state.ship);
+  const here = systems[state.system].name;
+
+  const rows = systems
+    .map((sys, i) => ({ i, d: distance(systems[state.system], sys) }))
+    .filter((o) => o.d <= reach && o.i !== pilot.home)
+    .sort((a, b) => a.d - b.d || a.i - b.i)
+    .map((o) => {
+      const cost = pilotTransferCost(state, pilot, o.i);
+      const ms = pilotTransferMs(state, pilot, o.i, settings);
+      const affordable = state.cash >= cost;
+      return `<div class="good-row" style="margin-top:10px"><div>
+          <div class="name">${systems[o.i].name}</div>
+          <div class="muted">${ly(distance(systems[pilot.home], systems[o.i]))} · топливо ${cr(cost)} · в пути ${formatSpan(ms)}</div>
+        </div><button class="btn" data-action="pilot-move-set" data-i="${pilot.id}" data-to="${o.i}" ${affordable ? '' : 'disabled'}>Лететь</button></div>`;
+    }).join('');
+
+  return `<div class="card" data-move-card style="margin:0 0 14px;background:rgba(255,255,255,0.03)">
+      <div class="row"><h2 style="margin:0">Перелёт: ${pilot.name}</h2>
+        <span class="chip">${spec.name}</span><span class="spacer"></span>
+        <button class="btn text" data-action="pilot-move-close">Свернуть</button></div>
+      <div class="sub">Сейчас в ${systems[pilot.home].name}. Выберите планету рядом с ${here}; топливо платите вы, пилот летит сам и в это время рейсов не делает.</div>
+      ${rows || '<div class="muted" style="margin-top:10px">В радиусе вашего бака нет ни одной другой планеты.</div>'}
+    </div>`;
+}
+
+/**
+ * §128: СМЕНА КОРАБЛЯ ПИЛОТА.
+ *
+ * Пользователь: «нужна возможность менять им корабли». Правило взято у
+ * верфи игрока (§102.4), чтобы не заводить вторую экономику: новый корабль
+ * по своей цене, старый — в зачёт по своей. Маршрут снимается: у нового
+ * корабля может быть короче бак.
+ */
+function pilotRefitPanel(pilot: Pilot): string {
+  const products = shipsForSale(currentSystem(state).economy).filter((id) => id !== pilot.ship);
+  const rows = products.map((id) => {
+    const diff = shipPrice(id) - shipPrice(pilot.ship);
+    const affordable = state.cash >= diff;
+    const money = diff > 0
+      ? `доплата ${cr(diff)}`
+      : diff < 0
+        ? `вернут ${cr(-diff)}`
+        : 'ровно в цену';
+    return `<div class="good-row" style="margin-top:10px"><div>
+        <div class="name">${SHIPS[id].name}</div>
+        <div class="muted">Трюм ${SHIPS[id].hold} т · Радиус ${ly(SHIPS[id].range)} · ${money}</div>
+      </div><button class="btn" data-action="pilot-refit-set" data-i="${pilot.id}" data-id="${id}" ${affordable ? '' : 'disabled'}>Поставить</button></div>`;
+  }).join('');
+
+  return `<div class="card" data-refit-card style="margin:0 0 14px;background:rgba(255,255,255,0.03)">
+      <div class="row"><h2 style="margin:0">Корабль: ${pilot.name}</h2>
+        <span class="chip">${SHIPS[pilot.ship].name}</span><span class="spacer"></span>
+        <button class="btn text" data-action="pilot-refit-close">Свернуть</button></div>
+      <div class="sub">Старый корабль идёт в зачёт по своей цене, новый — по цене верфи. Маршрут придётся назначить заново: у другого корабля свой бак.</div>
+      ${rows || '<div class="muted" style="margin-top:10px">На этой верфи больше нечего поставить.</div>'}
+    </div>`;
 }
 
 /** Шанс в процентах: «2%», «4.5%», «0.5%». */
@@ -3047,7 +3154,7 @@ function render(): void {
    */
   if (scrollToRoute) {
     scrollToRoute = false;
-    const routeCardEl = content.querySelector<HTMLElement>('[data-route-card]');
+    const routeCardEl = content.querySelector<HTMLElement>('[data-route-card], [data-move-card], [data-refit-card]');
     if (routeCardEl) content.scrollTop = Math.max(0, routeCardEl.offsetTop - 8);
   }
 }
@@ -3325,6 +3432,8 @@ function onAction(el: HTMLElement): void {
       hireShip = null;
       routePilot = null;
       routeRole = 'trader';
+      movePilotFor = null; // §128
+      refitPilotFor = null;
       // §127: подтверждение покупки станции живёт только на рынке.
       stationBuyOpen = false;
       break;
@@ -3447,12 +3556,60 @@ function onAction(el: HTMLElement): void {
     case 'pilot-role':
       routeRole = (el.dataset.role as PilotRole) ?? 'trader';
       break;
+    case 'pilot-move': {
+      if (movePilotFor === i) { movePilotFor = null; break; }
+      movePilotFor = i;
+      routePilot = null;
+      refitPilotFor = null;
+      scrollToRoute = true;
+      break;
+    }
+    case 'pilot-move-close':
+      movePilotFor = null;
+      break;
+    case 'pilot-move-set': {
+      const to = Number(el.dataset.to);
+      const r = movePilot(state, i, to, Date.now(), settings);
+      if (r.error) {
+        addLog(PILOT_ERRORS[r.error]);
+      } else {
+        state = r.state;
+        movePilotFor = null;
+        addLog(`${r.pilot!.name} летит на ${systemsOf(state.galaxy)[to].name}. Топливо за счёт командира.`);
+      }
+      break;
+    }
+    case 'pilot-refit': {
+      if (refitPilotFor === i) { refitPilotFor = null; break; }
+      refitPilotFor = i;
+      routePilot = null;
+      movePilotFor = null;
+      scrollToRoute = true;
+      break;
+    }
+    case 'pilot-refit-close':
+      refitPilotFor = null;
+      break;
+    case 'pilot-refit-set': {
+      const id = el.dataset.id as ShipId;
+      const r = refitPilot(state, i, id, Date.now());
+      if (r.error) {
+        addLog(PILOT_ERRORS[r.error]);
+      } else {
+        state = r.state;
+        refitPilotFor = null;
+        addLog(`${r.pilot!.name} пересел на ${SHIPS[id].name}. Маршрут снят — назначьте заново.`);
+      }
+      break;
+    }
     case 'pilot-route': {
       if (routePilot === i) {
         routePilot = null;
         break;
       }
       routePilot = i;
+      movePilotFor = null;
+      refitPilotFor = null;
       scrollToRoute = true;
       // Открывая список, показываем ту роль, которой пилот летает сейчас.
       const pilot = state.pilots.find((p) => p.id === i);

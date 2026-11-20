@@ -1371,7 +1371,11 @@ export type PilotError =
   /** Система дальше, чем бак его корабля. */
   | 'range'
   /** Этой линией уже летает свой пилот: двое сбивают друг другу цену. */
-  | 'taken';
+  | 'taken'
+  /** §128: пилот в перелёте — сначала пусть доберётся. */
+  | 'busy'
+  /** §128: такой корабль у пилота уже стоит. */
+  | 'same';
 
 export interface PilotResult {
   state: GameState;
@@ -1494,6 +1498,7 @@ export function hirePilot(state: GameState, id: ShipId, now: number): PilotResul
     role: 'trader',
     runs: 0,
     failures: 0,
+    transfer: null,
   };
 
   return {
@@ -1526,6 +1531,8 @@ export function assignPilotRoute(
 
   const pilot = state.pilots.find((p) => p.id === pilotId);
   if (!pilot) return { state, error: 'none' };
+  // §128: пока пилот летит на новую планету, маршрут ему не назначить.
+  if (pilot.transfer && now < pilot.transfer.until) return { state, error: 'busy' };
   /*
    * §108: полицейскому «маршрут» — это место дежурства, и своя система
    * для него законное место. Торговцу же летать в свою систему некуда.
@@ -1563,6 +1570,132 @@ export function assignPilotRoute(
   return {
     pilot: next,
     state: { ...state, pilots: state.pilots.map((p) => (p.id === pilot.id ? next : p)) },
+  };
+}
+
+/* ---------- §128: перелёт пилота на другую планету и смена корабля ---------- */
+
+/**
+ * СКОЛЬКО ЛЕТЕТЬ ПИЛОТУ НА НОВУЮ ПЛАНЕТУ.
+ *
+ * Пользователь: «пилот будет добираться туда сам, честно». Честно — значит
+ * по той же формуле прыжка, что у игрока (`baseJumpDuration`), а не
+ * «мгновенно». Если путь длиннее бака его корабля, пилот идёт в несколько
+ * прыжков: тогда время — сумма отрезков, и короткий бак действительно
+ * замедляет переезд, как и должен.
+ */
+export function pilotTransferMs(
+  state: GameState,
+  pilot: Pilot,
+  to: number,
+  settings: Settings = DEFAULT_SETTINGS,
+): number {
+  const systems = systemsOf(state.galaxy);
+  if (!systems[to]) return 0;
+  const d = distance(systems[pilot.home], systems[to]);
+  if (d <= 0) return 0;
+  const legs = Math.max(1, Math.ceil(d / SHIPS[pilot.ship].range));
+  return Math.round(legs * baseJumpDuration(d / legs, settings));
+}
+
+/**
+ * СКОЛЬКО СТОИТ ПЕРЕЛЁТ (в десятых кредита).
+ *
+ * Пользователь: «топливо ему за перелёт оплатим мы». Считается по той же
+ * цене, что игрок платит за бак, — `FUEL_COST_PER_UNIT` за десятую св. года.
+ * Никакой наценки: перегон корабля стоит ровно своё топливо.
+ */
+export function pilotTransferCost(state: GameState, pilot: Pilot, to: number): number {
+  const systems = systemsOf(state.galaxy);
+  if (!systems[to]) return 0;
+  return Math.round(distance(systems[pilot.home], systems[to]) * FUEL_COST_PER_UNIT);
+}
+
+/**
+ * Перевести пилота на другую планету.
+ *
+ * Пилот не телепортируется и не бросает маршрут молча: старый маршрут
+ * снимается (летать из новой системы по нему нельзя), а сам он на время
+ * перелёта выпадает из дохода. Купить ему новый маршрут можно только после
+ * прилёта — это и есть плата за переезд, кроме топлива.
+ */
+export function movePilot(
+  state: GameState,
+  pilotId: number,
+  to: number,
+  now: number,
+  settings: Settings = DEFAULT_SETTINGS,
+): PilotResult {
+  if (state.flight) return { state, error: 'in-flight' };
+
+  const pilot = state.pilots.find((p) => p.id === pilotId);
+  if (!pilot) return { state, error: 'none' };
+  if (pilot.transfer && now < pilot.transfer.until) return { state, error: 'busy' };
+  if (to === pilot.home) return { state, error: 'self' };
+
+  const systems = systemsOf(state.galaxy);
+  if (!systems[to]) return { state, error: 'range' };
+
+  const cost = pilotTransferCost(state, pilot, to);
+  if (state.cash < cost) return { state, error: 'cash' };
+
+  const until = now + pilotTransferMs(state, pilot, to, settings);
+  const next: Pilot = {
+    ...pilot,
+    home: to,
+    route: null,
+    transfer: { from: pilot.home, until },
+    nextRunAt: until,
+  };
+
+  return {
+    pilot: next,
+    state: {
+      ...state,
+      cash: state.cash - cost,
+      pilots: state.pilots.map((p) => (p.id === pilot.id ? next : p)),
+    },
+  };
+}
+
+/**
+ * СМЕНА КОРАБЛЯ ПИЛОТА.
+ *
+ * Правило одно и то же с верфью игрока (§102.4): новый корабль стоит свою
+ * цену, старый идёт в зачёт по своей. Пользователь просил возможность
+ * менять пилотам корабли — и это самый скучный способ, зато без второй
+ * экономики: пилот не продаёт корабль «выгоднее», чем игрок.
+ *
+ * Маршрут снимается: бак нового корабля может не дотянуть до прежней
+ * линии. Ранг, имя и рейсы остаются — меняется железо, не человек.
+ */
+export function refitPilot(
+  state: GameState,
+  pilotId: number,
+  id: ShipId,
+  now: number,
+): PilotResult {
+  if (state.flight) return { state, error: 'in-flight' };
+
+  const pilot = state.pilots.find((p) => p.id === pilotId);
+  if (!pilot) return { state, error: 'none' };
+  if (pilot.ship === id) return { state, error: 'same' };
+
+  const economy = currentSystem(state).economy;
+  if (!shipsForSale(economy).includes(id)) return { state, error: 'unavailable' };
+
+  const price = shipPrice(id) - shipPrice(pilot.ship);
+  if (state.cash < price) return { state, error: 'cash' };
+
+  const next: Pilot = { ...pilot, ship: id, route: null };
+
+  return {
+    pilot: next,
+    state: {
+      ...state,
+      cash: state.cash - price,
+      pilots: state.pilots.map((p) => (p.id === pilot.id ? next : p)),
+    },
   };
 }
 
@@ -1610,6 +1743,12 @@ function accrueFleet(
   };
 
   for (const pilot of state.pilots) {
+    // §128: прилетел — перелёт закрывается, пилот снова свободен.
+    if (pilot.transfer && now >= pilot.transfer.until) {
+      kept.push({ ...pilot, transfer: null });
+      changed = true;
+      continue;
+    }
     if (!pilot.route || now < pilot.nextRunAt) {
       kept.push(pilot);
       continue;
@@ -3155,6 +3294,8 @@ export function deserialize(json: string): GameState {
   if (!Array.isArray(state.pilots)) state.pilots = [];
   // §127: в сохранениях до покупки станций поля нет — станций не было.
   if (!Array.isArray(state.stations)) state.stations = [];
+  // §128: в сохранениях до перелётов поля нет — все пилоты дома.
+  state.pilots = state.pilots.map((p) => ({ ...p, transfer: p.transfer ?? null }));
   // §107: в сохранениях шага 1 роли и счётчика провалов нет.
   state.pilots = state.pilots.map((p) => ({
     ...p,

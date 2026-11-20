@@ -25,9 +25,9 @@ const LAVE = 7;
 /** REORTE — ближайший выгодный сосед LAVE: 4.4 св. года, 185.6 CR за рейс. */
 const REORTE = 39;
 
-function save({ kills = 128, cash = 200000, pilots = [], nextPilotId = 1 } = {}) {
+function save({ kills = 128, cash = 200000, pilots = [], nextPilotId = 1, system = LAVE } = {}) {
   const state = {
-    version: 4, galaxy: 1, system: LAVE, cash, fuel: 60, holdSpace: 8,
+    version: 4, galaxy: 1, system, cash, fuel: 60, holdSpace: 8,
     cargo: Array(17).fill(0),
     market: Array(17).fill({ price: 100, quantity: 5 }),
     rng: 1, flight: null,
@@ -466,6 +466,68 @@ async function hangar(opts) {
   click(w, close);
   await wait(300);
   check('§126: «Свернуть» закрывает панель', w.document.querySelector('[data-route-card]') === null);
+  w.close();
+}
+
+/* ---------- §128: пилот переезжает и меняет корабль ---------- */
+{
+  const far = Date.now() + 1e9;
+  const pilot = {
+    id: 1, name: 'Альфа', ship: 'adder', home: LAVE, route: { from: LAVE, to: REORTE },
+    nextRunAt: far, role: 'trader', runs: 3, failures: 0, transfer: null,
+  };
+  const w = await hangar({ pilots: [pilot], nextPilotId: 2, cash: 500_000 });
+
+  const moveBtn = byAction(w, 'pilot-move', { i: 1 });
+  const routeBtn = byAction(w, 'pilot-route', { i: 1 });
+  check('§128: «Сменить планету» есть в карточке пилота', moveBtn !== undefined);
+  check('§128: она левее «Сменить маршрут»',
+    moveBtn !== undefined && routeBtn !== undefined
+      && (moveBtn.compareDocumentPosition(routeBtn) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+
+  click(w, moveBtn);
+  await wait(300);
+  const panel = w.document.querySelector('[data-move-card]');
+  check('§128: панель перелёта — отдельная карточка над списком',
+    panel !== null && panel.parentElement === w.document.getElementById('content'));
+  check('§128: панель подписана именем пилота', /Перелёт: Альфа/.test(content(w)));
+  check('§128: видно топливо и время в пути', /топливо [\d.]+ CR · в пути/.test(content(w)));
+
+  const dest = w.document.querySelector('[data-action="pilot-move-set"]');
+  const to = Number(dest.dataset.to);
+  const cashBefore = saved(w).cash;
+  click(w, dest);
+  await wait(400);
+  const afterMove = saved(w);
+  check('§128: пилот улетел на выбранную планету', afterMove.pilots[0].home === to);
+  check('§128: прежний маршрут снят', afterMove.pilots[0].route === null);
+  check('§128: топливо оплатил командир', cashBefore - afterMove.cash > 0, `${(cashBefore - afterMove.cash) / 10} CR`);
+  check('§128: в карточке видно перелёт', /летит .* → .*прибудет через/.test(content(w)));
+  w.close();
+}
+
+/* ---------- §128: смена корабля пилота ---------- */
+{
+  const RICH = 151; // CEESXE: экономика 0, на верфи весь список
+  const pilot = {
+    id: 1, name: 'Бета', ship: 'adder', home: RICH, route: null,
+    nextRunAt: Date.now() + 1e9, role: 'trader', runs: 0, failures: 0, transfer: null,
+  };
+  const w = await hangar({ pilots: [pilot], nextPilotId: 2, cash: 500_000, system: RICH });
+
+  click(w, byAction(w, 'pilot-refit', { i: 1 }));
+  await wait(300);
+  check('§128: панель корабля открылась', w.document.querySelector('[data-refit-card]') !== null);
+  const cobra = byAction(w, 'pilot-refit-set', { i: 1, id: 'cobra3' });
+  check('§128: на богатой верфи есть Cobra Mk III', cobra !== undefined);
+
+  const before = saved(w).cash;
+  click(w, cobra);
+  await wait(400);
+  const s = saved(w);
+  check('§128: корабль пилота сменён', s.pilots[0].ship === 'cobra3');
+  // Доплата — разница цен верфи: 9 258 − 1 000 = 8 258 CR.
+  check('§128: старый корабль ушёл в зачёт', before - s.cash === 82_580, `${(before - s.cash) / 10} CR`);
   w.close();
 }
 

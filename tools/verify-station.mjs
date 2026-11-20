@@ -120,7 +120,11 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
     poorBtn && bar !== undefined && bar !== null
       && (bar.compareDocumentPosition(poorBtn) & poor.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
   check('§127: без денег кнопка серая', poorBtn?.disabled === true);
-  check('§127: без денег кнопка без надписи', (poorBtn?.textContent ?? 'x').trim() === '');
+  /*
+   * §127.2: вместо пустоты — «--». Смысла в чёрточках нет, и это нарочно:
+   * кнопка получает размер соседних, но по-прежнему ничего не обещает.
+   */
+  check('§127.2: без денег на кнопке «--»', (poorBtn?.textContent ?? '').trim() === '--');
   /*
    * §127.1: цены на рынке нет вовсе — «оставим интригу, пусть игрок не
    * догадывается, что станцию можно купить». Строка «Станция: 477 400 CR»
