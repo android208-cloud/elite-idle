@@ -266,7 +266,19 @@ await wait(300);
 const dead2 = d3.querySelector('#content button[data-ui-disabled]');
 check('§132.3: в правке недоступная кнопка оттаяла', dead2 !== null && dead2.disabled === false,
   `${dead2?.disabled} / ${dead2?.dataset.uiDisabled}`);
+/*
+ * §132.4: вид недоступной кнопки морозится.
+ *
+ * Пользователь (скриншот): «выбрал неактивную кнопку, но цвет текста в
+ * редакторе там для активной». Значит в правке кнопка должна выглядеть так же
+ * тускло, как в игре, — иначе и цвет в панели читается с живого вида.
+ */
 check('§132.3: и выглядит по-прежнему приглушённой', dead2?.dataset.uiDisabled === '1');
+check('§132.4: приглушённость заморожена на самом элементе',
+  parseFloat(dead2?.style.opacity ?? '1') < 0.6, dead2?.style.opacity);
+check('§132.4: и она та же, что была у недоступной',
+  dead2?.style.opacity === dead2?.dataset.uiDeadOpacity,
+  `${dead2?.style.opacity} / ${dead2?.dataset.uiDeadOpacity}`);
 
 c3(dead2);
 await wait(150);
@@ -274,6 +286,18 @@ const p3 = d3.getElementById('ui-editor');
 check('§132.3: недоступную кнопку можно выбрать', /Кнопка/.test(p3.textContent ?? ''),
   (p3.textContent ?? '').split('\n')[0].slice(0, 24));
 check('§132.3: у кнопки есть цвет шрифта', !!p3.querySelector('[data-ui-prop="color"]'));
+const hexOf = (rgb) => {
+  const m = String(rgb).match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+  if (!m) return String(rgb).toLowerCase();
+  return '#' + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('');
+};
+const shown = p3.querySelector('[data-ui-prop="color"][data-ui-kind="text-color"]').value;
+check('§132.4: панель показывает настоящий цвет кнопки',
+  shown.toLowerCase() === hexOf(w3.getComputedStyle(dead2).color),
+  `${shown} / ${hexOf(w3.getComputedStyle(dead2).color)}`);
+check('§132.4: в панели сказано, что кнопка недоступна',
+  /недоступна/.test(p3.querySelector('.uied-note')?.textContent ?? ''),
+  (p3.querySelector('.uied-note')?.textContent ?? '').slice(0, 40));
 
 const color = p3.querySelector('[data-ui-prop="color"][data-ui-kind="text-color"]');
 color.value = '#ffcc00';

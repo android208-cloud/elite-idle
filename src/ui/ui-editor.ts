@@ -175,8 +175,23 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
  */
 function unfreezeButtons(content: HTMLElement): void {
   content.querySelectorAll<HTMLButtonElement>('button[disabled]').forEach((btn) => {
+    /*
+     * §132.4: ВИД НЕДОСТУПНОЙ КНОПКИ НАДО ЗАМОРОЗИТЬ.
+     *
+     * Пользователь (скриншот): «выбрал неактивную кнопку, но цвет текста в
+     * редакторе там для активной». Причина: сняв `disabled`, мы снимали и
+     * правило `.btn:disabled { opacity: .38 }` — кнопка в редакторе выглядела
+     * живой, а цвет в панели читался с этого «живого» вида.
+     *
+     * Поэтому перед снятием атрибута запоминаем вычисленную прозрачность и
+     * ставим её inline: кнопка остаётся приглушённой, как в игре. Цвет при
+     * этом честный — он и в игре такой же, тускнеет только прозрачность.
+     */
+    const cs = getComputedStyle(btn);
     btn.dataset.uiDisabled = '1';
+    btn.dataset.uiDeadOpacity = cs.opacity;
     btn.disabled = false;
+    btn.style.opacity = cs.opacity;
   });
 }
 
@@ -260,7 +275,13 @@ function panel(el: HTMLElement, key: string): string {
              }</button>`)
            .join('')}</div>`;
   } else {
+    const dead = el.hasAttribute('data-ui-disabled')
+      ? `<div class="uied-note">Кнопка недоступна в игре — она остаётся приглушённой (opacity ${esc(
+          el.dataset.uiDeadOpacity ?? '',
+        )}). Цвет ниже — тот, что будет под этой дымкой.</div>`
+      : '';
     body =
+      dead +
       numRow('Ширина', 'w', w, 40, 400) +
       numRow('Высота', 'h', h, 24, 160) +
       numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
