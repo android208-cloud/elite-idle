@@ -20,6 +20,7 @@ import { cargoManifest, handoverLine, contrabandValue, contrabandGoods, untracke
 import { buildSaveFile, encodeSaveFile, formatSavedAt, importSaveFile, saveFileName } from '../core/save-file.ts';
 import { buildDebugFile, debugFileName, encodeDebugFile, type DebugEnv } from '../core/debug-file.ts';
 import { drawShipModel, FLEET, type ShipBlueprint } from './ship-model.ts';
+import { applyUiEdits, initUiEditor, isEditing, toggleEditing } from './ui-editor.ts';
 import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-layout.ts';
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
@@ -2796,6 +2797,7 @@ function devScreen(): string {
   return `<div class="card">
       <div class="row"><button class="btn text" data-action="dev-close">← Назад</button><span class="spacer"></span>
         <span class="chip">сохранение ${sizes}</span></div>
+      <div class="sub" style="margin:8px 0 4px">Карандаш по центру шапки — редактор интерфейса: нажмите на карточку, строку или кнопку.</div>
       <h2 style="margin-top:10px">Карта и флот</h2>
       <div class="row" style="margin-top:6px"><label>Линии маршрутов</label><span class="spacer"></span>
         ${select('devRoutes', [['on', 'Показаны'], ['off', 'Скрыты']], settings.devRoutes ? 'on' : 'off')}</div>
@@ -3096,6 +3098,27 @@ function tabWarningCard(): string {
     </div>`;
 }
 
+/**
+ * §132: включён ли редактор интерфейса.
+ *
+ * Держим копию флага в `main`, чтобы `render()` не дёргал геттер на каждом
+ * кадре: значение меняется только по нажатию карандаша.
+ */
+let editing = isEditing();
+
+/**
+ * §132: под каким именем редактор хранит правки этого экрана.
+ *
+ * Ключ — экран, а не вкладка: у боя, обломков и списка пилотов своя разметка,
+ * и правки одного не должны налезать на другой.
+ */
+function editorScreen(): string {
+  if (state.combat) return 'combat';
+  if (state.salvage) return 'salvage';
+  if (pilotsOpen && tab === 'hangar') return 'pilots';
+  return tab;
+}
+
 function render(): void {
   const content = document.getElementById('content')!;
   const screens: Record<Tab, () => string> = {
@@ -3131,7 +3154,9 @@ function render(): void {
   const active = document.activeElement as HTMLElement | null;
   // §113: экран отладки — поверх вкладки, но не поверх боя и обломков:
   // там идёт решение, и уводить с него нельзя.
-  const showDev = devOpen && !inCombat && !inSalvage;
+  // §132: в режиме правки показываем сам экран, а не отладку, — иначе править
+  // было бы нечего.
+  const showDev = devOpen && !inCombat && !inSalvage && !editing;
   // §115: экран пилотов живёт только поверх ангара — уходя с вкладки, он
   // закрывается (это делает обработчик вкладок), как и экран отладки.
   const showPilots = pilotsOpen && !showDev && !inCombat && !inSalvage && tab === 'hangar';
@@ -3218,6 +3243,19 @@ function render(): void {
 
   // §131.11: разметка новая — прежний класс `stuck` уехал вместе со старой.
   syncStickyFuel();
+
+  /*
+   * §132: редактор интерфейса.
+   *
+   * Карандаш — только в режиме разработчика. Он же показывает, включена ли
+   * правка: нажатое состояние закрашено.
+   */
+  const pencil = document.getElementById('dev-pencil');
+  if (pencil) {
+    pencil.hidden = !devOpen || inCombat || inSalvage;
+    pencil.setAttribute('aria-pressed', editing ? 'true' : 'false');
+  }
+  applyUiEdits(content, editorScreen());
 }
 
 /**
@@ -4040,6 +4078,13 @@ function onAction(el: HTMLElement): void {
       render();
       break;
     }
+    case 'ui-edit-toggle': {
+      // §132: карандаш в шапке включает и выключает режим правки.
+      toggleEditing();
+      editing = isEditing();
+      render();
+      break;
+    }
     case 'dev-open': {
       devOpen = true;
       devNotice = null;
@@ -4308,6 +4353,12 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
  * ради этого нельзя, поэтому отдельный слушатель.
  */
 document.getElementById('content')!.addEventListener('scroll', syncStickyFuel, { passive: true });
+
+/*
+ * §132: редактор интерфейса. Модулю нужны только две вещи из игры: как
+ * перерисовать экран и под каким именем хранить правки.
+ */
+initUiEditor({ render: () => render(), screen: () => editorScreen() });
 
 window.addEventListener('resize', () => {
   if (tab === 'map' && !state.combat) drawMap();

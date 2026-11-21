@@ -8,7 +8,17 @@
   </head>
   <body>
     <div id="app">
-      <header class="top-bar"><h1 id="title">Elite Idle</h1><span id="top-info"></span></header>
+      <header class="top-bar"><h1 id="title">Elite Idle</h1><span id="top-info"></span>
+        <!-- §132: карандаш редактора интерфейса. Виден только в режиме разработчика. -->
+        <button class="dev-pencil" id="dev-pencil" data-action="ui-edit-toggle" hidden
+          aria-label="Редактор интерфейса" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z" />
+            <path d="M13.5 6.5l4 4" />
+          </svg>
+        </button>
+      </header>
       <main id="content"></main>
       <nav class="nav-bar" id="nav"></nav>
     </div>

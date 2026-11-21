@@ -67,10 +67,16 @@ canvas.dispatchEvent(new window.MouseEvent('pointerdown', {
 await new Promise((r) => setTimeout(r, 250));
 
 const html2 = window.document.getElementById('content').innerHTML;
-const chosen = html2.includes(`<h2>${target.name}</h2>`);
+/*
+ * §132: у заголовков появился атрибут редактора интерфейса (`data-ui-key`),
+ * поэтому сравниваем не строкой с `<h2>`, а по смыслу: заголовок карточки —
+ * это имя системы, атрибуты какие угодно.
+ */
+const heading = (name) => new RegExp(`<h2[^>]*>${name}</h2>`).test(html2);
+const chosen = heading(target.name);
 console.log(`${chosen ? '✅' : '❌'} тап по подписи выбрал ${target.name}` + (chosen ? '' : ' — выбрана другая система'));
 if (!chosen) {
-  const m = html2.match(/<h2>([A-Z]+)<\/h2>/);
+  const m = html2.match(/<h2[^>]*>([A-Z]+)<\/h2>/);
   if (m) console.log('   в карточке: ' + m[1]);
 }
 /*
@@ -115,7 +121,7 @@ for (let i = 0; i < named.length; i++) {
     );
     await new Promise((r) => setTimeout(r, 120));
     const page = window.document.getElementById('content').innerHTML;
-    if (page.includes(`<h2>${n2}</h2>`)) pairsOk++;
+    if (new RegExp(`<h2[^>]*>${n2}</h2>`).test(page)) pairsOk++;
     else pairsBad.push(`${n1}/${n2}`);
   }
 }
