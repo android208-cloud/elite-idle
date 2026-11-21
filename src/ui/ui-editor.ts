@@ -36,8 +36,27 @@ type UiStyle = {
   /** §132.1: сдвиг строки или кнопки относительно её места в потоке. */
   dx?: number;
   dy?: number;
+  /** §132.6: замены внутри живого текста (см. `Op`). */
+  ops?: Op[];
+  /** Старый формат: текст целиком. При загрузке переводится в `ops`. */
   text?: string;
-};
+}
+
+/**
+ * §132.6: ОДНА ЗАМЕНА ВНУТРИ ТЕКСТА, А НЕ ТЕКСТ ЦЕЛИКОМ.
+ *
+ * Пользователь: «Когда я отредактировал этот текст (убрал слово „цена"), то
+ * весь блок текста перестал меняться при выборе другой планеты». Так и было:
+ * правка хранила текст целиком и каждой перерисовкой возвращала его обратно,
+ * затирая свежие данные.
+ *
+ * Теперь хранится не текст, а разница: `from` → `to` и место `at` (нужно для
+ * чистой вставки, где `from` пуст). Применяется она к СВЕЖЕМУ тексту, который
+ * экран только что нарисовал. Убрали слово «цена» — оно будет убрано на любой
+ * планете, а цифры цены останутся живыми. Поменяли число — на другой планете
+ * такой подстроки нет, замена просто не сработает, и правка не сломает данные.
+ */
+type Op = { from: string; to: string; at?: number };;
 
 type Store = Record<string, Record<string, UiStyle>>;
 
@@ -47,6 +66,8 @@ let store: Store = {};
 let editing = false;
 let picked: string | null = null;
 let deps: { render: () => void; screen: () => string } | null = null;
+/** §132.6: живой текст каждого ключа — база для правок, снятая с последней отрисовки. */
+const liveText = new Map<string, string>();
 
 /** Правки читаются один раз при загрузке: битый JSON не должен ломать игру. */
 function load(): void {
@@ -91,6 +112,19 @@ function editsFor(screen: string): Record<string, UiStyle> {
  * `div` контейнером (как было до §132.5), «Еда» не получает ключа и выбрать
  * заголовок нельзя — клик по нему попадает в саму карточку.
  */
+/** Свой текст элемента как есть, со всеми пробелами: по нему считаются правки. */
+function rawText(el: Element): string {
+  let out = '';
+  for (const n of Array.from(el.childNodes)) {
+    if (n.nodeType === 3 /* Node.TEXT_NODE */) out += n.textContent ?? '';
+  }
+  return out;
+}
+
+function textNodes(el: Element): Text[] {
+  return Array.from(el.childNodes).filter((n) => n.nodeType === 3 /* Node.TEXT_NODE */) as Text[];
+}
+
 function directText(el: Element): string {
   let out = '';
   for (const n of Array.from(el.childNodes)) {
@@ -126,22 +160,81 @@ function textLeaves(root: Element): HTMLElement[] {
 /**
  * §132.5: записать текст, не стерев соседей.
  *
- * `textContent = ...` унёс бы с собой пилюлю «дёшево». Поэтому новый текст
- * кладётся в первый непустой прямой текстовый узел, остальные пустеют, а
- * дочерние элементы остаются как были.
+ * `textContent = ...` унёс бы с собой пилюлю «дёшево». Поэтому текст пишется
+ * в прямые текстовые узлы, а дочерние элементы остаются как были. §132.6:
+ * границы узлов сохраняются — `<br>` между строками карточки не схлопываются,
+ * даже если правка укоротила одну строку.
  */
-function setDirectText(el: HTMLElement, text: string): void {
-  const texts = Array.from(el.childNodes).filter(
-    (n) => n.nodeType === 3 /* Node.TEXT_NODE */,
-  ) as Text[];
-  const live = texts.filter((n) => (n.data ?? '').trim() !== '');
-  if (!live.length) {
-    if (!el.children.length) el.textContent = text;
-    else el.insertBefore(document.createTextNode(text), el.firstChild);
+function applyOpsToNodes(el: HTMLElement, ops: Op[]): void {
+  const nodes = textNodes(el);
+  if (!ops.length) return;
+  if (!nodes.length) {
+    const live = '';
+    el.insertBefore(document.createTextNode(applyOps(live, ops)), el.firstChild);
     return;
   }
-  live[0].data = text;
-  for (const n of live.slice(1)) n.data = '';
+  const live = nodes.map((n) => n.data).join('');
+  // Границы между узлами в координатах живого текста.
+  const bounds: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < nodes.length - 1; i++) {
+    acc += nodes[i].data.length;
+    bounds.push(acc);
+  }
+  const moved = bounds.map((b) => b);
+  let text = live;
+  let shift = 0;
+  for (const op of ops) {
+    const at = op.from === '' ? Math.min(op.at ?? text.length, text.length) : text.indexOf(op.from);
+    if (at < 0) continue;
+    bounds.forEach((b, i) => {
+      if (b <= at) return;
+      if (b >= at + op.from.length) moved[i] = b + shift + (op.to.length - op.from.length);
+      else moved[i] = at + shift + op.to.length;
+    });
+    text = text.slice(0, at) + op.to + text.slice(at + op.from.length);
+    shift += op.to.length - op.from.length;
+  }
+  let pos = 0;
+  nodes.forEach((n, i) => {
+    if (i === nodes.length - 1) {
+      n.data = text.slice(pos);
+      return;
+    }
+    const end = Math.max(pos, Math.min(moved[i], text.length));
+    n.data = text.slice(pos, end);
+    pos = end;
+  });
+}
+
+function applyOps(live: string, ops: Op[]): string {
+  let out = live;
+  for (const op of ops) {
+    if (op.from === '') {
+      const at = Math.min(op.at ?? out.length, out.length);
+      out = out.slice(0, at) + op.to + out.slice(at);
+      continue;
+    }
+    const at = out.indexOf(op.from);
+    if (at < 0) continue; // живой текст ушёл — замену не навязываем
+    out = out.slice(0, at) + op.to + out.slice(at + op.from.length);
+  }
+  return out;
+}
+
+/**
+ * §132.6: разница между живым и желаемым текстом — общий префикс и общий
+ * хвост, а между ними одна замена. Этого хватает на реальные правки (убрать
+ * слово, поменять подпись) и не требует ничего умного.
+ */
+function diffOps(live: string, next: string): Op[] {
+  if (live === next) return [];
+  const min = Math.min(live.length, next.length);
+  let p = 0;
+  while (p < min && live[p] === next[p]) p++;
+  let s = 0;
+  while (s < live.length - p && s < next.length - p && live[live.length - 1 - s] === next[next.length - 1 - s]) s++;
+  return [{ from: live.slice(p, live.length - s), to: next.slice(p, next.length - s), at: p }];
 }
 
 function kindOf(key: string): Kind {
@@ -184,7 +277,7 @@ function applyText(el: HTMLElement, s?: UiStyle): void {
   if (s.fs !== undefined) el.style.fontSize = `${s.fs}px`;
   if (s.color) el.style.color = s.color;
   if (s.align) el.style.textAlign = s.align;
-  if (s.text !== undefined && directText(el) !== s.text) setDirectText(el, s.text);
+  if (s.ops?.length) applyOpsToNodes(el, s.ops);
   shift(el, s);
 }
 
@@ -251,7 +344,17 @@ export function applyUiEdits(content: HTMLElement, screen: string): void {
     textLeaves(card).forEach((el, j) => {
       const k = `${key}.t${j}`;
       if (editing) el.dataset.uiKey = k;
-      applyText(el, edits[k]);
+      // §132.6: живой текст запоминаем ДО подстановки — по нему считается правка.
+      liveText.set(`${screen}|${k}`, rawText(el));
+      const s = edits[k];
+      if (s && s.text !== undefined && !s.ops) {
+        // Старый формат «текст целиком» переводим в замену — иначе он снова
+        // заморозил бы блок. Делается один раз, на первой перерисовке.
+        s.ops = diffOps(rawText(el), s.text);
+        delete s.text;
+        save();
+      }
+      applyText(el, s);
     });
     Array.from(card.querySelectorAll<HTMLElement>('button')).forEach((el, j) => {
       const k = `${key}.b${j}`;
@@ -296,9 +399,24 @@ function panel(el: HTMLElement, key: string): string {
   if (kind === 'card') {
     body = numRow('Высота', 'h', h, 40, 800) + numRow('Радиус', 'r', r, 0, 48) + colorRow('Фон', 'bg', bg);
   } else if (kind === 'text') {
+    /*
+     * §132.6: многострочный текст правим в textarea.
+     *
+     * Блок «Преимущественно промышленная…» — это один элемент с `<br>`: строк
+     * три, а в однострочном поле видна только первая, и правка стирала бы
+     * остальные. Ещё и переводы строк нужны, чтобы правка оставалась заменой
+     * куска, а не всего блока.
+     */
+    const value = esc(rawText(el));
+    const field = /\n/.test(rawText(el))
+      ? `<textarea rows="3" data-ui-prop="text" data-ui-kind="text">${value}</textarea>`
+      : `<input type="text" value="${value}" data-ui-prop="text" data-ui-kind="text">`;
+    const note = s.ops?.length
+      ? '<div class="uied-note">Правка — замена куска: всё остальное, включая цифры, обновляется само.</div>'
+      : '';
     body =
-      `<div class="uied-row"><label>Текст</label>
-         <input type="text" value="${esc(s.text ?? directText(el))}" data-ui-prop="text" data-ui-kind="text"></div>` +
+      note +
+      `<div class="uied-row"><label>Текст</label>${field}</div>` +
       numRow('Шрифт', 'fs', fs, 8, 40) +
       colorRow('Цвет', 'color', color) +
       numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
@@ -385,8 +503,29 @@ function setProp(prop: string, raw: string): void {
   const s: UiStyle = (edits[picked] ??= {});
   const kind = kindOf(picked);
 
-  if (prop === 'text') s.text = raw;
-  else if (prop === 'bg') s.bg = raw;
+  if (prop === 'text') {
+    /*
+     * §132.6: храним разницу с живым текстом, а не текст.
+     *
+     * Живой текст — тот, что экран нарисовал в последний раз (с ценой этой
+     * планеты). Из него и из того, что игрок видит в поле, считается замена.
+     */
+    const live = liveText.get(`${currentScreen()}|${picked}`) ?? rawText(node);
+    const ops = diffOps(live, raw);
+    if (ops.length) s.ops = ops;
+    else delete s.ops;
+    delete s.text;
+    /*
+     * Сначала возвращаем на экран ЖИВОЙ текст, потом накладываем новую правку.
+     * Иначе вторая правка считалась бы от уже изменённого текста и на экране
+     * ничего бы не менялось: «цена» в нём уже нет.
+     */
+    applyOpsToNodes(node, diffOps(rawText(node), live));
+    applyOpsToNodes(node, s.ops ?? []);
+    save();
+    return;
+  }
+  if (prop === 'bg') s.bg = raw;
   else if (prop === 'color') s.color = raw;
   else if (prop === 'align') s.align = raw as UiStyle['align'];
   else {

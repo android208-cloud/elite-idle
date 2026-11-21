@@ -37,13 +37,14 @@ const byAction = (w, a, extra = {}) => [...w.document.querySelectorAll(`[data-ac
 const click = (w, el) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
 const type = (w, el, value) => { el.value = value; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
 
-function boot(save) {
+function boot(save, edits = null) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', () => {});
   const dom = new JSDOM(html, {
     runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: vc, url: 'https://arena.test/',
     beforeParse(w) {
       w.localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+      if (edits) w.localStorage.setItem(EDIT_KEY, edits);
       w.HTMLCanvasElement.prototype.getContext = () => ({
         setTransform(){}, clearRect(){}, beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){}, fill(){},
         arc(){}, save(){}, restore(){}, setLineDash(){}, strokeRect(){}, fillText(){},
@@ -383,6 +384,109 @@ await wait(300);
 check('§132.5: после правки отступ снят', d4.body.style.getPropertyValue('--ui-editor-h').trim() === '0px',
   d4.body.style.getPropertyValue('--ui-editor-h').trim());
 w4.close();
+
+/*
+ * §132.6: ПРАВКА ТЕКСТА — ЗАМЕНА КУСКА, А НЕ ТЕКСТ ЦЕЛИКОМ.
+ *
+ * Пользователь: «Когда я отредактировал этот текст (убрал слово „цена"), то
+ * весь блок текста перестал меняться при выборе другой планеты». Проверяем
+ * ровно это: убрали слово — и на другой планете блок живой.
+ */
+const w5 = boot({ state: JSON.stringify(state), log: [] });
+await wait(900);
+const d5 = w5.document;
+const c5 = (el) => el.dispatchEvent(new w5.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a5 = (a, extra = {}) => [...d5.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+
+c5(a5('tab', { tab: 'ship' }));
+await wait(300);
+c5(a5('tab', { tab: 'log' }));
+await wait(200);
+c5(a5('dev-open'));
+await wait(200);
+c5(d5.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c5(d5.getElementById('dev-pencil'));
+await wait(300);
+c5(a5('tab', { tab: 'ship' }));
+await wait(400);
+
+const info = [...d5.querySelectorAll('#content [data-ui-key]')]
+  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && /цена/.test(n.textContent ?? ''));
+check('§132.6: блок с ценой станции на месте', !!info, info?.dataset.uiKey);
+c5(info);
+await wait(200);
+const p6 = d5.getElementById('ui-editor');
+const field = p6.querySelector('[data-ui-prop="text"]');
+check('§132.6: многострочный текст правится в textarea', field?.tagName === 'TEXTAREA', field?.tagName);
+
+const liveBefore = field.value;
+const withoutPrice = liveBefore.replace('цена ', '');
+field.value = withoutPrice;
+field.dispatchEvent(new w5.Event('input', { bubbles: true }));
+const after1 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
+check('§132.6: слово «цена» убрано с экрана', !/цена/.test(after1.textContent ?? ''));
+check('§132.6: остальной текст цел', /Преимущественно|Сельскохозяйственная|промышленная|Техуровень/.test(after1.textContent ?? ''),
+  (after1.textContent ?? '').replace(/\s+/g, ' ').slice(0, 40));
+
+const stored6 = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
+const saved = stored6[Object.keys(stored6)[0]]?.[info.dataset.uiKey];
+check('§132.6: в правке лежит замена, а не текст целиком',
+  !!saved?.ops?.length && saved.text === undefined, JSON.stringify(saved?.ops));
+check('§132.6: замена — именно слово «цена»', saved?.ops?.[0]?.from === 'цена ' && saved.ops[0].to === '',
+  JSON.stringify(saved?.ops?.[0]));
+
+// Вторая правка в той же сессии — считается от живого текста, а не от изменённого.
+field.value = withoutPrice.replace('Станция', 'Стоянка');
+field.dispatchEvent(new w5.Event('input', { bubbles: true }));
+const after2 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
+check('§132.6: вторая правка тоже применяется', /Стоянка/.test(after2.textContent ?? ''),
+  (after2.textContent ?? '').replace(/\s+/g, ' ').slice(-30));
+check('§132.6: и «цена» по-прежнему убрана', !/цена/.test(after2.textContent ?? ''));
+
+const editsJson = w5.localStorage.getItem(EDIT_KEY);
+c5(d5.querySelector('[data-ui-act="done"]'));
+await wait(300);
+w5.close();
+
+/*
+ * Самая суть: та же сохранённая правка на ДРУГОЙ планете. Раньше здесь
+ * показывался замороженный текст LAVE.
+ */
+const other = { ...state, system: 8 };
+const w7 = boot({ state: JSON.stringify(other), log: [] }, editsJson);
+await wait(900);
+const d7 = w7.document;
+// Вне правки ключей нет — ищем по структуре: тот же `.sub` с данными планеты.
+const fresh = [...d7.querySelectorAll('#content .sub')].find((n) => /Техуровень/.test(n.textContent ?? ''));
+check('§132.6: на другой планете блок на месте', !!fresh,
+  (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 34));
+check('§132.6: правка применилась на другой планете', /Стоянка/.test(fresh?.textContent ?? ''),
+  (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(-24));
+check('§132.6: и «цена» там тоже убрана', !/цена/.test(fresh?.textContent ?? ''));
+check('§132.6: данные планеты обновились, а не замерли',
+  (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim() !==
+    liveBefore.replace('цена ', '').replace('Станция', 'Стоянка').replace(/\s+/g, ' ').trim(),
+  (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 50));
+const freshText = (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim();
+w7.close();
+
+/*
+ * Старый формат правки («текст целиком») переводится в замену на первой же
+ * перерисовке — иначе прежние правки продолжали бы морозить блок.
+ */
+const legacy = JSON.stringify({ ship: { 'c0.t1': { text: freshText } } });
+const w8 = boot({ state: JSON.stringify(other), log: [] }, legacy);
+await wait(900);
+const d8 = w8.document;
+const migrated = JSON.parse(w8.localStorage.getItem(EDIT_KEY) ?? '{}').ship?.['c0.t1'];
+check('§132.6: старая правка переведена в замену', !!migrated?.ops?.length && migrated.text === undefined,
+  JSON.stringify(migrated?.ops));
+check('§132.6: и текст на экране остался прежним',
+  [...d8.querySelectorAll('#content .sub')].some((n) =>
+    (n.textContent ?? '').replace(/\s+/g, ' ').trim() === freshText));
+w8.close();
 
 /*
  * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ИНТЕРФЕЙС СТОИТ.
