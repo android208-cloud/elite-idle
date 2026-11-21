@@ -2072,11 +2072,19 @@ function marketScreen(): string {
    * замени слово „занято“ на „Трюм“». Деньги и так висят в шапке экрана, а
    * строка здесь — про трюм, и начинаться она должна с трюма.
    */
-  return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+  /*
+   * §132.7: КАРТОЧКА СТАНЦИИ ПРИЛИПАЕТ, КАК «ТОПЛИВО».
+   *
+   * Пользователь: «Сделай карточку c0 в рынке по принципу „топливо“». Механика
+   * та же (§131): прозрачная обёртка с `position: sticky`, поэтому карточка
+   * остаётся при прокрутке длинного списка товаров, а под неё уползают цены.
+   * Своего кода у рынка нет — это тот же класс и тот же `syncStickyCards`.
+   */
+  return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
     <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     ${stationBuyRow()}
-    ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div>${rows}`;
+    ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div></div>${rows}`;
 }
 
 /** Номер предмета на верфи (1 — топливо), как в EQSHP; используется в подсказке. */
@@ -3260,7 +3268,7 @@ function render(): void {
   }
 
   // §131.11: разметка новая — прежний класс `stuck` уехал вместе со старой.
-  syncStickyFuel();
+  syncStickyCards();
 
   /*
    * §132: редактор интерфейса.
@@ -3284,7 +3292,7 @@ function render(): void {
 }
 
 /**
- * §131.12: залипла карточка «Топливо» или ещё едет.
+ * §131.12 / §132.7: залипла липкая карточка («Топливо», «Станция») или ещё едет.
  *
  * Нужно ради верхних углов: у прилипшей карточки за ними лежит полоса цвета
  * страницы. Снизу углы не трогаются — сквозь них должно быть видно уползающую
@@ -3293,13 +3301,18 @@ function render(): void {
  * Признак прилипания простой: верх обёртки сравнялся с верхом области
  * прокрутки. Считать по смещению нельзя — оно зависит от браузера.
  */
-function syncStickyFuel(): void {
+function syncStickyCards(): void {
   const content = document.getElementById('content');
   if (!content) return;
-  const wrap = content.querySelector<HTMLElement>('.sticky-fuel');
-  if (!wrap) return;
-  const stuck = wrap.getBoundingClientRect().top <= content.getBoundingClientRect().top + 0.5;
-  wrap.classList.toggle('stuck', stuck);
+  /*
+   * §132.7: обёрток может быть несколько — сейчас «Топливо» в ангаре и
+   * «Станция» на рынке. Но на одном экране всегда одна, поэтому проверяем все:
+   * это дешевле, чем потом искать, почему на новом экране углы не закрасились.
+   */
+  const top = content.getBoundingClientRect().top + 0.5;
+  content.querySelectorAll<HTMLElement>('.sticky-fuel').forEach((wrap) => {
+    wrap.classList.toggle('stuck', wrap.getBoundingClientRect().top <= top);
+  });
 }
 
 /* ---------- Модель корабля в ангаре ---------- */
@@ -4408,7 +4421,7 @@ document.getElementById('content')!.addEventListener('pointerdown', (ev) => {
  * §131.11: прокрутка меняет только верхние углы карточки — пересобирать экран
  * ради этого нельзя, поэтому отдельный слушатель.
  */
-document.getElementById('content')!.addEventListener('scroll', syncStickyFuel, { passive: true });
+document.getElementById('content')!.addEventListener('scroll', syncStickyCards, { passive: true });
 
 /*
  * §132: редактор интерфейса. Модулю нужны только две вещи из игры: как

@@ -171,10 +171,19 @@ check('§131.10: обёртка по-прежнему ничего не крас
 // Прокручивается именно main, а не окно: иначе sticky считался бы от шапки.
 check('§131: прокрутка — в main', w.getComputedStyle(main).overflowY === 'auto', w.getComputedStyle(main).overflowY);
 
-// На других вкладках липкой карточки нет.
+/*
+ * §132.7: на рынке липкая карточка теперь ЕСТЬ — «Станция».
+ * Пользователь: «Сделай карточку c0 в рынке по принципу „топливо“».
+ */
 click(w, byAction(w, 'tab', { tab: 'market' }));
 await wait(300);
-check('§131: на рынке липкой карточки нет', w.document.querySelectorAll('.sticky-fuel').length === 0);
+const market = w.document.querySelectorAll('.sticky-fuel');
+check('§132.7: на рынке липкая карточка одна', market.length === 1, String(market.length));
+check('§132.7: и это карточка «Станция»',
+  /Станция/.test(market[0]?.querySelector('h2')?.textContent ?? ''),
+  market[0]?.querySelector('h2')?.textContent);
+check('§132.7: прилипание считается и для неё',
+  w.getComputedStyle(market[0]).position === 'sticky', w.getComputedStyle(market[0]).position);
 click(w, byAction(w, 'tab', { tab: 'ship' }));
 await wait(300);
 check('§131: на экране корабля её тоже нет', w.document.querySelectorAll('.sticky-fuel').length === 0);
