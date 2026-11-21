@@ -2797,7 +2797,13 @@ function devScreen(): string {
   return `<div class="card">
       <div class="row"><button class="btn text" data-action="dev-close">← Назад</button><span class="spacer"></span>
         <span class="chip">сохранение ${sizes}</span></div>
-      <div class="sub" style="margin:8px 0 4px">Карандаш по центру шапки — редактор интерфейса: нажмите на карточку, строку или кнопку.</div>
+      <div class="row" style="margin-top:10px"><label>Редактор интерфейса</label><span class="spacer"></span>
+        <button class="btn small ${editorOn ? '' : 'tonal'}" data-action="dev-editor">${
+          editorOn ? 'Убрать карандаш' : 'Редактор'
+        }</button></div>
+      <div class="sub" style="margin:8px 0 4px">${editorOn
+        ? 'Карандаш по центру шапки включает правку: нажмите на карточку, строку или кнопку. Пока правка включена, игра стоит на паузе.'
+        : 'Кнопка достаёт карандаш в шапку. Дальше карандаш включает и выключает сам режим правки.'}</div>
       <h2 style="margin-top:10px">Карта и флот</h2>
       <div class="row" style="margin-top:6px"><label>Линии маршрутов</label><span class="spacer"></span>
         ${select('devRoutes', [['on', 'Показаны'], ['off', 'Скрыты']], settings.devRoutes ? 'on' : 'off')}</div>
@@ -3107,6 +3113,18 @@ function tabWarningCard(): string {
 let editing = isEditing();
 
 /**
+ * §132.1: показывать ли карандаш.
+ *
+ * Пользователь: «В настройках для разработчиков должна быть кнопка „редактор“
+ * по её нажатию и появляется и убирается карандаш. А сам редактор уже
+ * активируется карандашом». То есть это ДВА разных действия: кнопка в отладке
+ * только достаёт инструмент, карандаш — включает правку.
+ *
+ * В сейв не пишется: это состояние инструмента, а не игры.
+ */
+let editorOn = false;
+
+/**
  * §132: под каким именем редактор хранит правки этого экрана.
  *
  * Ключ — экран, а не вкладка: у боя, обломков и списка пилотов своя разметка,
@@ -3252,7 +3270,7 @@ function render(): void {
    */
   const pencil = document.getElementById('dev-pencil');
   if (pencil) {
-    pencil.hidden = !devOpen || inCombat || inSalvage;
+    pencil.hidden = !editorOn || !devOpen || inCombat || inSalvage;
     pencil.setAttribute('aria-pressed', editing ? 'true' : 'false');
   }
   applyUiEdits(content, editorScreen());
@@ -3541,7 +3559,14 @@ function onAction(el: HTMLElement): void {
       // скриптом, а правило должно держаться в одном месте.
       if (blockedTabs().includes(want)) break;
       tab = want;
-      devOpen = false; // §113: экран отладки закрывается любой вкладкой
+      /*
+       * §113: экран отладки закрывается любой вкладкой.
+       *
+       * §132.1: кроме режима правки. Там вкладки — единственный способ дойти
+       * до другого экрана, и закрытие отладки спрятало бы карандаш: игрок
+       * остался бы в редакторе без выхода.
+       */
+      if (!editing) devOpen = false;
       pilotsOpen = false; // §115: экран пилотов — тоже
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
@@ -4078,6 +4103,17 @@ function onAction(el: HTMLElement): void {
       render();
       break;
     }
+    case 'dev-editor': {
+      // §132.1: кнопка в отладке только достаёт карандаш и убирает его обратно.
+      editorOn = !editorOn;
+      if (!editorOn && editing) {
+        toggleEditing();
+        editing = isEditing();
+      }
+      devNotice = null;
+      render();
+      break;
+    }
     case 'ui-edit-toggle': {
       // §132: карандаш в шапке включает и выключает режим правки.
       toggleEditing();
@@ -4093,6 +4129,12 @@ function onAction(el: HTMLElement): void {
     }
     case 'dev-close': {
       devOpen = false;
+      // §132.1: ушли из отладки — карандаша нет, значит и правку закрываем:
+      // иначе из неё нечем выйти.
+      if (editing) {
+        toggleEditing();
+        editing = isEditing();
+      }
       render();
       break;
     }
@@ -4137,6 +4179,19 @@ function onAction(el: HTMLElement): void {
 /* ---------- Запуск ---------- */
 
 function tick(): void {
+  /*
+   * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ЭКРАН СТОИТ.
+   *
+   * Пользователь: «Интерфейс игры в этот момент должен встать на паузу».
+   * Иначе править нечего: раз в секунду тик пересчитывает мир, перерисовывает
+   * экран и подменяет тексты — выделенная строка уезжает, ползунок дёргается.
+   *
+   * Пауза именно интерфейсная. Время мира идёт по часам (`advance` считает по
+   * `Date.now()`), поэтому после выхода из редактора всё досчитается сразу —
+   * как после свёрнутой вкладки. Иначе пришлось бы сдвигать все сроки в
+   * состоянии, а это уже вмешательство в игру, а не в инструмент.
+   */
+  if (editing) return;
   const prev = state;
   // §89: время карьеры считается ДО досчёта мира и независимо от него:
   // это счётчик присутствия, а не правило полёта (см. `tickCareer`).

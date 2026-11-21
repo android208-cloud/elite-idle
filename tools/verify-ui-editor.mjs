@@ -83,7 +83,23 @@ click(w, byAction(w, 'tab', { tab: 'log' }));
 await wait(200);
 click(w, byAction(w, 'dev-open'));
 await wait(300);
-check('§132: в отладке карандаш показан', pencil.hidden === false);
+
+/*
+ * §132.1: карандаш достаёт КНОПКА в отладке, а включает правку уже карандаш.
+ * Два разных действия, и проверяются они порознь.
+ */
+const editorBtn = () => doc.querySelector('[data-action="dev-editor"]');
+check('§132.1: в отладке есть кнопка «Редактор»', editorBtn() !== null);
+check('§132.1: пока кнопку не нажали, карандаша нет', pencil.hidden === true);
+click(w, editorBtn());
+await wait(300);
+check('§132.1: нажали «Редактор» — карандаш появился', pencil.hidden === false);
+check('§132.1: и правка ещё не включена', !doc.body.classList.contains('ui-editing'));
+click(w, editorBtn());
+await wait(300);
+check('§132.1: нажали ещё раз — карандаш убран', pencil.hidden === true);
+click(w, editorBtn());
+await wait(300);
 
 click(w, pencil);
 await wait(300);
@@ -97,6 +113,10 @@ check('§132: вместо отладки показан сам экран',
 click(w, byAction(w, 'tab', { tab: 'hangar' }));
 await wait(300);
 check('§132: вкладки в режиме правки переключаются', /Топливо/.test(doc.getElementById('content').textContent ?? ''));
+// §132.1: вкладка не должна ни закрывать правку, ни прятать карандаш.
+check('§132.1: переход по вкладкам не выключает правку',
+  doc.body.classList.contains('ui-editing') && pencil.hidden === false,
+  `${doc.body.classList.contains('ui-editing')} / ${pencil.hidden}`);
 check('§132: элементы размечены', doc.querySelectorAll('#content [data-ui-key]').length > 5,
   String(doc.querySelectorAll('#content [data-ui-key]').length));
 
@@ -132,6 +152,12 @@ const center = [...panel().querySelectorAll('[data-ui-act="align"]')].find((b) =
 click(w, center);
 check('§132: положение строки меняется', sub.style.textAlign === 'center', sub.style.textAlign);
 
+// §132.1: сдвиг самой строки — вправо и вниз.
+type(w, panel().querySelector('[data-ui-prop="dx"][data-ui-kind="number"]'), '12');
+type(w, panel().querySelector('[data-ui-prop="dy"][data-ui-kind="number"]'), '-6');
+check('§132.1: строка сдвигается со своего места',
+  sub.style.transform === 'translate(12px, -6px)', sub.style.transform);
+
 // 5. Кнопка: размер и текст, действие игры не выполняется.
 const before = doc.getElementById('content').textContent;
 const refuel = fuelCard.querySelector('[data-action="refuel"][data-n]');
@@ -146,6 +172,9 @@ type(w, panel().querySelector('[data-ui-prop="w"][data-ui-kind="number"]'), '180
 check('§132: ширина кнопки задаётся жёстко', refuel.style.width === '180px', refuel.style.width);
 type(w, panel().querySelector('[data-ui-prop="text"]'), 'Заправить');
 check('§132: текст кнопки меняется', refuel.textContent === 'Заправить', refuel.textContent);
+type(w, panel().querySelector('[data-ui-prop="dx"][data-ui-kind="number"]'), '-20');
+check('§132.1: кнопка сдвигается со своего места',
+  /^translate\(-20px(,\s*0(px)?)?\)$/.test(refuel.style.transform), refuel.style.transform);
 
 // 6. Переживает перерисовку и ложится в localStorage.
 click(w, byAction(w, 'tab', { tab: 'market' }));
@@ -170,5 +199,60 @@ check('§132: после выхода правки на месте',
 check('§132: панель спрятана', panel().hidden === true);
 
 w.close();
+
+/*
+ * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ИНТЕРФЕЙС СТОИТ.
+ *
+ * Проверяем на идущем полёте: тик каждый раз пересчитывает обратный отсчёт, и
+ * без паузы текст меняется каждую секунду. В правке он обязан замереть.
+ */
+const flying = {
+  ...state,
+  flight: {
+    from: LAVE, to: LAVE + 1, departAt: Date.now() - 1000, arriveAt: Date.now() + 600_000,
+    remainingBaseMs: 600_000, elapsedBaseMs: 0, dueAt: Date.now(), pending: [],
+    fuelUsed: 10, encounters: 0, lastEncounterAt: 0,
+  },
+};
+const w2 = boot({ state: JSON.stringify(flying), log: [] });
+await wait(900);
+const doc2 = w2.document;
+const eta = () => doc2.getElementById('flight-eta')?.textContent ?? '';
+const byAction2 = (a, extra = {}) => [...doc2.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+const click2 = (el) => el.dispatchEvent(new w2.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+click2(byAction2('tab', { tab: 'ship' }));
+await wait(300);
+const eta1 = eta();
+await wait(1300);
+check('§132.1: без редактора отсчёт идёт', eta() !== eta1, `${eta1} → ${eta()}`);
+
+click2(byAction2('tab', { tab: 'log' }));
+await wait(200);
+click2(byAction2('dev-open'));
+await wait(300);
+click2(doc2.querySelector('[data-action="dev-editor"]'));
+await wait(300);
+click2(doc2.getElementById('dev-pencil'));
+await wait(300);
+click2(byAction2('tab', { tab: 'ship' }));
+await wait(300);
+const etaPaused = eta();
+await wait(1600);
+check('§132.1: в редакторе отсчёт замер', eta() === etaPaused, `${etaPaused} → ${eta()}`);
+
+click2(doc2.getElementById('dev-pencil'));
+await wait(300);
+// Из отладки — назад, иначе вместо экрана корабля показан экран отладки.
+click2(byAction2('dev-close'));
+await wait(300);
+click2(byAction2('tab', { tab: 'ship' }));
+await wait(300);
+const resumed = eta();
+await wait(1300);
+check('§132.1: после выхода отсчёт пошёл снова', resumed !== '' && eta() !== resumed, `${resumed} → ${eta()}`);
+w2.close();
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad === 0 ? 0 : 1);

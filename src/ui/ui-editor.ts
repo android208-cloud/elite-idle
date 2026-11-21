@@ -33,6 +33,9 @@ type UiStyle = {
   fs?: number;
   color?: string;
   align?: 'left' | 'center' | 'right';
+  /** §132.1: сдвиг строки или кнопки относительно её места в потоке. */
+  dx?: number;
+  dy?: number;
   text?: string;
 };
 
@@ -127,12 +130,26 @@ function applyCard(el: HTMLElement, s?: UiStyle): void {
   if (s.bg) el.style.background = s.bg;
 }
 
+/**
+ * §132.1: сдвиг — это `transform`, а не `position: absolute`.
+ *
+ * Строку или кнопку надо двигать, не ломая карточку. `transform` не трогает
+ * поток: соседи остаются на местах, высота карточки не меняется, и вернуть
+ * элемент на место можно, сбросив один стиль.
+ */
+function shift(el: HTMLElement, s: UiStyle): void {
+  const dx = s.dx ?? 0;
+  const dy = s.dy ?? 0;
+  el.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : '';
+}
+
 function applyText(el: HTMLElement, s?: UiStyle): void {
   if (!s) return;
   if (s.fs !== undefined) el.style.fontSize = `${s.fs}px`;
   if (s.color) el.style.color = s.color;
   if (s.align) el.style.textAlign = s.align;
   if (s.text !== undefined && el.textContent !== s.text) el.textContent = s.text;
+  shift(el, s);
 }
 
 function applyButton(el: HTMLElement, s?: UiStyle): void {
@@ -140,6 +157,7 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
   if (s.w !== undefined) el.style.width = `${s.w}px`;
   if (s.h !== undefined) el.style.height = `${s.h}px`;
   if (s.text !== undefined && el.textContent !== s.text) el.textContent = s.text;
+  shift(el, s);
 }
 
 /**
@@ -209,6 +227,8 @@ function panel(el: HTMLElement, key: string): string {
          <input type="text" value="${esc(s.text ?? el.textContent ?? '')}" data-ui-prop="text" data-ui-kind="text"></div>` +
       numRow('Шрифт', 'fs', fs, 8, 40) +
       colorRow('Цвет', 'color', color) +
+      numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
+      numRow('Сдвиг Y', 'dy', s.dy ?? 0, -80, 80) +
       `<div class="uied-row"><label>Положение</label>
          ${(['left', 'center', 'right'] as const)
            .map((a) => `<button class="btn small" data-ui-act="align" data-ui-val="${a}"
@@ -220,6 +240,8 @@ function panel(el: HTMLElement, key: string): string {
     body =
       numRow('Ширина', 'w', w, 40, 400) +
       numRow('Высота', 'h', h, 24, 160) +
+      numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
+      numRow('Сдвиг Y', 'dy', s.dy ?? 0, -80, 80) +
       `<div class="uied-row"><label>Текст</label>
          <input type="text" value="${esc(s.text ?? el.textContent ?? '')}" data-ui-prop="text" data-ui-kind="text"></div>`;
   }
@@ -268,7 +290,7 @@ function setProp(prop: string, raw: string): void {
     const n = Number(raw);
     if (!Number.isFinite(n)) return;
     // Высота у кнопки и у карточки — одно и то же поле, но смысл разный.
-    s[prop as 'h' | 'w' | 'r' | 'fs'] = n;
+    s[prop as 'h' | 'w' | 'r' | 'fs' | 'dx' | 'dy'] = n;
   }
 
   if (kind === 'card') applyCard(node, s);
