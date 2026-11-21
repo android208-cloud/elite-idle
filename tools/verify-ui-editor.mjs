@@ -314,6 +314,77 @@ check('§132.3: и цвет шрифта остался', /255,\s*204,\s*0/.test
 w3.close();
 
 /*
+ * §132.5: ЗАГОЛОВОК КАРТОЧКИ С ПИЛЮЛЕЙ И НИЗ ЭКРАНА.
+ *
+ * Пользователь: «У карточек типа c1 не могу редактировать заголовок (например
+ * „Еда"). Так же если прокрутить список карточек до самого низа, то окно
+ * редактора закрывает собой низ списка. Надо чтобы низ любого окна был привязан
+ * к верху меню редактора».
+ */
+const w4 = boot({ state: JSON.stringify(state), log: [] });
+await wait(900);
+const d4 = w4.document;
+const c4 = (el) => el.dispatchEvent(new w4.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a4 = (a, extra = {}) => [...d4.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+
+c4(a4('tab', { tab: 'market' }));
+await wait(300);
+c4(a4('tab', { tab: 'log' }));
+await wait(200);
+c4(a4('dev-open'));
+await wait(200);
+c4(d4.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c4(d4.getElementById('dev-pencil'));
+await wait(300);
+c4(a4('tab', { tab: 'market' }));
+await wait(400);
+
+const title = [...d4.querySelectorAll('#content .name')].find((n) => /^\s*Еда/.test(n.textContent ?? ''));
+check('§132.5: заголовок «Еда» на рынке есть', !!title, (title?.textContent ?? '').trim().slice(0, 20));
+check('§132.5: у заголовка с пилюлей свой ключ', /\.t\d+$/.test(title?.dataset.uiKey ?? ''),
+  title?.dataset.uiKey);
+
+c4(title);
+await wait(200);
+const p4 = d4.getElementById('ui-editor');
+const textField = p4.querySelector('[data-ui-prop="text"][data-ui-kind="text"]');
+check('§132.5: нажатие на заголовок открывает «Строку текста»',
+  /Строка текста/.test(p4.querySelector('.uied-head')?.textContent ?? ''),
+  (p4.querySelector('.uied-head')?.textContent ?? '').slice(0, 24));
+check('§132.5: в поле именно заголовок, без пилюли', textField?.value === 'Еда', textField?.value);
+
+textField.value = 'Пища';
+textField.dispatchEvent(new w4.Event('input', { bubbles: true }));
+const after = d4.querySelector(`#content [data-ui-key="${title.dataset.uiKey}"]`);
+check('§132.5: текст заголовка меняется', /Пища/.test(after?.textContent ?? ''),
+  (after?.textContent ?? '').trim().slice(0, 24));
+const chipBefore = title.querySelector('.chip')?.textContent;
+check('§132.5: пилюля при этом цела и не изменилась',
+  !!after?.querySelector('.chip') && after.querySelector('.chip').textContent === chipBefore,
+  `${chipBefore} → ${after?.querySelector('.chip')?.textContent}`);
+
+/*
+ * Низ экрана. Панель в jsdom нулевой высоты, поэтому подставляем её размер:
+ * проверяем не «сколько», а что отступ считается от верха панели.
+ */
+Object.defineProperty(p4, 'offsetHeight', { get: () => 320, configurable: true });
+c4(title);
+await wait(200);
+check('§132.5: высота панели уходит в CSS-переменную',
+  d4.body.style.getPropertyValue('--ui-editor-h').trim() === '320px',
+  d4.body.style.getPropertyValue('--ui-editor-h').trim());
+check('§132.5: низ экрана сдвигается отступом снизу',
+  /\.ui-editing main\s*\{[^}]*padding-bottom:[^}]*--ui-editor-h/.test(html));
+
+c4(d4.querySelector('[data-ui-act="done"]'));
+await wait(300);
+check('§132.5: после правки отступ снят', d4.body.style.getPropertyValue('--ui-editor-h').trim() === '0px',
+  d4.body.style.getPropertyValue('--ui-editor-h').trim());
+w4.close();
+
+/*
  * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ИНТЕРФЕЙС СТОИТ.
  *
  * Проверяем на идущем полёте: тик каждый раз пересчитывает обратный отсчёт, и

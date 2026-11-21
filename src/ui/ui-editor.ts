@@ -83,11 +83,29 @@ function editsFor(screen: string): Record<string, UiStyle> {
 /* ---------- Обход разметки ---------- */
 
 /**
- * Строки текста — ЛИСТЬЯ дерева внутри карточки.
+ * Свой текст элемента — только прямые текстовые узлы, без детей.
  *
- * Лист — элемент без дочерних элементов и с непустым текстом. Так «Топливо»,
- * «10.0 св. г. из 10.0 св. г.» и «+1.0» становятся отдельными строками, а
- * контейнеры, в которых ничего нет, пропускаются.
+ * §132.5: именно поэтому функция нужна. Название товара на рынке — это
+ * `<div class="name with-chip">Еда<span class="chip">дёшево</span></div>`:
+ * текст «Еда» лежит прямо в `div`, а рядом стоит пилюля. Если считать такой
+ * `div` контейнером (как было до §132.5), «Еда» не получает ключа и выбрать
+ * заголовок нельзя — клик по нему попадает в саму карточку.
+ */
+function directText(el: Element): string {
+  let out = '';
+  for (const n of Array.from(el.childNodes)) {
+    if (n.nodeType === 3 /* Node.TEXT_NODE */) out += n.textContent ?? '';
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Строки текста — элементы, у которых есть СВОЙ текст.
+ *
+ * §132.5: раньше листом считался только элемент без детей, и заголовок с
+ * пилюлей («Еда · дёшево») выпадал. Теперь лист — тот, у кого есть прямой
+ * текст, даже если рядом стоят дочерние элементы. Внутрь такого элемента
+ * обход всё равно заходит: пилюля — тоже своя строка, и её видно отдельно.
  *
  * Кнопки в этот список не попадают: у кнопки свой режим (размер и текст), и
  * если считать её текст строкой, правки дрались бы друг с другом.
@@ -97,15 +115,33 @@ function textLeaves(root: Element): HTMLElement[] {
   const walk = (el: Element): void => {
     for (const child of Array.from(el.children)) {
       if (child.tagName === 'BUTTON') continue;
-      if (child.children.length === 0) {
-        if ((child.textContent ?? '').trim() !== '') out.push(child as HTMLElement);
-        continue;
-      }
-      walk(child);
+      if (directText(child) !== '') out.push(child as HTMLElement);
+      if (child.children.length) walk(child);
     }
   };
   walk(root);
   return out;
+}
+
+/**
+ * §132.5: записать текст, не стерев соседей.
+ *
+ * `textContent = ...` унёс бы с собой пилюлю «дёшево». Поэтому новый текст
+ * кладётся в первый непустой прямой текстовый узел, остальные пустеют, а
+ * дочерние элементы остаются как были.
+ */
+function setDirectText(el: HTMLElement, text: string): void {
+  const texts = Array.from(el.childNodes).filter(
+    (n) => n.nodeType === 3 /* Node.TEXT_NODE */,
+  ) as Text[];
+  const live = texts.filter((n) => (n.data ?? '').trim() !== '');
+  if (!live.length) {
+    if (!el.children.length) el.textContent = text;
+    else el.insertBefore(document.createTextNode(text), el.firstChild);
+    return;
+  }
+  live[0].data = text;
+  for (const n of live.slice(1)) n.data = '';
 }
 
 function kindOf(key: string): Kind {
@@ -148,7 +184,7 @@ function applyText(el: HTMLElement, s?: UiStyle): void {
   if (s.fs !== undefined) el.style.fontSize = `${s.fs}px`;
   if (s.color) el.style.color = s.color;
   if (s.align) el.style.textAlign = s.align;
-  if (s.text !== undefined && el.textContent !== s.text) el.textContent = s.text;
+  if (s.text !== undefined && directText(el) !== s.text) setDirectText(el, s.text);
   shift(el, s);
 }
 
@@ -262,7 +298,7 @@ function panel(el: HTMLElement, key: string): string {
   } else if (kind === 'text') {
     body =
       `<div class="uied-row"><label>Текст</label>
-         <input type="text" value="${esc(s.text ?? el.textContent ?? '')}" data-ui-prop="text" data-ui-kind="text"></div>` +
+         <input type="text" value="${esc(s.text ?? directText(el))}" data-ui-prop="text" data-ui-kind="text"></div>` +
       numRow('Шрифт', 'fs', fs, 8, 40) +
       colorRow('Цвет', 'color', color) +
       numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
@@ -304,6 +340,26 @@ function box(): HTMLElement | null {
   return document.getElementById('ui-editor');
 }
 
+/**
+ * §132.5: НИЗ ЭКРАНА ПРИВЯЗАН К ВЕРХУ ПАНЕЛИ.
+ *
+ * Пользователь: «если прокрутить список карточек до самого низа, то окно
+ * редактора закрывает собой низ списка. Надо чтобы низ любого окна был
+ * привязан к верху меню редактора».
+ *
+ * Панель висит поверх прокрутки (`position: fixed`), поэтому последние
+ * карточки уезжали под неё. Меряем панель и отдаём её высоту в CSS-переменную,
+ * а `main` в режиме правки получает ровно такой отступ снизу: докрутив до
+ * конца, игрок видит низ экрана прямо над панелью. Переменная живёт на
+ * `<body>` и равна нулю, когда панели нет.
+ */
+function syncHeight(): void {
+  const el = box();
+  if (!el) return;
+  const h = el.hidden ? 0 : el.offsetHeight || el.scrollHeight || 0;
+  document.body.style.setProperty('--ui-editor-h', `${h}px`);
+}
+
 function paint(): void {
   const el = box();
   if (!el) return;
@@ -312,11 +368,13 @@ function paint(): void {
   if (!node) {
     el.hidden = true;
     el.innerHTML = '';
+    syncHeight();
     return;
   }
   node.classList.add('ui-picked');
   el.hidden = false;
   el.innerHTML = panel(node, picked!);
+  syncHeight();
 }
 
 function setProp(prop: string, raw: string): void {
@@ -430,7 +488,9 @@ export function toggleEditing(): void {
   picked = null;
   document.body.classList.toggle('ui-editing', editing);
   paint();
+  if (!editing) syncHeight();
   deps?.render();
+  if (editing) syncHeight();
 }
 
 export function initUiEditor(d: { render: () => void; screen: () => string }): void {
@@ -445,4 +505,6 @@ export function initUiEditor(d: { render: () => void; screen: () => string }): v
   document.addEventListener('click', onClick, true);
   el.addEventListener('input', onPanelInput);
   el.addEventListener('click', onPanelClick);
+  // §132.5: панель меняет высоту при повороте экрана — отступ должен поспеть.
+  window.addEventListener('resize', syncHeight);
 }

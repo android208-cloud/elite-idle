@@ -77,6 +77,9 @@ main { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
 
 /* В режиме правки всё, что можно править, подсвечивается под курсором. */
 .ui-editing #content { cursor: crosshair; }
+/* §132.5: низ любого экрана привязан к верху панели редактора. Высоту панели
+   присылает `syncHeight()` в переменную `--ui-editor-h`; без правки отступа нет. */
+.ui-editing main { padding-bottom: calc(var(--ui-editor-h, 0px) + 20px); }
 .ui-editing [data-ui-key]:hover { outline: 1px dashed var(--primary); outline-offset: -1px; }
 /* §132.3: недоступную кнопку в правке можно выбрать, но выглядеть она должна
    по-прежнему приглушённой — иначе не понять, что в игре она не работает. */
