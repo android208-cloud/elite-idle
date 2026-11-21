@@ -156,8 +156,28 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
   if (!s) return;
   if (s.w !== undefined) el.style.width = `${s.w}px`;
   if (s.h !== undefined) el.style.height = `${s.h}px`;
+  // §132.3: цвет шрифта внутри кнопки — отдельная правка, не цвет всей кнопки.
+  if (s.color) el.style.color = s.color;
   if (s.text !== undefined && el.textContent !== s.text) el.textContent = s.text;
   shift(el, s);
+}
+
+/**
+ * §132.3: НЕДОСТУПНЫЕ КНОПКИ ТОЖЕ ПРАВЯТСЯ.
+ *
+ * Пользователь: «Надо редактировать так же и недоступные для нажатия кнопки».
+ * У `disabled` кнопки браузер вообще не присылает события мыши: нажать на неё
+ * нельзя, значит и выбрать нельзя. На время правки снимаем сам атрибут —
+ * вреда нет, потому что в режиме правки все действия всё равно перехвачены
+ * (см. `onClick`), а нажатие работает только как выбор. Признак «была
+ * недоступной» запоминаем атрибутом, чтобы кнопка выглядела приглушённой, как
+ * раньше.
+ */
+function unfreezeButtons(content: HTMLElement): void {
+  content.querySelectorAll<HTMLButtonElement>('button[disabled]').forEach((btn) => {
+    btn.dataset.uiDisabled = '1';
+    btn.disabled = false;
+  });
 }
 
 /**
@@ -166,6 +186,9 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
  */
 export function applyUiEdits(content: HTMLElement, screen: string): void {
   const edits = editsFor(screen);
+  // §132.3: до разметки — иначе недоступные кнопки останутся без ключей
+  // (disabled-кнопка событий не получает, но ключ ей всё равно нужен).
+  if (editing) unfreezeButtons(content);
   const cards = Array.from(content.querySelectorAll<HTMLElement>('.card'));
   cards.forEach((card, i) => {
     const key = `c${i}`;
@@ -242,6 +265,7 @@ function panel(el: HTMLElement, key: string): string {
       numRow('Высота', 'h', h, 24, 160) +
       numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
       numRow('Сдвиг Y', 'dy', s.dy ?? 0, -80, 80) +
+      colorRow('Цвет текста', 'color', color) +
       `<div class="uied-row"><label>Текст</label>
          <input type="text" value="${esc(s.text ?? el.textContent ?? '')}" data-ui-prop="text" data-ui-kind="text"></div>`;
   }

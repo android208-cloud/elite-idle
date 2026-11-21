@@ -231,6 +231,65 @@ check('§132: панель спрятана', panel().hidden === true);
 w.close();
 
 /*
+ * §132.3: НЕДОСТУПНЫЕ КНОПКИ И ЦВЕТ ШРИФТА В НИХ.
+ *
+ * Пользователь: «Надо редактировать так же и недоступные для нажатия кнопки и
+ * цвет шрифта в кнопках». У `disabled` кнопки браузер не присылает событий,
+ * поэтому в правке атрибут снимается — иначе её не выбрать.
+ *
+ * Берём полный бак: кнопки заправки недоступны, а это ровно нужный случай.
+ */
+const full = { ...state, fuel: 9999 };
+const w3 = boot({ state: JSON.stringify(full), log: [] });
+await wait(900);
+const d3 = w3.document;
+const c3 = (el) => el.dispatchEvent(new w3.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a3 = (a, extra = {}) => [...d3.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+
+c3(a3('tab', { tab: 'hangar' }));
+await wait(300);
+const dead = d3.querySelector('#content button[disabled]');
+check('§132.3: в ангаре есть недоступная кнопка для проверки', dead !== null, dead?.textContent?.trim());
+
+c3(a3('tab', { tab: 'log' }));
+await wait(200);
+c3(a3('dev-open'));
+await wait(200);
+c3(d3.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c3(d3.getElementById('dev-pencil'));
+await wait(300);
+c3(a3('tab', { tab: 'hangar' }));
+await wait(300);
+
+const dead2 = d3.querySelector('#content button[data-ui-disabled]');
+check('§132.3: в правке недоступная кнопка оттаяла', dead2 !== null && dead2.disabled === false,
+  `${dead2?.disabled} / ${dead2?.dataset.uiDisabled}`);
+check('§132.3: и выглядит по-прежнему приглушённой', dead2?.dataset.uiDisabled === '1');
+
+c3(dead2);
+await wait(150);
+const p3 = d3.getElementById('ui-editor');
+check('§132.3: недоступную кнопку можно выбрать', /Кнопка/.test(p3.textContent ?? ''),
+  (p3.textContent ?? '').split('\n')[0].slice(0, 24));
+check('§132.3: у кнопки есть цвет шрифта', !!p3.querySelector('[data-ui-prop="color"]'));
+
+const color = p3.querySelector('[data-ui-prop="color"][data-ui-kind="text-color"]');
+color.value = '#ffcc00';
+color.dispatchEvent(new w3.Event('input', { bubbles: true }));
+check('§132.3: цвет шрифта кнопки меняется',
+  /255,\s*204,\s*0/.test(dead2.style.color) || dead2.style.color === '#ffcc00', dead2.style.color);
+
+c3(d3.querySelector('[data-ui-act="done"]'));
+await wait(300);
+const dead3 = d3.querySelector('#content [data-action="refuel"][data-n]');
+check('§132.3: после выхода кнопка снова недоступна', dead3?.disabled === true, String(dead3?.disabled));
+check('§132.3: и цвет шрифта остался', /255,\s*204,\s*0/.test(dead3?.style.color ?? '') || dead3?.style.color === '#ffcc00',
+  dead3?.style.color);
+w3.close();
+
+/*
  * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ИНТЕРФЕЙС СТОИТ.
  *
  * Проверяем на идущем полёте: тик каждый раз пересчитывает обратный отсчёт, и
