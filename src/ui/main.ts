@@ -3270,7 +3270,14 @@ function render(): void {
    */
   const pencil = document.getElementById('dev-pencil');
   if (pencil) {
-    pencil.hidden = !editorOn || !devOpen || inCombat || inSalvage;
+    /*
+     * §132.2: карандаш живёт в шапке на ВСЕХ экранах, а не только в отладке.
+     *
+     * Пользователь: «Карандаш должен быть в шапке на всех экранах». Условие
+     * одно — инструмент достали кнопкой в отладке; дальше он есть везде, в том
+     * числе в бою и в обломках: правки — дело вида, а не места.
+     */
+    pencil.hidden = !editorOn;
     pencil.setAttribute('aria-pressed', editing ? 'true' : 'false');
   }
   applyUiEdits(content, editorScreen());
@@ -3562,11 +3569,10 @@ function onAction(el: HTMLElement): void {
       /*
        * §113: экран отладки закрывается любой вкладкой.
        *
-       * §132.1: кроме режима правки. Там вкладки — единственный способ дойти
-       * до другого экрана, и закрытие отладки спрятало бы карандаш: игрок
-       * остался бы в редакторе без выхода.
+       * §132.2: правку это не трогает — карандаш теперь в шапке на всех
+       * экранах, поэтому выйти из редактора можно откуда угодно.
        */
-      if (!editing) devOpen = false;
+      devOpen = false;
       pilotsOpen = false; // §115: экран пилотов — тоже
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
@@ -4128,13 +4134,8 @@ function onAction(el: HTMLElement): void {
       break;
     }
     case 'dev-close': {
+      // §132.2: ушли из отладки, правку не трогаем — карандаш остался в шапке.
       devOpen = false;
-      // §132.1: ушли из отладки — карандаша нет, значит и правку закрываем:
-      // иначе из неё нечем выйти.
-      if (editing) {
-        toggleEditing();
-        editing = isEditing();
-      }
       render();
       break;
     }

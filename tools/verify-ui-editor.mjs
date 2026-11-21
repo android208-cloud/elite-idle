@@ -101,6 +101,36 @@ check('§132.1: нажали ещё раз — карандаш убран', pen
 click(w, editorBtn());
 await wait(300);
 
+/*
+ * §132.2: карандаш в шапке на ВСЕХ экранах.
+ *
+ * Пользователь: «Карандаш должен быть в шапке на всех экранах». Проверяем и
+ * вкладки, и выход из отладки.
+ */
+const tabsAll = ['hangar', 'market', 'ship', 'map', 'log'];
+const visible = [];
+for (const t of tabsAll) {
+  click(w, byAction(w, 'tab', { tab: t }));
+  await wait(150);
+  visible.push(`${t}:${pencil.hidden ? 'нет' : 'есть'}`);
+}
+check('§132.2: карандаш виден на каждой вкладке',
+  visible.every((v) => v.endsWith('есть')), visible.join(' '));
+check('§132.2: и это не мешает правке — она осталась выключенной',
+  !doc.body.classList.contains('ui-editing'));
+
+// Ушли из отладки — карандаш всё равно на месте.
+click(w, byAction(w, 'tab', { tab: 'log' }));
+await wait(150);
+click(w, byAction(w, 'dev-open'));
+await wait(200);
+click(w, byAction(w, 'dev-close'));
+await wait(300);
+check('§132.2: после выхода из отладки карандаш остаётся', pencil.hidden === false);
+
+click(w, byAction(w, 'tab', { tab: 'hangar' }));
+await wait(200);
+
 click(w, pencil);
 await wait(300);
 check('§132: режим правки включён', doc.body.classList.contains('ui-editing'));
@@ -244,11 +274,8 @@ check('§132.1: в редакторе отсчёт замер', eta() === etaPau
 
 click2(doc2.getElementById('dev-pencil'));
 await wait(300);
-// Из отладки — назад, иначе вместо экрана корабля показан экран отладки.
-click2(byAction2('dev-close'));
-await wait(300);
-click2(byAction2('tab', { tab: 'ship' }));
-await wait(300);
+// Выход из правки возвращает обычный экран: вкладки в правке уже закрыли отладку.
+await wait(200);
 const resumed = eta();
 await wait(1300);
 check('§132.1: после выхода отсчёт пошёл снова', resumed !== '' && eta() !== resumed, `${resumed} → ${eta()}`);
