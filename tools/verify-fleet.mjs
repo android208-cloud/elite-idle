@@ -328,6 +328,58 @@ async function hangar(opts) {
   const text = content(w);
   check('второму пилоту занятый маршрут закрыт', /маршрут занят/.test(text));
   check('но свободные маршруты остались', byAction(w, 'pilot-route-set') !== undefined);
+
+  /*
+   * §132.12: перед «занят» стоит значок того, кто занял линию.
+   *
+   * Пользователь: «Для пилота перед кнопками „лететь" и „занят" поставить
+   * значки, кем занят маршрут».
+   */
+  const busyRow = [...w.document.querySelectorAll('[data-route-card] .good-row')]
+    .find((r) => /маршрут занят/.test(r.textContent ?? ''));
+  const guard = busyRow?.querySelector('.lane-guard');
+  check('§132.12: у занятой линии есть значок', !!guard, guard?.textContent ?? '');
+  check('§132.12: значок показывает роль занявшего',
+    guard?.querySelector('[data-role="trader"]') !== undefined,
+    [...(guard?.querySelectorAll('[data-role]') ?? [])].map((n) => n.dataset.role).join(','));
+  check('§132.12: значок стоит ПЕРЕД пометкой «занят»',
+    !!guard && !!(busyRow.querySelector('.lane-guard').compareDocumentPosition(
+      [...busyRow.children].find((c) => /маршрут занят/.test(c.textContent ?? '')),
+    ) & w.Node.DOCUMENT_POSITION_FOLLOWING));
+  check('§132.12: в подсказке значка — роль и имя',
+    /торговец/i.test(guard?.querySelector('[title]')?.getAttribute('title') ?? '') &&
+      /Вэл Кроу/.test(guard?.querySelector('[title]')?.getAttribute('title') ?? ''),
+    guard?.querySelector('[title]')?.getAttribute('title'));
+  w.close();
+}
+
+/* ---------- §132.12: чужой пилот виден и там, где «Лететь» разрешено ---------- */
+{
+  const w = await hangar({
+    pilots: [
+      {
+        id: 1, name: 'Вэл Кроу', ship: 'adder', home: LAVE,
+        route: { from: LAVE, to: REORTE }, nextRunAt: 0, role: 'trader', runs: 0, failures: 0,
+      },
+      {
+        id: 2, name: 'Мара Кейн', ship: 'adder', home: LAVE,
+        route: null, nextRunAt: 0, role: 'police', runs: 0, failures: 0,
+      },
+    ],
+    nextPilotId: 3,
+  });
+  click(w, byAction(w, 'pilot-route', { i: 2 }));
+  await wait(300);
+  const row = [...w.document.querySelectorAll('[data-route-card] .good-row')]
+    .find((r) => /REORTE/.test(r.textContent ?? ''));
+  check('§132.12: полицейскому линия торговца свободна', !!row && !!row.querySelector('[data-action="pilot-route-set"]'));
+  check('§132.12: но занявший значком показан и здесь',
+    row?.querySelector('.lane-guard [data-role="trader"]') !== undefined,
+    row?.querySelector('.lane-guard')?.textContent ?? '');
+  const freeRow = [...w.document.querySelectorAll('[data-route-card] .good-row')]
+    .find((r) => !/REORTE/.test(r.textContent ?? ''));
+  check('§132.12: на свободной линии значка нет', !freeRow || !freeRow.querySelector('.lane-guard'),
+    (freeRow?.textContent ?? '').slice(0, 40));
   w.close();
 }
 

@@ -2621,6 +2621,22 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
     // которого нет, или разрешает то, что ядро отклонит.
     const taken = laneBusy(state.pilots, pilot, o.i, role);
     const isCurrent = pilot.route?.to === o.i && pilot.role === role;
+    /*
+     * §132.12: ЗНАЧОК ТОГО, КТО УЖЕ НА ЭТОЙ ЛИНИИ.
+     *
+     * Пользователь: «Для пилота перед кнопками „лететь" и „занят" поставить
+     * значки, кем занят маршрут».
+     *
+     * Линия делится только внутри своего типа (§129), поэтому рядом с
+     * «Лететь» может стоять чужой пилот — торговец не мешает полицейскому.
+     * Раньше об этом не говорилось вообще, и выглядело так, будто линия
+     * свободна. Теперь перед действием видны роли всех, кто на ней: значок
+     * роли плюс подсказка с именем.
+     */
+    const guard = state.pilots
+      .filter((other) => other.id !== pilot.id && other.route?.from === pilot.home && other.route?.to === o.i)
+      .map((other) => `<span title="${PILOT_ROLE_NAMES[other.role]}: ${other.name}">${roleIcon(other.role)}</span>`)
+      .join('');
     const action = isCurrent
       ? `<span class="chip">${role === 'police' ? 'дежурит здесь' : 'летает здесь'}</span>`
       : taken
@@ -2629,7 +2645,9 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
     return `<div class="good-row"><div>
         <div class="name">${systems[o.i].name}</div>
         <div class="muted">${role === 'police' ? '' : `${ly(o.d)} · `}вам ${cr(o.income)} за рейс · ${o.perHour} CR/ч</div>
-        <div class="muted">${riskLabel(role, o.risk)}</div></div>${action}</div>`;
+        <div class="muted">${riskLabel(role, o.risk)}</div></div>${
+          guard ? `<span class="lane-guard">${guard}</span>` : ''
+        }${action}</div>`;
   }).join('');
 
   return `<div class="card" data-route-card style="margin:0 0 14px;background:rgba(255,255,255,0.03)">
