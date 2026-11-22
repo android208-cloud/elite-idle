@@ -386,13 +386,20 @@ check('§132.5: после правки отступ снят', d4.body.style.ge
 w4.close();
 
 /*
- * §132.6: ПРАВКА ТЕКСТА — ЗАМЕНА КУСКА, А НЕ ТЕКСТ ЦЕЛИКОМ.
+ * §132.6 / §132.11: ПРАВКА ТЕКСТА — ЗАМЕНА КУСКА, А НЕ ТЕКСТ ЦЕЛИКОМ.
  *
  * Пользователь: «Когда я отредактировал этот текст (убрал слово „цена"), то
- * весь блок текста перестал меняться при выборе другой планеты». Проверяем
- * ровно это: убрали слово — и на другой планете блок живой.
+ * весь блок текста перестал меняться при выборе другой планеты». Поэтому
+ * правка хранится как замена и применяется к СВЕЖЕМУ тексту.
+ *
+ * §132.11: «допустим, я меняю слово „Правительство", а если выбрать другую
+ * станцию, то текст ломается». Поэтому динамический текст разложен на поля:
+ * подпись и значение — разные элементы, и правка подписи не задевает числа.
+ * Обе части проверяются здесь: сначала многострочный блок (карточка «Груз»),
+ * потом подпись в карточке системы на другой планете.
  */
-const w5 = boot({ state: JSON.stringify(state), log: [] });
+const loaded = { ...state, cargo: [3, 2, ...Array(15).fill(0)] };
+const w5 = boot({ state: JSON.stringify(loaded), log: [] });
 await wait(900);
 const d5 = w5.document;
 const c5 = (el) => el.dispatchEvent(new w5.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -412,87 +419,120 @@ await wait(300);
 c5(a5('tab', { tab: 'ship' }));
 await wait(400);
 
-// §132.9: подписи в блоке теперь «Подпись: значение», ищем по «Правительство:».
-const info = [...d5.querySelectorAll('#content [data-ui-key]')]
-  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && /Правительство:/.test(n.textContent ?? ''));
-check('§132.6: блок с данными станции на месте', !!info, info?.dataset.uiKey);
-c5(info);
+const cargoBlock = [...d5.querySelectorAll('#content [data-ui-key]')]
+  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && /<br>/.test(n.innerHTML ?? ''));
+check('§132.6: многострочный блок найден (карточка «Груз»)', !!cargoBlock,
+  (cargoBlock?.textContent ?? '').replace(/\s+/g, ' '));
+c5(cargoBlock);
 await wait(200);
 const p6 = d5.getElementById('ui-editor');
 const field = p6.querySelector('[data-ui-prop="text"]');
 check('§132.6: многострочный текст правится в textarea', field?.tagName === 'TEXTAREA', field?.tagName);
 
-const liveBefore = field.value;
-// Убираем подпись «Станция: » — так же по смыслу, как раньше убирали «цена ».
-const withoutPrice = liveBefore.replace('Станция: ', '');
-field.value = withoutPrice;
+const liveCargo = field.value;
+field.value = liveCargo.replace('Еда: 3 т', 'Провизия: 3 т');
 field.dispatchEvent(new w5.Event('input', { bubbles: true }));
-const after1 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
-check('§132.6: подпись «Станция: » убрана с экрана', !/Станция: /.test(after1.textContent ?? ''));
-check('§132.6: остальной текст цел', /Правительство:|Экономика:|Техуровень:/.test(after1.textContent ?? ''),
-  (after1.textContent ?? '').replace(/\s+/g, ' ').slice(0, 40));
+const after1 = d5.querySelector(`#content [data-ui-key="${cargoBlock.dataset.uiKey}"]`);
+check('§132.6: правка строки видна на экране', /Провизия/.test(after1.textContent ?? ''),
+  (after1.textContent ?? '').replace(/\s+/g, ' '));
+check('§132.6: соседняя строка цела', /Текстиль: 2 т/.test(after1.textContent ?? ''),
+  (after1.textContent ?? '').replace(/\s+/g, ' '));
 
 const stored6 = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
-const saved = stored6[Object.keys(stored6)[0]]?.[info.dataset.uiKey];
+const saved = stored6[Object.keys(stored6)[0]]?.[cargoBlock.dataset.uiKey];
 check('§132.6: в правке лежит замена, а не текст целиком',
   !!saved?.ops?.length && saved.text === undefined, JSON.stringify(saved?.ops));
-check('§132.6: замена — именно подпись «Станция: »', saved?.ops?.[0]?.from === 'Станция: ' && saved.ops[0].to === '',
-  JSON.stringify(saved?.ops?.[0]));
+check('§132.6: замена — именно имя товара', saved?.ops?.[0]?.from === 'Еда', JSON.stringify(saved?.ops?.[0]));
 
-// Вторая правка в той же сессии — считается от живого текста, а не от изменённого.
-field.value = withoutPrice.replace('Правительство', 'Власть');
+// Вторая правка в той же сессии — считается от того, что на экране.
+field.value = liveCargo.replace('Еда: 3 т', 'Провизия: 3 т').replace('Текстиль', 'Ткани');
 field.dispatchEvent(new w5.Event('input', { bubbles: true }));
-const after2 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
-check('§132.6: вторая правка тоже применяется', /Власть:/.test(after2.textContent ?? ''),
-  (after2.textContent ?? '').replace(/\s+/g, ' ').slice(-30));
-check('§132.6: и первая правка на месте', !/Станция: /.test(after2.textContent ?? ''));
-const bothOps = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
-const opsNow = bothOps[Object.keys(bothOps)[0]]?.[info.dataset.uiKey]?.ops ?? [];
+const after2 = d5.querySelector(`#content [data-ui-key="${cargoBlock.dataset.uiKey}"]`);
 check('§132.10: две правки копятся, а не заменяют друг друга',
-  opsNow.length === 2 && opsNow[0].from === 'Станция: ' && opsNow[1].from === 'Правительство',
-  JSON.stringify(opsNow.map((o) => `${o.from}→${o.to}`)));
-
-const editsJson = w5.localStorage.getItem(EDIT_KEY);
+  /Провизия/.test(after2.textContent ?? '') && /Ткани/.test(after2.textContent ?? ''),
+  (after2.textContent ?? '').replace(/\s+/g, ' '));
+const opsNow = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
+const opsList = opsNow[Object.keys(opsNow)[0]]?.[cargoBlock.dataset.uiKey]?.ops ?? [];
+check('§132.10: в хранилище обе замены', opsList.length === 2,
+  JSON.stringify(opsList.map((o) => `${o.from}→${o.to}`)));
 c5(d5.querySelector('[data-ui-act="done"]'));
 await wait(300);
 w5.close();
 
 /*
- * Самая суть: та же сохранённая правка на ДРУГОЙ планете. Раньше здесь
- * показывался замороженный текст LAVE.
+ * §132.11: САМА СУТЬ ЖАЛОБЫ — переименовать подпись и улететь на другую
+ * планету. Подпись остаётся переименованной, значения меняются, строки не
+ * слипаются.
  */
+const w6 = boot({ state: JSON.stringify(state), log: [] });
+await wait(900);
+const d6 = w6.document;
+const c6 = (el) => el.dispatchEvent(new w6.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a6 = (a, extra = {}) => [...d6.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+c6(a6('tab', { tab: 'log' }));
+await wait(200);
+c6(a6('dev-open'));
+await wait(200);
+c6(d6.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c6(d6.getElementById('dev-pencil'));
+await wait(300);
+c6(a6('tab', { tab: 'ship' }));
+await wait(400);
+
+const label = [...d6.querySelectorAll('#content [data-ui-key]')]
+  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && (n.textContent ?? '').trim() === 'Правительство:');
+check('§132.11: подпись «Правительство:» — отдельное поле', !!label, label?.dataset.uiKey);
+c6(label);
+await wait(200);
+const p6b = d6.getElementById('ui-editor');
+const f6 = p6b.querySelector('[data-ui-prop="text"]');
+check('§132.11: в поле только подпись, без значения', f6?.value?.trim() === 'Правительство:',
+  JSON.stringify(f6?.value));
+f6.value = 'Власть: ';
+f6.dispatchEvent(new w6.Event('input', { bubbles: true }));
+const editsLabel = w6.localStorage.getItem(EDIT_KEY);
+const govBefore = () => ([...d6.querySelectorAll('#content .sys-row')][1]?.querySelector('.sys-v')?.textContent ?? '').trim();
+check('§132.11: правка подписи не тронула значение', govBefore() !== '',
+  `${(label.closest('.sys-row')?.textContent ?? '').trim()}`);
+c6(d6.querySelector('[data-ui-act="done"]'));
+await wait(300);
+w6.close();
+
 const other = { ...state, system: 8 };
-const w7 = boot({ state: JSON.stringify(other), log: [] }, editsJson);
+const w7 = boot({ state: JSON.stringify(other), log: [] }, editsLabel);
 await wait(900);
 const d7 = w7.document;
-// Вне правки ключей нет — ищем по структуре: тот же `.sub` с данными планеты.
-const fresh = [...d7.querySelectorAll('#content .sub')].find((n) => /Техуровень/.test(n.textContent ?? ''));
-check('§132.6: на другой планете блок на месте', !!fresh,
-  (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 34));
-check('§132.6: правка применилась на другой планете', /Власть:/.test(fresh?.textContent ?? ''),
-  (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(-24));
-check('§132.6: и подпись «Станция: » там тоже убрана', !/Станция: /.test(fresh?.textContent ?? ''));
-check('§132.6: данные планеты обновились, а не замерли',
-  (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim() !==
-    liveBefore.replace('Станция: ', '').replace('Правительство', 'Власть').replace(/\s+/g, ' ').trim(),
-  (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 50));
-const freshText = (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim();
-w7.close();
+const rows7 = [...d7.querySelectorAll('#content .sys-row')];
+check('§132.11: на другой планете все шесть строк на месте', rows7.length === 6, String(rows7.length));
+check('§132.11: переименованная подпись осталась',
+  (rows7[1]?.querySelector('.sys-k')?.textContent ?? '').trim() === 'Власть:',
+  (rows7[1]?.querySelector('.sys-k')?.textContent ?? '').trim());
+const govAfter = (rows7[1]?.querySelector('.sys-v')?.textContent ?? '').trim();
+check('§132.11: а значение обновилось на здешнее', govAfter !== '' && govAfter !== govBefore(),
+  `${govBefore()} → ${govAfter}`);
+check('§132.11: текст не слипся и не потерялся',
+  rows7.every((r) => (r.querySelector('.sys-k')?.textContent ?? '').trim().endsWith(':')) &&
+    rows7.every((r) => (r.querySelector('.sys-v')?.textContent ?? '').trim() !== ''));
 
 /*
  * Старый формат правки («текст целиком») переводится в замену на первой же
- * перерисовке — иначе прежние правки продолжали бы морозить блок.
+ * перерисовке — иначе прежние правки продолжали бы морозить текст.
  */
-const legacy = JSON.stringify({ ship: { 'c0.t1': { text: freshText } } });
-const w8 = boot({ state: JSON.stringify(other), log: [] }, legacy);
+const legacyKey = (rows7[1]?.querySelector('.sys-k'))?.closest('[data-ui-key]')?.dataset?.uiKey;
+w7.close();
+const guessKey = 'c0.t3';
+const legacy = JSON.stringify({ ship: { [legacyKey ?? guessKey]: { text: 'Власть: ' } } });
+const w8 = boot({ state: JSON.stringify(state), log: [] }, legacy);
 await wait(900);
 const d8 = w8.document;
-const migrated = JSON.parse(w8.localStorage.getItem(EDIT_KEY) ?? '{}').ship?.['c0.t1'];
+const migrated = JSON.parse(w8.localStorage.getItem(EDIT_KEY) ?? '{}').ship?.[legacyKey ?? guessKey];
 check('§132.6: старая правка переведена в замену', !!migrated?.ops?.length && migrated.text === undefined,
   JSON.stringify(migrated?.ops));
-check('§132.6: и текст на экране остался прежним',
-  [...d8.querySelectorAll('#content .sub')].some((n) =>
-    (n.textContent ?? '').replace(/\s+/g, ' ').trim() === freshText));
+check('§132.6: и на экране видно результат правки',
+  [...d8.querySelectorAll('#content .sys-k')].some((n) => (n.textContent ?? '').trim() === 'Власть:'),
+  [...d8.querySelectorAll('#content .sys-k')].map((n) => (n.textContent ?? '').trim()).slice(0, 3).join(' · '));
 w8.close();
 
 /*

@@ -626,15 +626,33 @@ function systemInfo(index: number): string {
    * Разметка остаётся одним текстовым блоком (строки через `<br>`), поэтому
    * редактор интерфейса продолжает видеть в нём одну многострочную строку.
    */
+  /*
+   * §132.11: КАЖДАЯ ВЕЛИЧИНА — СВОЁ ПОЛЕ.
+   *
+   * Пользователь: «Сделай весь динамический текст в игре отдельными полями или
+   * реши проблему иначе (допустим, я меняю слово „Правительство", а если выбрать
+   * другую станцию, то текст ломается)».
+   *
+   * До этого блок был единой строкой из шести строк через `<br>`: редактор
+   * правил целую простыню, и любая правка жила в общей куче с числами планеты.
+   * Теперь подпись и значение — два разных элемента в своей строке. Правка
+   * подписи не может задеть значение: это другой узел. Поменяли «Правительство»
+   * на «Власть» — и на любой другой планете меняется только слово.
+   *
+   * Внешне ничего не изменилось: подпись с двоеточием и значение идут подряд,
+   * как в макете.
+   */
   const own = state.stations.includes(index) ? ' · ваша' : '';
-  return [
-    `Экономика: ${ECONOMIES[s.economy]}`,
-    `Правительство: ${GOVERNMENTS[s.government]}`,
-    `Техуровень: ${s.techLevel + 1}`,
-    `Население: ${popText}`,
-    `Продуктивность: ${s.productivity}`,
-    `Станция: ${cash(stationPrice(s))}${own}`,
-  ].join('<br>\n    ');
+  const row = (k: string, v: string): string =>
+    `<div class="sys-row"><span class="sys-k">${k}: </span><span class="sys-v">${v}</span></div>`;
+  return `<div class="sys-info">${[
+    row('Экономика', ECONOMIES[s.economy]),
+    row('Правительство', GOVERNMENTS[s.government]),
+    row('Техуровень', String(s.techLevel + 1)),
+    row('Население', popText),
+    row('Продуктивность', String(s.productivity)),
+    row('Станция', `${cash(stationPrice(s))}${own}`),
+  ].join('')}</div>`;
 }
 
 function flightCard(): string {
@@ -1204,13 +1222,24 @@ function mapScreen(): string {
      * (verify-labels-tap), и обёртка вокруг него сломала бы сравнение.
      */
     const note = reason ? `<span class="sys-note">${reason}</span>` : '';
+    /*
+     * §132.11: «В пути» — в одной строке с расстоянием, справа, как в макете.
+     *
+     * Пользователь: «Расположи строку „в пути..." как на скрине и, если мы уже
+     * на этой станции, то эту строку не показывай». Время полёта к самому себе
+     * — это «1 с при ×200», бессмыслица: расстояние 0.0, лететь некуда.
+     */
+    const eta =
+      selected === state.system
+        ? ''
+        : `<span class="sys-eta">В пути: ${fmtDur(jumpDuration(settings, d))}${
+            settings.speed > 1 ? ` (при ×${settings.speed})` : ''
+          }</span>`;
     info = `<div class="sys-head"><h2>${s.name}</h2>${note}</div>
       <div class="sub">${systemInfo(selected)}</div>
       <div class="row" style="margin-top:12px">
-        <span class="price">${ly(d)}</span><span class="spacer"></span>
-        ${jumpControl(d, reason)}
-      </div>
-      <div class="sub" style="margin-top:6px">В пути: ${fmtDur(jumpDuration(settings, d))}${settings.speed > 1 ? ` (при ×${settings.speed})` : ''}</div>`;
+        <span class="price">${ly(d)}</span><span class="spacer"></span>${jumpControl(d, reason)}${eta}
+      </div>`;
   }
   /*
    * §112: расшифровка цветов маршрутов.

@@ -69,7 +69,7 @@ const KEY = 'elite-idle-ui-edits-v1';
  * страница оставалась в кеше. Метка показывает, какая версия редактора
  * открыта, и снимает спор: «не обновилось» или «старая страница».
  */
-const BUILD = '§132.10';
+const BUILD = '§132.11';
 
 let store: Store = {};
 let editing = false;
@@ -425,8 +425,14 @@ function panel(el: HTMLElement, key: string): string {
      * остальные. Ещё и переводы строк нужны, чтобы правка оставалась заменой
      * куска, а не всего блока.
      */
+    /*
+     * §132.11: многострочность — это не только перевод строки в тексте.
+     * Строки карточки «Груз» разделены `<br>`, а не «\n», и в поле-строке
+     * видна была бы только первая.
+     */
     const value = esc(rawText(el));
-    const field = /\n/.test(rawText(el))
+    const multi = /\n/.test(rawText(el)) || !!el.querySelector('br');
+    const field = multi
       ? `<textarea rows="3" data-ui-prop="text" data-ui-kind="text">${value}</textarea>`
       : `<input type="text" value="${value}" data-ui-prop="text" data-ui-kind="text">`;
     const note = s.ops?.length

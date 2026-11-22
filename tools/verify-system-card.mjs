@@ -91,22 +91,45 @@ check('§132.9: причина прижата к правому краю',
   /\.sys-note\s*\{[^}]*margin-left:\s*auto/.test(html));
 
 /* ---------- Описание: «Подпись: значение» ---------- */
-const info = [...content.querySelectorAll('.card .sub')].find((n) => /Экономика:/.test(n.textContent ?? ''));
-check('§132.9: описание собрано парами «подпись: значение»', !!info,
+/*
+ * §132.11: подпись и значение — РАЗНЫЕ элементы, чтобы правка подписи не
+ * задевала живые числа. Проверяем и вид (подпись с двоеточием + значение), и
+ * раздельность узлов.
+ */
+const info = [...content.querySelectorAll('.card .sys-info')][0];
+check('§132.11: описание собрано строками-парами', !!info,
   (info?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 60));
 
-const lines = (info?.textContent ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
-const pairs = lines.map((l) => l.match(/^([^:]+):\s*(.+)$/)).filter(Boolean);
-check('§132.9: каждая строка — подпись и значение через двоеточие',
-  pairs.length >= 6 && pairs.length === lines.length, `${pairs.length} из ${lines.length}`);
-check('§132.9: подписи слева — экономика, правительство, техуровень, население, продуктивность, станция',
+const rows = [...(info?.querySelectorAll('.sys-row') ?? [])];
+check('§132.11: шесть строк — по одной на величину', rows.length === 6, String(rows.length));
+check('§132.11: в каждой строке подпись с двоеточием и значение',
+  rows.every((r) => /:$/.test((r.querySelector('.sys-k')?.textContent ?? '').trim()) &&
+    (r.querySelector('.sys-v')?.textContent ?? '').trim() !== ''));
+check('§132.11: подпись и значение — разные узлы',
+  rows.every((r) => r.querySelector('.sys-k') && r.querySelector('.sys-v')));
+check('§132.11: подписи слева — экономика, правительство, техуровень, население, продуктивность, станция',
   ['Экономика', 'Правительство', 'Техуровень', 'Население', 'Продуктивность', 'Станция']
-    .every((k) => pairs.some((m) => m[1].trim() === k)),
-  pairs.map((m) => m[1].trim()).join(' · '));
-check('§132.9: у правительства стоит название, а не прилагательное в столбик',
+    .every((k, i) => (rows[i]?.querySelector('.sys-k')?.textContent ?? '').trim() === `${k}:`),
+  rows.map((r) => (r.querySelector('.sys-k')?.textContent ?? '').trim()).join(' · '));
+const gov = rows[1]?.querySelector('.sys-v')?.textContent?.trim() ?? '';
+check('§132.11: у правительства стоит название, а не прилагательное в столбик',
   /^(Анархия|Феодализм|Многопартийное|Диктатура|Коммунистическое|Конфедерация|Демократия|Корпоративное государство)$/
-    .test(pairs.find((m) => m[1].trim() === 'Правительство')?.[2].trim() ?? ''),
-  pairs.find((m) => m[1].trim() === 'Правительство')?.[2]);
+    .test(gov), gov);
+
+/* ---------- «В пути»: справа от расстояния и не показывается дома ---------- */
+const row = [...content.querySelectorAll('.card .row')]
+  .find((r) => /св\. г\./.test(r.textContent ?? '') && /\d/.test(r.textContent ?? ''));
+check('§132.11: расстояние стоит в строке с местом под «В пути»',
+  !!row && !!row.querySelector('.price'),
+  (row?.textContent ?? '').replace(/\s+/g, ' ').trim());
+check('§132.11: «В пути» больше не отдельной строкой под карточкой',
+  window.document.querySelectorAll('#content > .card > .sub .sys-eta').length === 0 &&
+    [...content.querySelectorAll('.sub')].every((n) => !/^В пути/.test((n.textContent ?? '').trim())));
+check('§132.11: своя система — время полёта не показывается',
+  !/В пути/.test(content.textContent ?? ''),
+  (content.textContent ?? '').replace(/\s+/g, ' ').slice(-30));
+check('§132.11: «В пути» прижато вправо',
+  /\.sys-eta\s*\{[^}]*text-align:\s*right/.test(html));
 
 /* ---------- Чужая система: причины нет, описание про неё ---------- */
 const names = [...new Set(labels.filter((l) => l.canvas === 'map-local').map((l) => l.text))];
@@ -118,9 +141,16 @@ if (other) {
   check('§132.9: у чужой системы имя тоже в строке заголовка', !!head2, head2?.textContent?.replace(/\s+/g, ' '));
   check('§132.9: «Вы уже в этой системе» там не показывается',
     !/Вы уже в этой системе/.test(head2?.textContent ?? ''));
-  const info2 = [...c2.querySelectorAll('.card .sub')].find((n) => /Экономика:/.test(n.textContent ?? ''));
+  const info2 = [...c2.querySelectorAll('.card .sys-info')][0];
   check('§132.9: описание относится к выбранной системе',
     /Правительство:/.test(info2?.textContent ?? '') && info2?.textContent !== info?.textContent);
+  check('§132.11: у чужой системы «В пути» показывается',
+    /В пути/.test(c2.textContent ?? ''),
+    (c2.textContent ?? '').replace(/\s+/g, ' ').slice(-40));
+  const row2 = [...c2.querySelectorAll('.card .row')].find((r) => r.querySelector('.price'));
+  check('§132.11: «В пути» — в той же строке, что расстояние',
+    !!row2?.querySelector('.sys-eta') && !!row2?.querySelector('.price'),
+    (row2?.textContent ?? '').replace(/\s+/g, ' ').trim());
 }
 
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
