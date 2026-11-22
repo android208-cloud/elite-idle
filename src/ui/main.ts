@@ -611,9 +611,30 @@ function systemInfo(index: number): string {
   const s = systemsOf(state.galaxy)[index];
   const pop = (s.population * 256) / 1000;
   const popText = pop >= 1 ? `${pop.toFixed(1)} млрд` : `${Math.round(pop * 1000)} млн`;
-  return `${ECONOMIES[s.economy]}, ${GOVERNMENTS[s.government]}<br>
-    Техуровень ${s.techLevel + 1} · Население ${popText} · Продуктивность ${s.productivity}<br>
-    Станция · цена ${cash(stationPrice(s))}${state.stations.includes(index) ? ' · ваша' : ''}`;
+  /*
+   * §132.9: ОПИСАНИЕ — ПАРЫ «СЛЕВА ПОДПИСЬ, СПРАВА ЗНАЧЕНИЕ».
+   *
+   * Пользователь: «Описание сделай по принципу: Правительство: Диктатура
+   * (правительство слева, Диктатура справа)».
+   *
+   * Раньше это был слитный абзац: экономика и правительство через запятую,
+   * ниже три числа через точки. Глазу не за что зацепиться, а сравнить две
+   * планеты по одной строке было нельзя. Теперь каждая величина — своя строка
+   * с подписью; подписи стоят столбцом слева, значения справа от двоеточия,
+   * и первая буква значения совпадает во всех строках.
+   *
+   * Разметка остаётся одним текстовым блоком (строки через `<br>`), поэтому
+   * редактор интерфейса продолжает видеть в нём одну многострочную строку.
+   */
+  const own = state.stations.includes(index) ? ' · ваша' : '';
+  return [
+    `Экономика: ${ECONOMIES[s.economy]}`,
+    `Правительство: ${GOVERNMENTS[s.government]}`,
+    `Техуровень: ${s.techLevel + 1}`,
+    `Население: ${popText}`,
+    `Продуктивность: ${s.productivity}`,
+    `Станция: ${cash(stationPrice(s))}${own}`,
+  ].join('<br>\n    ');
 }
 
 function flightCard(): string {
@@ -1170,13 +1191,26 @@ function mapScreen(): string {
     if (state.flight) reason = JUMP_ERRORS['in-flight'];
     else if (selected === state.system) reason = JUMP_ERRORS['same-system'];
     else if (d > state.fuel) reason = JUMP_ERRORS['too-far'];
-    info = `<h2>${s.name}</h2><div class="sub">${systemInfo(selected)}</div>
+    /*
+     * §132.9: ПРИЧИНА ОТКАЗА — В ПРАВОМ ВЕРХНЕМ УГЛУ.
+     *
+     * Пользователь: «Вы уже в этой системе расположи в правом верхнем углу».
+     * Раньше причина висела под карточкой, после «В пути», и читалась как ещё
+     * одна справка — хотя это ответ на нажатие «Перелёт». Теперь она стоит в
+     * строке заголовка, справа от имени системы: там же, где игрок ищет
+     * объяснение, почему кнопка серая.
+     *
+     * Заголовок `h2` остаётся отдельным элементом: по нему проверяют карту
+     * (verify-labels-tap), и обёртка вокруг него сломала бы сравнение.
+     */
+    const note = reason ? `<span class="sys-note">${reason}</span>` : '';
+    info = `<div class="sys-head"><h2>${s.name}</h2>${note}</div>
+      <div class="sub">${systemInfo(selected)}</div>
       <div class="row" style="margin-top:12px">
         <span class="price">${ly(d)}</span><span class="spacer"></span>
         ${jumpControl(d, reason)}
       </div>
-      <div class="sub" style="margin-top:6px">В пути: ${fmtDur(jumpDuration(settings, d))}${settings.speed > 1 ? ` (при ×${settings.speed})` : ''}</div>
-      ${reason ? `<div class="muted" style="margin-top:6px">${reason}</div>` : ''}`;
+      <div class="sub" style="margin-top:6px">В пути: ${fmtDur(jumpDuration(settings, d))}${settings.speed > 1 ? ` (при ×${settings.speed})` : ''}</div>`;
   }
   /*
    * §112: расшифровка цветов маршрутов.

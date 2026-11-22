@@ -412,9 +412,10 @@ await wait(300);
 c5(a5('tab', { tab: 'ship' }));
 await wait(400);
 
+// §132.9: подписи в блоке теперь «Подпись: значение», ищем по «Правительство:».
 const info = [...d5.querySelectorAll('#content [data-ui-key]')]
-  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && /цена/.test(n.textContent ?? ''));
-check('§132.6: блок с ценой станции на месте', !!info, info?.dataset.uiKey);
+  .find((n) => /\.t\d+$/.test(n.dataset.uiKey ?? '') && /Правительство:/.test(n.textContent ?? ''));
+check('§132.6: блок с данными станции на месте', !!info, info?.dataset.uiKey);
 c5(info);
 await wait(200);
 const p6 = d5.getElementById('ui-editor');
@@ -422,28 +423,34 @@ const field = p6.querySelector('[data-ui-prop="text"]');
 check('§132.6: многострочный текст правится в textarea', field?.tagName === 'TEXTAREA', field?.tagName);
 
 const liveBefore = field.value;
-const withoutPrice = liveBefore.replace('цена ', '');
+// Убираем подпись «Станция: » — так же по смыслу, как раньше убирали «цена ».
+const withoutPrice = liveBefore.replace('Станция: ', '');
 field.value = withoutPrice;
 field.dispatchEvent(new w5.Event('input', { bubbles: true }));
 const after1 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
-check('§132.6: слово «цена» убрано с экрана', !/цена/.test(after1.textContent ?? ''));
-check('§132.6: остальной текст цел', /Преимущественно|Сельскохозяйственная|промышленная|Техуровень/.test(after1.textContent ?? ''),
+check('§132.6: подпись «Станция: » убрана с экрана', !/Станция: /.test(after1.textContent ?? ''));
+check('§132.6: остальной текст цел', /Правительство:|Экономика:|Техуровень:/.test(after1.textContent ?? ''),
   (after1.textContent ?? '').replace(/\s+/g, ' ').slice(0, 40));
 
 const stored6 = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
 const saved = stored6[Object.keys(stored6)[0]]?.[info.dataset.uiKey];
 check('§132.6: в правке лежит замена, а не текст целиком',
   !!saved?.ops?.length && saved.text === undefined, JSON.stringify(saved?.ops));
-check('§132.6: замена — именно слово «цена»', saved?.ops?.[0]?.from === 'цена ' && saved.ops[0].to === '',
+check('§132.6: замена — именно подпись «Станция: »', saved?.ops?.[0]?.from === 'Станция: ' && saved.ops[0].to === '',
   JSON.stringify(saved?.ops?.[0]));
 
 // Вторая правка в той же сессии — считается от живого текста, а не от изменённого.
-field.value = withoutPrice.replace('Станция', 'Стоянка');
+field.value = withoutPrice.replace('Правительство', 'Власть');
 field.dispatchEvent(new w5.Event('input', { bubbles: true }));
 const after2 = d5.querySelector(`#content [data-ui-key="${info.dataset.uiKey}"]`);
-check('§132.6: вторая правка тоже применяется', /Стоянка/.test(after2.textContent ?? ''),
+check('§132.6: вторая правка тоже применяется', /Власть:/.test(after2.textContent ?? ''),
   (after2.textContent ?? '').replace(/\s+/g, ' ').slice(-30));
-check('§132.6: и «цена» по-прежнему убрана', !/цена/.test(after2.textContent ?? ''));
+check('§132.6: и первая правка на месте', !/Станция: /.test(after2.textContent ?? ''));
+const bothOps = JSON.parse(w5.localStorage.getItem(EDIT_KEY) ?? '{}');
+const opsNow = bothOps[Object.keys(bothOps)[0]]?.[info.dataset.uiKey]?.ops ?? [];
+check('§132.10: две правки копятся, а не заменяют друг друга',
+  opsNow.length === 2 && opsNow[0].from === 'Станция: ' && opsNow[1].from === 'Правительство',
+  JSON.stringify(opsNow.map((o) => `${o.from}→${o.to}`)));
 
 const editsJson = w5.localStorage.getItem(EDIT_KEY);
 c5(d5.querySelector('[data-ui-act="done"]'));
@@ -462,12 +469,12 @@ const d7 = w7.document;
 const fresh = [...d7.querySelectorAll('#content .sub')].find((n) => /Техуровень/.test(n.textContent ?? ''));
 check('§132.6: на другой планете блок на месте', !!fresh,
   (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 34));
-check('§132.6: правка применилась на другой планете', /Стоянка/.test(fresh?.textContent ?? ''),
+check('§132.6: правка применилась на другой планете', /Власть:/.test(fresh?.textContent ?? ''),
   (fresh?.textContent ?? '').replace(/\s+/g, ' ').slice(-24));
-check('§132.6: и «цена» там тоже убрана', !/цена/.test(fresh?.textContent ?? ''));
+check('§132.6: и подпись «Станция: » там тоже убрана', !/Станция: /.test(fresh?.textContent ?? ''));
 check('§132.6: данные планеты обновились, а не замерли',
   (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim() !==
-    liveBefore.replace('цена ', '').replace('Станция', 'Стоянка').replace(/\s+/g, ' ').trim(),
+    liveBefore.replace('Станция: ', '').replace('Правительство', 'Власть').replace(/\s+/g, ' ').trim(),
   (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 50));
 const freshText = (fresh?.textContent ?? '').replace(/\s+/g, ' ').trim();
 w7.close();
@@ -540,7 +547,7 @@ check('§132.8: подпись кнопки правится заменой',
 c9(d9.querySelector('.ship-view .sub'));
 await wait(200);
 const p9 = d9.getElementById('ui-editor');
-check('§132.8: в панели видна метка сборки', /§132\.8/.test(p9.querySelector('.uied-build')?.textContent ?? ''),
+check('§132.8: в панели видна метка сборки', /§132\.\d+/.test(p9.querySelector('.uied-build')?.textContent ?? ''),
   p9.querySelector('.uied-build')?.textContent);
 
 const f9 = p9.querySelector('[data-ui-prop="text"]');

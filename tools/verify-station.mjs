@@ -67,10 +67,14 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
   const w = boot(state(5000));
   await wait(900);
   const text = content(w);
-  check('стоя у причала, видна цена станции', /Станция · цена /.test(text), text.slice(0, 160));
-  check('у LAVE цена 477 400 CR', /Станция · цена 477 400 CR/.test(text));
-  check('без «.0» у цены станции', !/Станция · цена [\d ]+\.\d/.test(text));
-  check('без разрядов слипшихся', !/Станция · цена \d{5,}/.test(text));
+  /*
+   * §132.9: описание системы стало парами «подпись: значение», поэтому цена
+   * станции теперь строка «Станция: 477 400 CR», а не «Станция · цена …».
+   */
+  check('стоя у причала, видна цена станции', /Станция: /.test(text), text.slice(0, 160));
+  check('у LAVE цена 477 400 CR', /Станция: 477 400 CR/.test(text));
+  check('без «.0» у цены станции', !/Станция: [\d ]+\.\d/.test(text));
+  check('без разрядов слипшихся', !/Станция: \d{5,}/.test(text));
   w.close();
 }
 
@@ -80,7 +84,7 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
   await wait(900);
   const rich = boot(state(9_000_000));
   await wait(900);
-  const price = (w) => (content(w).match(/Станция · цена [\d ]+ CR/) ?? [''])[0];
+  const price = (w) => (content(w).match(/Станция: [\d ]+ CR/) ?? [''])[0];
   check('цена не зависит от денег игрока', price(poor) === price(rich) && price(poor) !== '', price(poor));
   poor.close(); rich.close();
 }
@@ -92,7 +96,7 @@ const byAction = (w, a) => w.document.querySelector(`[data-action="${a}"]`);
   const w = boot(s);
   await wait(900);
   const text = content(w);
-  check('на CEESXE цена своя: 2 962 500 CR', /Станция · цена 2 962 500 CR/.test(text), text.slice(0, 160));
+  check('на CEESXE цена своя: 2 962 500 CR', /Станция: 2 962 500 CR/.test(text), text.slice(0, 160));
   check('CEESXE дороже LAVE', text.includes('2 962 500'));
   w.close();
 }

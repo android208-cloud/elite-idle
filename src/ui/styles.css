@@ -255,6 +255,11 @@ main { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
 .chip { font-size: 11px; border-radius: 8px; padding: 2px 8px; border: 1px solid var(--outline); color: var(--on-variant); }
 .chip.cheap { color: var(--good); border-color: var(--good); }
 .chip.dear { color: var(--bad); border-color: var(--bad); }
+/* §132.9: имя системы слева, причина отказа — в правом верхнем углу карточки. */
+.sys-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.sys-head h2 { margin: 0; }
+.sys-note { margin-left: auto; text-align: right; font-size: 12px; line-height: 1.25;
+  color: var(--warn, var(--on-variant)); max-width: 46%; }
 .price { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .muted { color: var(--on-variant); font-size: 13px; }
 
