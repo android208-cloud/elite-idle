@@ -62,6 +62,15 @@ type Store = Record<string, Record<string, UiStyle>>;
 
 const KEY = 'elite-idle-ui-edits-v1';
 
+/**
+ * §132.8: метка сборки в шапке панели.
+ *
+ * Пользователь дважды подряд видел уже исправленный баг — почти наверняка
+ * страница оставалась в кеше. Метка показывает, какая версия редактора
+ * открыта, и снимает спор: «не обновилось» или «старая страница».
+ */
+const BUILD = '§132.8';
+
 let store: Store = {};
 let editing = false;
 let picked: string | null = null;
@@ -287,7 +296,9 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
   if (s.h !== undefined) el.style.height = `${s.h}px`;
   // §132.3: цвет шрифта внутри кнопки — отдельная правка, не цвет всей кнопки.
   if (s.color) el.style.color = s.color;
-  if (s.text !== undefined && el.textContent !== s.text) el.textContent = s.text;
+  // §132.8: текст кнопки правится так же, как строка. Иначе подпись с ценой
+  // («Доплатить 120 000 CR») замерзала бы на одном числе.
+  if (s.ops?.length) applyOpsToNodes(el, s.ops);
   shift(el, s);
 }
 
@@ -359,7 +370,14 @@ export function applyUiEdits(content: HTMLElement, screen: string): void {
     Array.from(card.querySelectorAll<HTMLElement>('button')).forEach((el, j) => {
       const k = `${key}.b${j}`;
       if (editing) el.dataset.uiKey = k;
-      applyButton(el, edits[k]);
+      liveText.set(`${screen}|${k}`, rawText(el));
+      const s = edits[k];
+      if (s && s.text !== undefined && !s.ops) {
+        s.ops = diffOps(rawText(el), s.text);
+        delete s.text;
+        save();
+      }
+      applyButton(el, s);
     });
   });
   if (picked && !content.querySelector(`[data-ui-key="${picked}"]`)) picked = null;
@@ -442,16 +460,18 @@ function panel(el: HTMLElement, key: string): string {
       numRow('Сдвиг Y', 'dy', s.dy ?? 0, -80, 80) +
       colorRow('Цвет текста', 'color', color) +
       `<div class="uied-row"><label>Текст</label>
-         <input type="text" value="${esc(s.text ?? el.textContent ?? '')}" data-ui-prop="text" data-ui-kind="text"></div>`;
+         <input type="text" value="${esc(rawText(el))}" data-ui-prop="text" data-ui-kind="text"></div>`;
   }
 
-  return `<div class="uied-head"><b>${title}</b><span class="uied-key">${key}</span>
+  const stamp = `<span class="uied-build" title="Версия редактора">${BUILD}</span>`;
+  return `<div class="uied-head"><b>${title}</b><span class="uied-key">${key}</span>${stamp}
       <span class="spacer"></span>
       <button class="btn small tonal" data-ui-act="reset">Сбросить</button>
       <button class="btn small" data-ui-act="done">Готово</button></div>
     ${body}
     <div class="uied-row"><span class="spacer"></span>
-      <button class="btn small tonal" data-ui-act="export">Скачать JSON</button></div>`;
+      <button class="btn small tonal" data-ui-act="export">Скачать JSON</button>
+      <button class="btn small text" data-ui-act="reset-all">Сбросить всё</button></div>`;
 }
 
 function box(): HTMLElement | null {
@@ -602,6 +622,26 @@ function onPanelClick(ev: MouseEvent): void {
     save();
     deps?.render();
     picked = null;
+    paint();
+    return;
+  }
+  if (act === 'reset-all') {
+    /*
+     * §132.8: чистка всех правок сразу.
+     *
+     * Нужна после смены формата хранения (§132.6): старые правки могли
+     * заморозить текст, и по одной их выискивать — мучение. Два нажатия, как у
+     * покупок: сумма потерь здесь — весь черновик вида.
+     */
+    if (btn.dataset.uiArmed !== '1') {
+      btn.dataset.uiArmed = '1';
+      btn.textContent = 'Точно?';
+      return;
+    }
+    store = {};
+    save();
+    picked = null;
+    deps?.render();
     paint();
     return;
   }

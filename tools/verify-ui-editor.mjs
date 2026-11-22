@@ -489,6 +489,99 @@ check('§132.6: и текст на экране остался прежним',
 w8.close();
 
 /*
+ * §132.8: ТЕКСТ ПОД МОДЕЛЬЮ КОРАБЛЯ И МЕТКА СБОРКИ.
+ *
+ * Пользователь: «Так же залипает отредактированный текст под моделью моего
+ * корабля» (не обновляется). Проверяем буквально: правим подпись под моделью,
+ * покупаем другой корабль — подпись должна показать новый корабль.
+ *
+ * Система 3 выбрана потому, что на её верфи есть Cobra Mk III.
+ */
+const docked = { ...state, system: 3, cash: 9_000_000 };
+const w9 = boot({ state: JSON.stringify(docked), log: [] });
+await wait(900);
+const d9 = w9.document;
+const c9 = (el) => el.dispatchEvent(new w9.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a9 = (a, x = {}) => [...d9.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(x).every(([k, v]) => b.dataset[k] === String(v)));
+
+c9(a9('tab', { tab: 'hangar' }));
+await wait(400);
+const caption = () => d9.querySelector('.ship-view .sub')?.textContent ?? '';
+check('§132.8: подпись под моделью на месте', /Adder/.test(caption()), caption());
+
+c9(a9('tab', { tab: 'log' }));
+await wait(200);
+c9(a9('dev-open'));
+await wait(200);
+c9(d9.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c9(d9.getElementById('dev-pencil'));
+await wait(300);
+c9(a9('tab', { tab: 'hangar' }));
+await wait(400);
+
+/*
+ * §132.8: текст КНОПКИ тоже правится заменой. Иначе подпись с ценой
+ * («Доплатить 120 000 CR») замерзала бы на одном числе.
+ */
+const pump = a9('refuel', { n: 10 });
+c9(pump);
+await wait(200);
+const pBtn = d9.getElementById('ui-editor');
+const fBtn = pBtn.querySelector('[data-ui-prop="text"]');
+fBtn.value = 'Заправить';
+fBtn.dispatchEvent(new w9.Event('input', { bubbles: true }));
+const storedBtn = JSON.parse(w9.localStorage.getItem(EDIT_KEY) ?? '{}').hangar?.[pump.dataset.uiKey];
+check('§132.8: подпись кнопки правится заменой',
+  /Заправить/.test(pump.textContent ?? '') && !!storedBtn?.ops?.length && storedBtn.text === undefined,
+  `${pump.textContent} / ${JSON.stringify(storedBtn?.ops)}`);
+
+c9(d9.querySelector('.ship-view .sub'));
+await wait(200);
+const p9 = d9.getElementById('ui-editor');
+check('§132.8: в панели видна метка сборки', /§132\.8/.test(p9.querySelector('.uied-build')?.textContent ?? ''),
+  p9.querySelector('.uied-build')?.textContent);
+
+const f9 = p9.querySelector('[data-ui-prop="text"]');
+f9.value = f9.value.replace(' · ваш корабль в ангаре', '');
+f9.dispatchEvent(new w9.Event('input', { bubbles: true }));
+check('§132.8: подпись правится', caption() === 'Adder', caption());
+
+c9(d9.querySelector('[data-ui-act="done"]'));
+await wait(300);
+c9(a9('ship-buy', { id: 'cobra3' }));
+await wait(300);
+c9(d9.querySelector('[data-action="ship-confirm"]'));
+await wait(600);
+check('§132.8: корабль куплен', d9.querySelector('#ship-model')?.dataset.ship === 'cobra3',
+  d9.querySelector('#ship-model')?.dataset.ship);
+check('§132.8: подпись обновилась под новый корабль', caption() === 'Cobra Mk III', caption());
+
+/*
+ * §132.8: «Сбросить всё» — чистка черновика вида в два нажатия.
+ */
+c9(d9.getElementById('dev-pencil'));
+await wait(300);
+c9(d9.querySelector('.ship-view .sub'));
+await wait(200);
+const all = d9.querySelector('[data-ui-act="reset-all"]');
+check('§132.8: в панели есть «Сбросить всё»', all !== null);
+c9(all);
+await wait(100);
+check('§132.8: первое нажатие только спрашивает', /Точно/.test(all.textContent ?? ''), all.textContent);
+check('§132.8: и правки пока целы',
+  Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY) ?? '{}').hangar ?? {}).length === 2,
+  String(Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY) ?? '{}').hangar ?? {}).length));
+c9(all);
+await wait(300);
+check('§132.8: второе нажатие стирает все правки',
+  Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY) ?? '{}')).every(
+    (k) => Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY))[k]).length === 0));
+check('§132.8: и текст вернулся к живому', /Cobra Mk III · ваш корабль в ангаре/.test(caption()), caption());
+w9.close();
+
+/*
  * §132.1: ПОКА ОТКРЫТ РЕДАКТОР, ИНТЕРФЕЙС СТОИТ.
  *
  * Проверяем на идущем полёте: тик каждый раз пересчитывает обратный отсчёт, и
