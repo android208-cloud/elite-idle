@@ -679,5 +679,127 @@ await wait(1300);
 check('§132.1: после выхода отсчёт пошёл снова', resumed !== '' && eta() !== resumed, `${resumed} → ${eta()}`);
 w2.close();
 
+
+/*
+ * §132.13: ЦВЕТ КНОПКИ — ФОН И ОКАНТОВКА, ДЛЯ АКТИВНОЙ И НЕАКТИВНОЙ.
+ *
+ * Пользователь: «В редакторе добавь возможность красить кнопки (окантовку и
+ * фон), учти активную и не актвную итерацию».
+ *
+ * Проверяем на рынке: кнопки «+1» живые, «−1» недоступны (трюм пуст) — обе
+ * состояния под рукой без всяких ухищрений.
+ */
+const w10 = boot({ state: JSON.stringify(state), log: [] });
+await wait(900);
+const d10 = w10.document;
+const c10 = (el) => el.dispatchEvent(new w10.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a10 = (a, extra = {}) => [...d10.querySelectorAll(`[data-action="${a}"]`)]
+  .find((b) => Object.entries(extra).every(([k, v]) => b.dataset[k] === String(v)));
+const p10 = () => d10.getElementById('ui-editor');
+const input10 = (prop) => p10().querySelector(`[data-ui-prop="${prop}"][data-ui-kind="text-color"]`);
+const typeColor = (prop, value) => {
+  const el = input10(prop);
+  el.value = value;
+  el.dispatchEvent(new w10.Event('input', { bubbles: true }));
+};
+const pressed = (val) => p10().querySelector(`[data-ui-act="state"][data-ui-val="${val}"]`)?.getAttribute('aria-pressed');
+
+c10(a10('tab', { tab: 'market' }));
+await wait(300);
+c10(a10('tab', { tab: 'log' }));
+await wait(200);
+c10(a10('dev-open'));
+await wait(200);
+c10(d10.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c10(d10.getElementById('dev-pencil'));
+await wait(300);
+c10(a10('tab', { tab: 'market' }));
+await wait(300);
+
+const alive = a10('buy1', { i: 0 });
+const deadBtn = a10('sell1', { i: 0 });
+check('§132.13: для проверки есть живая и недоступная кнопки',
+  !!alive && !!deadBtn && deadBtn.hasAttribute('data-ui-disabled'),
+  `${alive?.dataset.uiKey} / ${deadBtn?.dataset.uiKey}`);
+
+c10(alive);
+await wait(150);
+check('§132.13: у кнопки есть поле «Фон»', !!input10('bg-on'));
+check('§132.13: у кнопки есть поле «Окантовка»', !!input10('bd-on'));
+check('§132.13: сразу открыто активное состояние', pressed('on') === 'true', pressed('on'));
+check('§132.13: и оба состояния на выбор', !!p10().querySelector('[data-ui-act="state"][data-ui-val="off"]'));
+check('§132.13: сказано, что неактивная гасится',
+  /38 %/.test(p10().querySelector('.uied-note')?.textContent ?? ''),
+  (p10().querySelector('.uied-note')?.textContent ?? '').slice(0, 60));
+
+typeColor('bg-on', '#112233');
+check('§132.13: фон кнопки покрасился',
+  /17,\s*34,\s*51/.test(alive.style.background) || alive.style.background === '#112233',
+  alive.style.background);
+
+typeColor('bd-on', '#ff0000');
+check('§132.13: окантовка нарисована',
+  /inset/.test(alive.style.boxShadow) && /255,\s*0,\s*0/.test(alive.style.boxShadow),
+  alive.style.boxShadow);
+check('§132.13: окантовка внутренняя — размер кнопки не меняется',
+  /2px inset/.test(alive.style.boxShadow) && !/outset/.test(alive.style.boxShadow),
+  alive.style.boxShadow);
+
+c10(p10().querySelector('[data-ui-act="state"][data-ui-val="off"]'));
+await wait(150);
+check('§132.13: переключение на неактивную показывает её поля',
+  !!input10('bg-off') && !!input10('bd-off'));
+check('§132.13: не заданный фон неактивной берётся у активной',
+  input10('bg-off').value.toLowerCase() === '#112233', input10('bg-off').value);
+typeColor('bg-off', '#00ff00');
+check('§132.13: цвет неактивной не перекрашивает живую кнопку',
+  /17,\s*34,\s*51/.test(alive.style.background) || alive.style.background === '#112233',
+  alive.style.background);
+
+c10(deadBtn);
+await wait(150);
+check('§132.13: у недоступной сразу открыто её состояние', pressed('off') === 'true', pressed('off'));
+typeColor('bg-off', '#ff8800');
+check('§132.13: фон недоступной покрасился',
+  /255,\s*136,\s*0/.test(deadBtn.style.background) || deadBtn.style.background === '#ff8800',
+  deadBtn.style.background);
+check('§132.13: и кнопка осталась приглушённой, как в игре',
+  parseFloat(deadBtn.style.opacity || '1') < 0.6, deadBtn.style.opacity);
+c10(p10().querySelector('[data-ui-act="state"][data-ui-val="on"]'));
+await wait(150);
+typeColor('bg-on', '#0088ff');
+check('§132.13: цвет активного состояния не трогает недоступную кнопку',
+  /255,\s*136,\s*0/.test(deadBtn.style.background) || deadBtn.style.background === '#ff8800',
+  deadBtn.style.background);
+
+const stored10 = JSON.parse(w10.localStorage.getItem(EDIT_KEY) ?? '{}');
+const saved10 = stored10.market?.[alive.dataset.uiKey] ?? {};
+check('§132.13: обе пары цветов легли в localStorage',
+  saved10.bg === '#112233' && saved10.bd === '#ff0000' && saved10.bgOff === '#00ff00',
+  JSON.stringify(saved10));
+
+/* Перерисовка: уходим и возвращаемся — цвета должны вернуться сами. */
+c10(a10('tab', { tab: 'hangar' }));
+await wait(250);
+c10(a10('tab', { tab: 'market' }));
+await wait(300);
+const deadAgain = a10('sell1', { i: 0 });
+const aliveAgain = a10('buy1', { i: 0 });
+check('§132.13: цвет живой кнопки пережил перерисовку',
+  /17,\s*34,\s*51/.test(aliveAgain?.style.background ?? ''), aliveAgain?.style.background);
+check('§132.13: цвет недоступной тоже вернулся',
+  /255,\s*136,\s*0/.test(deadAgain?.style.background ?? ''), deadAgain?.style.background);
+check('§132.13: вместе с окантовкой',
+  /255,\s*0,\s*0/.test(aliveAgain?.style.boxShadow ?? ''), aliveAgain?.style.boxShadow);
+
+c10(d10.querySelector('[data-ui-act="done"]'));
+await wait(300);
+const deadAfter = a10('sell1', { i: 0 });
+check('§132.13: после «Готово» кнопка снова недоступна', deadAfter?.disabled === true, String(deadAfter?.disabled));
+check('§132.13: и цвет её остался',
+  /255,\s*136,\s*0/.test(deadAfter?.style.background ?? ''), deadAfter?.style.background);
+w10.close();
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad === 0 ? 0 : 1);

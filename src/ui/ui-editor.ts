@@ -30,6 +30,20 @@ type UiStyle = {
   w?: number;
   r?: number;
   bg?: string;
+  /*
+   * §132.13: ЦВЕТ КНОПКИ — ОКАНТОВКА И ФОН, ОТДЕЛЬНО ДЛЯ ДВУХ СОСТОЯНИЙ.
+   *
+   * Кнопка в игре живёт в двух видах: активная и недоступная (`disabled`,
+   * приглушённая до 38 %). Один цвет на оба вида — это ловушка: выкрашенная
+   * ярко кнопка в неактивном виде превращается в тусклое пятно, а тихая
+   * неактивная — в яркое, которого в игре не бывает. Поэтому у фона и
+   * окантовки по две настройки: `bg`/`bd` — активная, `bgOff`/`bdOff` —
+   * недоступная. Не задана «неактивная» — берётся активная (и просто тускнеет,
+   * как раньше).
+   */
+  bd?: string;
+  bgOff?: string;
+  bdOff?: string;
   fs?: number;
   color?: string;
   align?: 'left' | 'center' | 'right';
@@ -69,11 +83,19 @@ const KEY = 'elite-idle-ui-edits-v1';
  * страница оставалась в кеше. Метка показывает, какая версия редактора
  * открыта, и снимает спор: «не обновилось» или «старая страница».
  */
-const BUILD = '§132.11';
+const BUILD = '§132.13';
 
 let store: Store = {};
 let editing = false;
 let picked: string | null = null;
+/**
+ * §132.13: какое состояние кнопки правим — активное или недоступное.
+ *
+ * Панель показывает цвета ТОГО состояния, которое выбрано, а не «сейчас на
+ * экране»: иначе цвет неактивной кнопки пришлось бы ловить в момент, когда
+ * она случайно окажется недоступной.
+ */
+let editState: 'on' | 'off' = 'on';
 let deps: { render: () => void; screen: () => string } | null = null;
 /** §132.6: живой текст каждого ключа — база для правок, снятая с последней отрисовки. */
 const liveText = new Map<string, string>();
@@ -290,6 +312,41 @@ function applyText(el: HTMLElement, s?: UiStyle): void {
   shift(el, s);
 }
 
+/**
+ * §132.13: недоступна ли кнопка ПРЯМО СЕЙЧАС.
+ *
+ * В игре это атрибут `disabled`. В режиме правки его снимают (§132.3), чтобы
+ * кнопку можно было выбрать, а признак остаётся в `data-ui-disabled`. Обе
+ * приметы значат одно и то же, поэтому проверяем обе — иначе цвет
+ * «неактивной» кнопки в редакторе не применялся бы вовсе.
+ */
+function isOff(el: Element): boolean {
+  return el.getAttribute('data-ui-disabled') === '1' || (el as HTMLButtonElement).disabled === true;
+}
+
+/**
+ * §132.13: цвет по умолчанию — без учёта наших же правок.
+ *
+ * Фон и окантовка ставятся inline. Значит, если сейчас на кнопке стоит цвет
+ * ДРУГОГО состояния, `getComputedStyle` вернёт его, и панель подставит в
+ * поле активного состояния чужой цвет. Поэтому на мгновение снимаем свои
+ * inline-значения, читаем настоящий цвет из стилей экрана и возвращаем всё
+ * как было.
+ */
+function cssDefault(el: HTMLElement, read: (cs: CSSStyleDeclaration) => string): string {
+  const bg = el.style.background;
+  const shadow = el.style.boxShadow;
+  el.style.background = '';
+  el.style.boxShadow = '';
+  const value = read(getComputedStyle(el));
+  el.style.background = bg;
+  el.style.boxShadow = shadow;
+  return value;
+}
+
+/** §132.13: окантовка — внутренняя тень, чтобы кнопка не меняла размер. */
+const ringOf = (color: string): string => `inset 0 0 0 2px ${color}`;
+
 function applyButton(el: HTMLElement, s?: UiStyle): void {
   if (!s) return;
   if (s.w !== undefined) el.style.width = `${s.w}px`;
@@ -299,6 +356,16 @@ function applyButton(el: HTMLElement, s?: UiStyle): void {
   // §132.8: текст кнопки правится так же, как строка. Иначе подпись с ценой
   // («Доплатить 120 000 CR») замерзала бы на одном числе.
   if (s.ops?.length) applyOpsToNodes(el, s.ops);
+  /*
+   * §132.13: фон и окантовка — по состоянию кнопки. Неактивная берёт свою
+   * пару, если она задана, иначе активную (и остаётся приглушённой штатным
+   * `opacity: .38` из стилей игры).
+   */
+  const off = isOff(el);
+  const bg = off ? s.bgOff ?? s.bg : s.bg;
+  const bd = off ? s.bdOff ?? s.bd : s.bd;
+  el.style.background = bg ?? '';
+  el.style.boxShadow = bd ? ringOf(bd) : '';
   shift(el, s);
 }
 
@@ -456,14 +523,37 @@ function panel(el: HTMLElement, key: string): string {
     const dead = el.hasAttribute('data-ui-disabled')
       ? `<div class="uied-note">Кнопка недоступна в игре — она остаётся приглушённой (opacity ${esc(
           el.dataset.uiDeadOpacity ?? '',
-        )}). Цвет ниже — тот, что будет под этой дымкой.</div>`
+        )}). Цвета ниже — те, что будут под этой дымкой.</div>`
       : '';
+    /*
+     * §132.13: фон и окантовка — двумя парами, по состоянию кнопки.
+     * Показываем цвета выбранного состояния; «по умолчанию» читаем из стилей
+     * экрана, сняв на миг свои inline-значения (см. `cssDefault`).
+     */
+    const defBg = cssDefault(el, (cs) => cs.backgroundColor);
+    // У кнопки из стилей игры границы нет, и `border-color` равен цвету
+    // текста — это и есть понятная «нулевая» окантовка.
+    const defBd = cssDefault(el, (cs) => cs.borderTopColor) || color;
+    const bgOn = s.bg ?? defBg;
+    const bdOn = s.bd ?? defBd;
+    const bgOff = s.bgOff ?? s.bg ?? defBg;
+    const bdOff = s.bdOff ?? s.bd ?? defBd;
+    const isOn = editState === 'on';
+    const stateRow = `<div class="uied-row"><label>Состояние</label>
+        <button class="btn small" data-ui-act="state" data-ui-val="on" aria-pressed="${isOn}">активная</button>
+        <button class="btn small" data-ui-act="state" data-ui-val="off" aria-pressed="${!isOn}">неактивная</button></div>`;
+    const colorsNote =
+      '<div class="uied-note">Фон и окантовка задаются отдельно для активной и недоступной кнопки: недоступная в игре гасится до 38 %.</div>';
     body =
       dead +
+      stateRow +
       numRow('Ширина', 'w', w, 40, 400) +
       numRow('Высота', 'h', h, 24, 160) +
       numRow('Сдвиг X', 'dx', s.dx ?? 0, -160, 160) +
       numRow('Сдвиг Y', 'dy', s.dy ?? 0, -80, 80) +
+      colorRow(isOn ? 'Фон' : 'Фон · неакт.', isOn ? 'bg-on' : 'bg-off', isOn ? bgOn : bgOff) +
+      colorRow(isOn ? 'Окантовка' : 'Окантовка · неакт.', isOn ? 'bd-on' : 'bd-off', isOn ? bdOn : bdOff) +
+      colorsNote +
       colorRow('Цвет текста', 'color', color) +
       `<div class="uied-row"><label>Текст</label>
          <input type="text" value="${esc(rawText(el))}" data-ui-prop="text" data-ui-kind="text"></div>`;
@@ -551,7 +641,15 @@ function setProp(prop: string, raw: string): void {
     save();
     return;
   }
-  if (prop === 'bg') s.bg = raw;
+  /*
+   * §132.13: четыре цветовые настройки кнопки. `on`/`off` — состояние, а не
+   * «номер кнопки»: у активной и недоступной свои фон и окантовка.
+   */
+  if (prop === 'bg-on') s.bg = raw;
+  else if (prop === 'bg-off') s.bgOff = raw;
+  else if (prop === 'bd-on') s.bd = raw;
+  else if (prop === 'bd-off') s.bdOff = raw;
+  else if (prop === 'bg') s.bg = raw;
   else if (prop === 'color') s.color = raw;
   else if (prop === 'align') s.align = raw as UiStyle['align'];
   else {
@@ -594,6 +692,12 @@ function onClick(ev: MouseEvent): void {
   ev.preventDefault();
   ev.stopPropagation();
   picked = node.dataset.uiKey ?? null;
+  /*
+   * §132.13: у кнопки сразу открывается то состояние, в котором она сейчас
+   * на экране: выбрать недоступную и увидеть цвета активной — та же ошибка,
+   * что была с цветом текста в §132.4.
+   */
+  editState = isOff(node) ? 'off' : 'on';
   paint();
 }
 
@@ -618,6 +722,15 @@ function onPanelClick(ev: MouseEvent): void {
   }
   if (act === 'align') {
     setProp('align', btn.dataset.uiVal ?? 'left');
+    paint();
+    return;
+  }
+  /*
+   * §132.13: переключение состояния кнопки в панели. Сама кнопка на экране не
+   * меняется — меняется то, какую пару цветов мы сейчас правим.
+   */
+  if (act === 'state') {
+    editState = btn.dataset.uiVal === 'off' ? 'off' : 'on';
     paint();
     return;
   }
