@@ -17,6 +17,7 @@ import {
   isTonneCargo,
   type MarketEntry,
 } from './market.ts';
+import { missionTons, refreshOffers, tickMissions, type Mission } from './missions.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import {
   PILOT_HIRE_FEE,
@@ -83,10 +84,31 @@ export { nextByte } from './rng.ts';
 
 /**
  * §105: версия 4 — появился флот (`pilots`, `nextPilotId`).
+ * §133: версия 5 — контракты (`missions`, `missionOffers`, `missionRep`).
  *
- * Сохранения версий 2 и 3 читаются по-прежнему: флот в них пустой.
+ * Сохранения версий 2, 3 и 4 читаются по-прежнему: недостающие поля
+ * дополняются значениями по умолчанию, а не отказом в загрузке.
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
+
+/*
+ * §133: контракты. Экран берёт их из ядра, как и всё остальное, — чтобы у
+ * проверок и у UI был один вход.
+ */
+export {
+  abandonMission,
+  deliverMission,
+  missionsOf,
+  missionRepOf,
+  offersOf,
+  refreshOffers,
+  rollOffers,
+  takeMission,
+  MISSION_OFFERS,
+  missionTons,
+} from './missions.ts';
+export type { Mission, MissionError, MissionKind, MissionResult } from './missions.ts';
+
 /**
  * Бак стартовой Кобры — опорная величина для расчёта времени прыжка.
  *
@@ -518,6 +540,23 @@ export interface GameState {
    * Массив, а не одна станция: ограничения по числу нет — как и у флота.
    */
   stations: number[];
+  /*
+   * §133: КОНТРАКТЫ.
+   *
+   * `missions` — взятые, `missionOffers` — лежащие на доске этой станции.
+   * `missionRep` отдельным числом (решение пользователя): систему репутации
+   * проработаем позже, а копить её надо уже сейчас.
+   *
+   * `missionRng` — свой генератор для доски: основной `rng` двигает рынок и
+   * встречи, и предложения не должны сдвигать их череду.
+   *
+   * Все поля необязательные: сохранения до §133 читаются без миграции.
+   */
+  missions?: Mission[];
+  missionOffers?: Mission[];
+  missionRep?: number;
+  nextMissionId?: number;
+  missionRng?: number;
 }
 
 /**
@@ -605,6 +644,8 @@ export type GameEventType =
   | 'escape-clean'
   /** §98.1: посадка с контрабандой — доля статуса не применяется. */
   | 'escape-blocked'
+  /** §133: контракт сорван — срок вышел. */
+  | 'mission-failed'
   /** §105: пилоты вернулись с рейсов и принесли деньги. */
   | 'fleet'
   /** §118: изменился правовой статус — с цифрой и причиной. */
@@ -636,7 +677,7 @@ export function systemsOf(galaxy: number): StarSystem[] {
 /** Новая игра: как в оригинале, старт в Lave, рынок с колебанием 0. */
 export function newGame(rngSeed: number): GameState {
   const lave = systemsOf(1)[START_SYSTEM_LAVE];
-  return {
+  const fresh: GameState = {
     version: SAVE_VERSION,
     galaxy: 1,
     system: START_SYSTEM_LAVE,
@@ -661,11 +702,19 @@ export function newGame(rngSeed: number): GameState {
     escapeRoute: [],
     escapeStatus: -1,
     stations: [],
+    // §133: контракты. Доска заполняется сразу: игрок стартует на станции.
+    missions: [],
+    missionOffers: [],
+    missionRep: 0,
+    nextMissionId: 1,
+    missionRng: rngSeed >>> 0,
     // §89: время карьеры. `careerAt: 0` — «точки отсчёта ещё нет»:
     // первый `advance` только выставит её, не начислив разницу.
     careerMs: 0,
     careerAt: 0,
   };
+  // §133: на стартовой станции доска уже висит — иначе первый экран пустой.
+  return refreshOffers(fresh);
 }
 
 export function currentSystem(state: GameState): StarSystem {
@@ -1313,7 +1362,8 @@ export function buyShip(state: GameState, id: ShipId): ShipResult {
       ...state,
       cash: state.cash + tradeIn - price,
       fuel: Math.min(state.fuel, spec.range),
-      holdSpace: holdCapacity(ship) - tons,
+      // §133: место под контракты занято и на новом корабле.
+      holdSpace: holdCapacity(ship) - tons - missionTons(state),
       ship,
     },
   };
@@ -2524,7 +2574,14 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
   };
 
   if (c.cargoDumped) {
-    s = { ...s, cargo: s.cargo.map(() => 0), cargoOrigin: [], holdSpace: holdCapacity(s.ship) };
+    // §133: место под контракты не освобождается — груз выброшен, пассажир
+    // остался. `missionTons` держит инвариант «свободно + груз + контракты».
+    s = {
+      ...s,
+      cargo: s.cargo.map(() => 0),
+      cargoOrigin: [],
+      holdSpace: holdCapacity(s.ship) - missionTons(s),
+    };
   }
 
   /** Полёт продолжается: простой боя добавляется к прибытию и ожидающим встречам. */
@@ -2680,7 +2737,8 @@ function finishCombat(state: GameState, at: number, settings: Settings, events: 
         ...s,
         cargo: s.cargo.map(() => 0),
         cargoOrigin: [],
-        holdSpace: holdCapacity(s.ship),
+        // §133: контракты при аварии не теряются — место под них занято.
+        holdSpace: holdCapacity(s.ship) - missionTons(s),
         cash: Math.floor(s.cash * INSURANCE_CASH_KEPT),
       });
       events.push({
@@ -2852,7 +2910,16 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
   const legalAtArrival = escaping ? state.legal : state.legal >> 1;
   const escape = escapeStep(state, legalAtArrival, flight.to, system.name, at, events);
 
-  return {
+  /*
+   * §133: доска контрактов новая на каждой станции. Предложения рождаются
+   * при прибытии, а не при открытии экрана: иначе они «мерцали» бы от
+   * каждой перерисовки и игрок выбирал бы, пока не выпадет выгодное.
+   *
+   * Считаем доску от системы ПРИБЫТИЯ, а в состояние кладём только её поля:
+   * спред целиком вернул бы `system`, `flight` и рынок к моменту вылета.
+   */
+  const board = refreshOffers({ ...state, system: flight.to });
+  const arrived: GameState = {
     ...state,
     system: flight.to,
     market: generateMarket(system, fluct),
@@ -2863,7 +2930,11 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
     legal: escape.legal,
     escapeRoute: escape.route,
     escapeStatus: escape.status,
+    missionOffers: board.missionOffers,
+    missionRng: board.missionRng,
+    nextMissionId: board.nextMissionId,
   };
+  return arrived;
 }
 
 /**
@@ -3051,6 +3122,17 @@ export function advance(
     // Ссылочное равенство сохраняем: холостой тик не должен менять состояние
     if (synced !== s.flight) s = { ...s, flight: synced };
   }
+  /*
+   * §133: сроки контрактов. Проверка стоит здесь, а не в экране: время идёт и
+   * в закрытой вкладке, и контракт обязан сорваться по будильнику, а не по
+   * тому, что игрок соизволил открыть «Рынок».
+   */
+  const ticked = tickMissions(s, now);
+  if (ticked.state !== s) {
+    s = ticked.state;
+    events.push(...ticked.events);
+  }
+
   return { state: s, events };
 }
 
@@ -3276,7 +3358,7 @@ export function deserialize(json: string): GameState {
     if (migrated.flight) migrated.flight = { ...migrated.flight, encounters: 0, lastEncounterAt: 0 };
     return migrated;
   }
-  if (data.version !== SAVE_VERSION && data.version !== 2 && data.version !== 3) {
+  if (data.version < 2 || data.version > SAVE_VERSION) {
     throw new Error(`Неподдерживаемая версия сохранения: ${data.version}`);
   }
   const state = data as GameState;
@@ -3294,6 +3376,16 @@ export function deserialize(json: string): GameState {
   if (!Array.isArray(state.pilots)) state.pilots = [];
   // §127: в сохранениях до покупки станций поля нет — станций не было.
   if (!Array.isArray(state.stations)) state.stations = [];
+  /*
+   * §133: контракты. В сохранениях до этой версии полей нет: контрактов не
+   * было. Доску заполняем сразу, чтобы старый сейв не остался без дела.
+   */
+  if (!Array.isArray(state.missions)) state.missions = [];
+  if (typeof state.missionRep !== 'number') state.missionRep = 0;
+  if (typeof state.nextMissionId !== 'number') {
+    const ids = [...state.missions, ...(state.missionOffers ?? [])].map((m) => m.id);
+    state.nextMissionId = ids.length > 0 ? Math.max(...ids) + 1 : 1;
+  }
   // §128: в сохранениях до перелётов поля нет — все пилоты дома.
   state.pilots = state.pilots.map((p) => ({ ...p, transfer: p.transfer ?? null }));
   // §107: в сохранениях шага 1 роли и счётчика провалов нет.
@@ -3381,6 +3473,17 @@ export function deserialize(json: string): GameState {
       encounters: 0,
       lastEncounterAt: f.departAt,
     };
+  }
+  /*
+   * §133: доска контрактов. Заполняется ПОСЛЕДНЕЙ: доска считает дальность по
+   * баку, а бак зависит от модели корабля, которая подставляется выше. В
+   * сейвах до §102 модели нет — посчитай мы раньше, загрузка падала бы на
+   * `holdCapacity` и старый файл просто не открывался.
+   */
+  if (!Array.isArray(state.missionOffers)) {
+    const board = refreshOffers(state);
+    state.missionOffers = board.missionOffers;
+    state.missionRng = board.missionRng;
   }
   return state;
 }

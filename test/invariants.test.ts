@@ -20,6 +20,7 @@ import {
   DEFAULT_SETTINGS,
   deserialize,
   MAX_FUEL,
+  missionTons,
   newGame,
   refuel,
   sell,
@@ -51,9 +52,12 @@ function checkState(s: GameState, where: string): void {
   if (!Number.isInteger(s.holdSpace) || s.holdSpace < 0 || s.holdSpace > capacity) {
     fail(`свободное место вне диапазона 0..${capacity}: ${s.holdSpace}`);
   }
-  // Свободное место и фактический груз должны согласовываться
-  if (s.holdSpace + cargoTons(s) !== capacity) {
-    fail(`трюм рассинхронизирован: свободно ${s.holdSpace} + груз ${cargoTons(s)} != ${capacity}`);
+  // Свободное место, груз и место под контракты должны согласовываться (§133)
+  if (s.holdSpace + cargoTons(s) + missionTons(s) !== capacity) {
+    fail(
+      `трюм рассинхронизирован: свободно ${s.holdSpace} + груз ${cargoTons(s)}` +
+        ` + контракты ${missionTons(s)} != ${capacity}`,
+    );
   }
   if (!Number.isInteger(s.kills) || s.kills < 0) fail(`счётчик убийств некорректен: ${s.kills}`);
   if (!Number.isInteger(s.legal) || s.legal < 0 || s.legal > 255) fail(`правовой статус вне 0..255: ${s.legal}`);
