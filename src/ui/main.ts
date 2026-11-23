@@ -3097,19 +3097,6 @@ function statsCard(): string {
     kills: 0, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0,
     tradeProfit: 0, jumps: 0, dockings: 0, dockingFails: 0,
   };
-  /*
-   * §133.6: ПРОГРЕСС «СВЕРХНОВОЙ» — ТОЛЬКО ПОСЛЕ ПЕРВЫХ ДВУХ УСЛОВИЙ.
-   *
-   * Пользователь: ранг «Опасный» оставить дополнительным условием, но прогресс
-   * показывать только когда галактика ≠ 1 и прыжков больше 32 — иначе секрет
-   * перестаёт быть секретом с первого экрана.
-   */
-  const snProgress = supernovaProgress(state);
-  const snHint = snProgress.basicsMet
-    ? `<div class="card"><h2>Сверхновая</h2>
-      <div class="sub">${snProgress.rankMet ? 'Ранг «Опасный» есть.' : `Нужен ранг «Опасный»: ${state.kills} из ${SUPERNOVA_TRIGGER_KILLS} уничтоженных.`}
-      ${snProgress.driveMet ? 'Галактический двигатель на борту.' : 'Нужен галактический гипердвигатель.'}</div></div>`
-    : '';
   const trades = st.goodTrades + st.badTrades;
   const rate = trades > 0 ? Math.round((st.goodTrades / trades) * 100) : 0;
   const profitSign = st.tradeProfit >= 0 ? '+' : '−';
@@ -3123,7 +3110,6 @@ function statsCard(): string {
       ${stat('Пропущено', String(st.skipped))}
       ${stat('Доход флота', cr(st.pilotIncome ?? 0))}
     </div>
-    ${snHint}
     <h2 style="margin-top:14px">Торговля</h2>
     <div class="grid">
       ${stat('Удачных', String(st.goodTrades))}

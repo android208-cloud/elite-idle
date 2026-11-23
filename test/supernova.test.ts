@@ -26,6 +26,7 @@ import {
   sell,
   serialize,
   startJump,
+  startPatrol,
   systemsOf,
   type GameState,
 } from '../src/core/state.ts';
@@ -89,9 +90,10 @@ function veteran(overrides: Partial<GameState> = {}): GameState {
     system: 3,
     fuel: maxFuel(base.ship),
     kills: SUPERNOVA_TRIGGER_KILLS,
-    ship: { ...base.ship, galacticHyperdrive: true },
+    // Ракеты нужны патрулю: без них взрыв на станции не проверить.
+    ship: { ...base.ship, galacticHyperdrive: true, missiles: 4 },
     stats: { ...base.stats, jumps: 40 },
-    visitedSystems: visited(SUPERNOVA_TRIGGER_JUMPS),
+    visitedSystems: visited(SUPERNOVA_TRIGGER_JUMPS + 1),
     ...overrides,
   };
 }
@@ -103,7 +105,7 @@ test('§133.6: без любого из четырёх условий событ
   assert.equal(
     supernovaArmed(veteran({ visitedSystems: visited(SUPERNOVA_TRIGGER_JUMPS - 1) })),
     false,
-    'новых систем меньше 36 — ещё мало',
+    'новых систем 32 — ещё мало, нужно больше',
   );
   assert.equal(supernovaArmed(veteran({ kills: SUPERNOVA_TRIGGER_KILLS - 1 })), false, 'ранг ниже Опасного');
   const noDrive = veteran();
@@ -243,12 +245,13 @@ test('§133.6: уход прыжком сохраняет двигатель и 
 });
 
 test('§133.6: взрыв уничтожает станцию навсегда и сжигает двигатель', () => {
-  const base = startSupernova(veteran(), T0, calm).state;
+  // Взрыв возможен только когда корабль не на станции — уходим в патруль.
+  const base = startPatrol(startSupernova(veteran(), T0, calm).state, T0).state;
   const exploded = tickSupernova(base, T0 + HOUR * SUPERNOVA_HOURS, calm);
   assert.equal(exploded.exploded, true);
 
   const dead = destroyStation(exploded.state, T0 + HOUR * SUPERNOVA_HOURS);
-  assert.equal(stationAlive(dead.state), false, 'станция погибла');
+  assert.equal(stationAlive({ ...dead.state, system: 3 }), false, 'станция погибла');
   assert.deepEqual(dead.state.destroyedStations, [stationKey(2, 3)]);
   assert.equal(supernovaOf(dead.state), null, 'событие кончилось');
   // Станция не возвращается, даже если вернуться в эту систему.
@@ -280,7 +283,14 @@ test('§133.6: уход без беженцев не даёт награды', (
 
 test('§133.6: «Сверхновая» включает advance и уносит в другую галактику', () => {
   const started = startSupernova(veteran(), T0, calm).state;
-  const later = advance(started, T0 + HOUR * (SUPERNOVA_HOURS + 1), calm);
+  // Пока стоим на станции, взрыва нет — срок сдвигается.
+  const docked = advance(started, T0 + HOUR * (SUPERNOVA_HOURS + 1), calm);
+  assert.equal(docked.state.galaxy, 2, 'на станции ничего не взрывается');
+  assert.ok(supernovaOf(docked.state), 'событие ещё идёт');
+
+  // В патруле ударная волна настигает по расписанию.
+  const patrolling = startPatrol(started, T0).state;
+  const later = advance(patrolling, T0 + HOUR * (SUPERNOVA_HOURS + 1), calm);
   assert.ok(later.events.some((e) => e.text.includes('Сверхновая')));
   assert.equal(later.state.galaxy, 3, 'унесло в следующую галактику');
   assert.equal(later.state.ship.galacticHyperdrive, false, 'двигатель сгорел');
@@ -288,27 +298,48 @@ test('§133.6: «Сверхновая» включает advance и уносит
   assert.equal(later.state.destroyedStations!.length, 1);
 });
 
-test('§133.10: галактический прыжок — выход без награды', () => {
+test('§133.11: награда не зависит от того, как ушли — галактический прыжок', () => {
   const base = startSupernova(veteran(), T0, calm).state;
   const taken = takeRefugees(base, T0 + 1000).state;
   const escaped = galacticEscapeSupernova(taken, T0 + 2000);
-  assert.equal(supernovaOf(escaped.state), null, 'событие закрыто');
   assert.equal(stationAlive({ ...escaped.state, system: 3 }), false, 'станция погибла');
+  assert.equal(escaped.state.supernovaDone, true, 'событие больше не придёт');
   const landed = deliverRefugees({ ...escaped.state, system: 11 }, T0 + 3000, calm);
-  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'камней нет');
-  assert.equal(missionRepOf(landed.state), 0, 'и репутации тоже');
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS, 'взяли всех — награда есть');
+  assert.equal(supernovaOf(landed.state), null, 'после высадки событие закрыто');
 });
 
-test('§133.10: взрыв — станция гибнет, беженцы награды не приносят', () => {
+test('§133.11: без беженцев награды нет ни при каком уходе', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const escaped = galacticEscapeSupernova(base, T0 + 2000);
+  assert.equal(supernovaOf(escaped.state), null, 'беженцев не брали — событие просто закрыто');
+  const landed = deliverRefugees({ ...escaped.state, system: 11 }, T0 + 3000, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'камней нет');
+});
+
+test('§133.11: ударная волна не отнимает награду у тех, кто взял беженцев', () => {
   const base = startSupernova(veteran(), T0, calm).state;
   const taken = takeRefugees(base, T0 + 1000).state;
-  const exploded = tickSupernova(taken, T0 + HOUR * SUPERNOVA_HOURS, calm);
+  // Уходим в патруль — тогда взрыв застаёт нас вне станции.
+  const inFlight = { ...taken, flight: { ...(newGame(1).flight ?? {}), patrol: true } as GameState['flight'] };
+  const exploded = tickSupernova(inFlight, T0 + HOUR * SUPERNOVA_HOURS, calm);
   assert.equal(exploded.exploded, true);
   const dead = destroyStation(exploded.state, T0 + HOUR * SUPERNOVA_HOURS);
-  assert.equal(supernovaOf(dead.state), null);
   assert.equal(stationAlive({ ...dead.state, system: 3 }), false);
   const landed = deliverRefugees({ ...dead.state, system: 11 }, T0 + HOUR * SUPERNOVA_HOURS, calm);
-  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'после взрыва камней нет');
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS, 'беженцы улетели с кораблём — награда есть');
+});
+
+test('§133.11: пока мы на станции, она не взрывается', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const late = T0 + HOUR * (SUPERNOVA_HOURS + 5);
+  const docked = tickSupernova(base, late, calm);
+  assert.equal(docked.exploded, false, 'взрыва нет, пока стоим на станции');
+  assert.equal(supernovaOf(docked.state), null === null ? supernovaOf(docked.state) : null);
+  assert.ok(supernovaOf(docked.state)!.at > late, 'срок сдвинулся вперёд');
+  // А в полёте (патруль) взрыв случается по расписанию.
+  const inFlight = { ...base, flight: { patrol: true } as GameState['flight'] };
+  assert.equal(tickSupernova(inFlight, late, calm).exploded, true);
 });
 
 test('§133.10: событие больше не повторяется', () => {
