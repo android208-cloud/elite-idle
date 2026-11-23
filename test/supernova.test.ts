@@ -31,9 +31,9 @@ import {
 } from '../src/core/state.ts';
 import {
   deliverRefugees,
-  freeJumpLeft,
-  supernovaFreeJump,
-  SUPERNOVA_FREE_JUMP_MS,
+  galacticEscapeSupernova,
+  newSystemsVisited,
+  noteVisit,
   destroyStation,
   escapeSupernova,
   GEMS_INDEX,
@@ -77,6 +77,10 @@ const HOUR = 3_600_000;
  * Готовый «ветеран»: не первая галактика, прыжков больше 32, ранг «Опасный»,
  * галактический двигатель на борту — то есть все четыре условия.
  */
+/** Ключи систем: `newSystemsVisited` считает длину списка без стартовой. */
+const visited = (n: number): string[] =>
+  Array.from({ length: n + 1 }, (_, i) => `2:${i}`);
+
 function veteran(overrides: Partial<GameState> = {}): GameState {
   const base = newGame(7);
   return {
@@ -86,7 +90,8 @@ function veteran(overrides: Partial<GameState> = {}): GameState {
     fuel: maxFuel(base.ship),
     kills: SUPERNOVA_TRIGGER_KILLS,
     ship: { ...base.ship, galacticHyperdrive: true },
-    stats: { ...base.stats, jumps: SUPERNOVA_TRIGGER_JUMPS + 5 },
+    stats: { ...base.stats, jumps: 40 },
+    visitedSystems: visited(SUPERNOVA_TRIGGER_JUMPS),
     ...overrides,
   };
 }
@@ -96,9 +101,9 @@ test('§133.6: без любого из четырёх условий событ
 
   assert.equal(supernovaArmed(veteran({ galaxy: 1 })), false, 'первая галактика');
   assert.equal(
-    supernovaArmed(veteran({ stats: { ...veteran().stats, jumps: SUPERNOVA_TRIGGER_JUMPS } })),
+    supernovaArmed(veteran({ visitedSystems: visited(SUPERNOVA_TRIGGER_JUMPS - 1) })),
     false,
-    'ровно 32 прыжка — ещё мало, нужно больше',
+    'новых систем меньше 36 — ещё мало',
   );
   assert.equal(supernovaArmed(veteran({ kills: SUPERNOVA_TRIGGER_KILLS - 1 })), false, 'ранг ниже Опасного');
   const noDrive = veteran();
@@ -107,6 +112,12 @@ test('§133.6: без любого из четырёх условий событ
     false,
     'нет галактического двигателя',
   );
+});
+
+test('§133.10: считаются только прыжки в новые системы', () => {
+  const shuttle = veteran({ visitedSystems: ['2:3', '2:4', '2:3', '2:4'] as string[] });
+  assert.equal(newSystemsVisited(shuttle), 3, 'повторы не в счёт');
+  assert.equal(supernovaArmed(shuttle), false, 'челнок между двумя станциями событие не включает');
 });
 
 test('§133.6: прогресс скрыт, пока не выполнены первые два условия', () => {
@@ -217,29 +228,6 @@ test('§133.9: «все 200 взяты» — полный трюм, даже е�
   assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS, 'взяли всех — награда есть');
 });
 
-test('§133.9: через 30 секунд после стыковки прыжок бесплатный', () => {
-  const base = { ...startSupernova(veteran(), T0, calm).state, fuel: 0 };
-  const target = neighbour({ ...base, fuel: maxFuel(base.ship) });
-  assert.equal(supernovaFreeJump(base, T0 + 1000), false, 'сразу после стыковки — нет');
-  assert.equal(freeJumpLeft(base, T0 + 1000), 29);
-  assert.equal(startJump(base, target, T0 + 1000, calm).error, 'too-far', 'без топлива и без льготы не улететь');
-
-  const late = T0 + SUPERNOVA_FREE_JUMP_MS + 1;
-  assert.equal(supernovaFreeJump(base, late), true);
-  const jumped = startJump(base, target, late, calm);
-  assert.equal(jumped.error, undefined, 'прыжок разрешён');
-  assert.equal(jumped.state.fuel, 0, 'топливо не тратится');
-  assert.equal(supernovaOf(jumped.state), null, 'событие окончено');
-});
-
-test('§133.9: взяли беженцев — бесплатный прыжок отменяется', () => {
-  const base = startSupernova(veteran(), T0, calm).state;
-  const taken = takeRefugees(base, T0 + 1000).state;
-  const late = T0 + SUPERNOVA_FREE_JUMP_MS + 1000;
-  assert.equal(supernovaFreeJump({ ...taken, fuel: 0 }, late), false);
-  assert.equal(startJump({ ...taken, fuel: 0 }, neighbour(taken), late, calm).error, 'too-far');
-});
-
 test('§133.6: уход прыжком сохраняет двигатель и гасит утечку', () => {
   const base = startSupernova(veteran(), T0, calm).state;
   const taken = takeRefugees(base, T0 + 1000).state;
@@ -247,6 +235,8 @@ test('§133.6: уход прыжком сохраняет двигатель и 
   assert.equal(jumped.error, undefined);
   assert.equal(supernovaOf(jumped.state)!.escaped, true, 'событие перешло в «вывезли»');
   assert.equal(jumped.state.ship.galacticHyperdrive, true, 'двигатель цел');
+  assert.equal(stationAlive({ ...jumped.state, system: 3 }), false, 'станция гибнет в любом случае');
+  assert.equal(jumped.state.supernovaDone, true, 'событие больше не повторится');
   // Утечка больше не идёт: топливо только то, что стоило прыжку.
   const later = tickSupernova(jumped.state, T0 + HOUR, calm);
   assert.equal(later.state.fuel, jumped.state.fuel);
@@ -296,6 +286,48 @@ test('§133.6: «Сверхновая» включает advance и уносит
   assert.equal(later.state.ship.galacticHyperdrive, false, 'двигатель сгорел');
   assert.equal(missionRepOf(later.state), -10, 'репутация −10');
   assert.equal(later.state.destroyedStations!.length, 1);
+});
+
+test('§133.10: галактический прыжок — выход без награды', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  const escaped = galacticEscapeSupernova(taken, T0 + 2000);
+  assert.equal(supernovaOf(escaped.state), null, 'событие закрыто');
+  assert.equal(stationAlive({ ...escaped.state, system: 3 }), false, 'станция погибла');
+  const landed = deliverRefugees({ ...escaped.state, system: 11 }, T0 + 3000, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'камней нет');
+  assert.equal(missionRepOf(landed.state), 0, 'и репутации тоже');
+});
+
+test('§133.10: взрыв — станция гибнет, беженцы награды не приносят', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  const exploded = tickSupernova(taken, T0 + HOUR * SUPERNOVA_HOURS, calm);
+  assert.equal(exploded.exploded, true);
+  const dead = destroyStation(exploded.state, T0 + HOUR * SUPERNOVA_HOURS);
+  assert.equal(supernovaOf(dead.state), null);
+  assert.equal(stationAlive({ ...dead.state, system: 3 }), false);
+  const landed = deliverRefugees({ ...dead.state, system: 11 }, T0 + HOUR * SUPERNOVA_HOURS, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'после взрыва камней нет');
+});
+
+test('§133.10: событие больше не повторяется', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const left = escapeSupernova(base, T0 + 1000).state;
+  assert.equal(left.supernovaDone, true);
+  const again = startSupernova({ ...left, supernova: null }, T0 + HOUR * 24, calm);
+  assert.equal(supernovaOf(again.state), null, 'второй раз не приходит');
+  assert.equal(supernovaArmed({ ...left, supernova: null }), false, 'и условия не откроют его заново');
+});
+
+test('§133.10: новая система отмечается при прыжке и в новой галактике', () => {
+  const s = newGame(11);
+  const before = newSystemsVisited(s);
+  assert.equal(before, 0, 'стартовая система не в счёт');
+  const withVisit = noteVisit({ ...s, system: 4 });
+  assert.equal(newSystemsVisited(withVisit), 1);
+  // Повторный визит ничего не меняет.
+  assert.equal(noteVisit(withVisit), withVisit);
 });
 
 test('§133.6: старый сейв без полей события читается', () => {

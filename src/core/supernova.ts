@@ -30,8 +30,14 @@ import { GALAXY_COUNT } from './galaxy.ts';
 import { holdCapacity } from './ships.ts';
 import type { GameEvent, GameState, Settings } from './state.ts';
 
-/** Сколько прыжков карьеры нужно, чтобы событие стало возможно. */
-export const SUPERNOVA_TRIGGER_JUMPS = 32;
+/**
+ * Сколько ПРЫЖКОВ В НОВЫЕ СИСТЕМЫ нужно, чтобы событие стало возможно.
+ *
+ * §133.10: пользователь уточнил — считаются только прыжки в систему, где
+ * игрок ещё никогда не был. Возврат по знакомому маршруту не приближает
+ * событие: иначе его включал бы любой «челнок» между двумя станциями.
+ */
+export const SUPERNOVA_TRIGGER_JUMPS = 36;
 /** Ранг «Опасный» — 512 уничтоженных кораблей (см. RANKS в `ships.ts`). */
 export const SUPERNOVA_TRIGGER_KILLS = 512;
 /** Утечка: 2.0 св. г. за игровой час, в тех же десятых, что и `state.fuel`. */
@@ -51,8 +57,6 @@ export const SUPERNOVA_REFUGEES_TONS = 200;
 export const SUPERNOVA_FREE_JUMP_MS = 30_000;
 /** Награда: 100 г драгоценных камней — ровно как в оригинале. */
 export const SUPERNOVA_REWARD_GEMS = 100;
-/** После провала событие не возвращается раньше, чем через 6 игровых часов. */
-export const SUPERNOVA_COOLDOWN_HOURS = 6;
 /** Индекс «Драгоценных камней» в таблице товаров (не занимают трюм). */
 export const GEMS_INDEX = 15;
 
@@ -90,8 +94,41 @@ export type SupernovaError = 'none' | 'not-here' | 'no-station' | 'already' | 'n
 
 export const supernovaOf = (state: GameState): Supernova | null => state.supernova ?? null;
 
-/** Ключ погибшей станции: система одна и та же в разных галактиках — разные места. */
+/** Ключ системы: номер один и тот же в разных галактиках — места разные. */
 export const stationKey = (galaxy: number, system: number): string => `${galaxy}:${system}`;
+
+/**
+ * §133.10: СКОЛЬКО НОВЫХ СИСТЕМ ПРОЙДЕНО.
+ *
+ * Условие старта считает не все прыжки, а только те, что привели в систему,
+ * где игрок ещё не был. Стартовая система в счёт не идёт: карьера начинается
+ * не прыжком.
+ */
+export function newSystemsVisited(state: GameState): number {
+  return Math.max(0, (state.visitedSystems ?? []).length - 1);
+}
+
+/** Отметить текущую систему как посещённую. Возвращает то же состояние, если она уже была. */
+export function noteVisit(state: GameState): GameState {
+  const key = stationKey(state.galaxy, state.system);
+  const seen = state.visitedSystems ?? [];
+  if (seen.includes(key)) return state;
+  return { ...state, visitedSystems: [...seen, key] };
+}
+
+/**
+ * §133.10: СТАНЦИЯ ГИБНЕТ В ЛЮБОМ ИСХОДЕ.
+ *
+ * Пользователь: «станция исчезает в любом случае». Звезда вспыхивает
+ * независимо от того, успел игрок уйти или нет, — значит и станции больше
+ * нет. Поэтому пометка ставится в момент, когда событие закрывается, а не
+ * только при взрыве.
+ */
+function withStationDestroyed(state: GameState, sn: Supernova): GameState {
+  const key = stationKey(sn.galaxy, sn.system);
+  const list = state.destroyedStations ?? [];
+  return list.includes(key) ? state : { ...state, destroyedStations: [...list, key] };
+}
 
 /** Станция в системе ещё существует? Погибшая не возвращается никогда. */
 export function stationAlive(state: GameState, system = state.system): boolean {
@@ -116,8 +153,10 @@ export function stationLocked(state: GameState): boolean {
  * дешёвого к самому дорогому.
  */
 export function supernovaArmed(state: GameState): boolean {
+  // §133.10: событие бывает один раз в карьере — прошло, значит прошло.
+  if (state.supernovaDone) return false;
   if (state.galaxy === 1) return false;
-  if (state.stats.jumps <= SUPERNOVA_TRIGGER_JUMPS) return false;
+  if (newSystemsVisited(state) < SUPERNOVA_TRIGGER_JUMPS) return false;
   if (state.kills < SUPERNOVA_TRIGGER_KILLS) return false;
   if (!state.ship.galacticHyperdrive) return false;
   return true;
@@ -128,7 +167,7 @@ export function supernovaArmed(state: GameState): boolean {
  * показываем только после первых двух, иначе это спойлер с первого экрана).
  */
 export interface SupernovaProgress {
-  /** Первые два условия ZX: не первая галактика и больше 32 прыжков. */
+  /** Первые два условия: не первая галактика и не меньше 36 новых систем. */
   basicsMet: boolean;
   /** Ранг «Опасный». */
   rankMet: boolean;
@@ -138,7 +177,7 @@ export interface SupernovaProgress {
 
 export function supernovaProgress(state: GameState): SupernovaProgress {
   return {
-    basicsMet: state.galaxy !== 1 && state.stats.jumps > SUPERNOVA_TRIGGER_JUMPS,
+    basicsMet: state.galaxy !== 1 && newSystemsVisited(state) >= SUPERNOVA_TRIGGER_JUMPS,
     rankMet: state.kills >= SUPERNOVA_TRIGGER_KILLS,
     driveMet: !!state.ship.galacticHyperdrive,
   };
@@ -154,12 +193,6 @@ export function startSupernova(
   if (!supernovaArmed(state)) return { state, events: [] };
   // Погибшая станция — не место для спасения: там уже некому сигналить.
   if (!stationAlive(state)) return { state, events: [] };
-  // Кулдаун после прошлого провала: событие не должно идти подряд.
-  const last = state.supernovaEndedAt ?? 0;
-  if (last > 0 && now - last < gameHourMs(settings) * SUPERNOVA_COOLDOWN_HOURS) {
-    return { state, events: [] };
-  }
-
   const hour = gameHourMs(settings);
   const sn: Supernova = {
     galaxy: state.galaxy,
@@ -242,20 +275,17 @@ export function tickSupernova(
 export function destroyStation(state: GameState, now: number): { state: GameState; events: GameEvent[] } {
   const sn = supernovaOf(state);
   if (!sn) return { state, events: [] };
-  const key = stationKey(sn.galaxy, sn.system);
-  const destroyed = [...(state.destroyedStations ?? []), key];
   /*
-   * Беженцы, взятые на борт, ударной волной улетают вместе с кораблём: их
-   * судьба не должна пропасть из-за того, что игрок не успел прыгнуть. А вот
-   * те, кого он так и не взял, погибают вместе со станцией — и это его вина.
+   * §133.10: взрыв — это провал без награды. Ударная волна уносит корабль в
+   * другую галактику так же, как галактический прыжок, и камней за это не
+   * платят. Станция гибнет, событие закрывается навсегда.
    */
-  const next: Supernova | null = sn.refugees ? { ...sn, escaped: true } : null;
   return {
     state: {
-      ...state,
-      destroyedStations: destroyed,
-      supernova: next,
-      supernovaEndedAt: next ? (state.supernovaEndedAt ?? 0) : now,
+      ...withStationDestroyed(state, sn),
+      supernova: null,
+      supernovaEndedAt: now,
+      supernovaDone: true,
     },
     events: [
       {
@@ -284,14 +314,53 @@ export function escapeSupernova(state: GameState, now: number): { state: GameSta
    */
   const next: Supernova | null = sn.refugees ? { ...sn, escaped: true } : null;
   return {
-    state: { ...state, supernova: next, supernovaEndedAt: next ? (state.supernovaEndedAt ?? 0) : now },
+    state: {
+      ...withStationDestroyed(state, sn),
+      supernova: next,
+      supernovaEndedAt: next ? (state.supernovaEndedAt ?? 0) : now,
+      // §133.10: событие одно на карьеру — второй раз оно не придёт.
+      supernovaDone: true,
+    },
     events: [
       {
         type: 'supernova',
         at: now,
         text: sn.refugees
-          ? 'Ушли от сверхновой с беженцами на борту. Галактический двигатель цел.'
-          : 'Ушли от сверхновой. Станция погибнет, но людей на борту не было.',
+          ? 'Ушли от сверхновой с беженцами на борту. Галактический двигатель цел, станция за кормой гибнет.'
+          : 'Ушли от сверхновой. Станции в этой системе больше нет, людей на борту не было.',
+      },
+    ],
+  };
+}
+
+/**
+ * §133.10: УХОД ГАЛАКТИЧЕСКИМ ПРЫЖКОМ — БЕЗ НАГРАДЫ.
+ *
+ * Пользователь: «если нет топлива на прыжок, можно уйти в другую галактику,
+ * тогда награды нет». Это гарантированный выход для того, у кого пустой бак:
+ * двигатель сгорит, станция погибнет, камней не будет. Беженцы, если их уже
+ * взяли, остаются ни с чем — но и корабль не пропадает.
+ */
+export function galacticEscapeSupernova(
+  state: GameState,
+  now: number,
+): { state: GameState; events: GameEvent[] } {
+  const sn = supernovaOf(state);
+  if (!sn) return { state, events: [] };
+  return {
+    state: {
+      ...withStationDestroyed(state, sn),
+      supernova: null,
+      supernovaEndedAt: now,
+      supernovaDone: true,
+    },
+    events: [
+      {
+        type: 'supernova',
+        at: now,
+        text: sn.refugees
+          ? 'Ушли от сверхновой в другую галактику. Беженцы летят с вами, но награды не будет: высадка здесь не считается.'
+          : 'Ушли от сверхновой в другую галактику. Станция погибла, награды нет.',
       },
     ],
   };
@@ -402,33 +471,6 @@ export function deliverRefugees(
       },
     ],
   };
-}
-
-/**
- * §133.9: БЕСПЛАТНЫЙ ВЫХОД.
- *
- * Пользователь: «сделаем бесплатный выход из квеста — сделать прыжок через
- * 30 секунд после стыковки, не взяв беженцев». Смысл: если игрок не может или
- * не хочет брать людей (нет места, нет топлива на прыжок, или он владелец
- * Анаконды и ещё сортирует груз), событие не должно превращаться в ловушку.
- * Через полминуты после стыковки прыжок разрешён без топлива.
- *
- * Взял беженцев — бесплатный прыжок отменяется: за них платят топливом, как
- * и было.
- */
-export function supernovaFreeJump(state: GameState, now: number): boolean {
-  const sn = supernovaOf(state);
-  if (!sn || sn.escaped || sn.refugees) return false;
-  if (sn.galaxy !== state.galaxy || sn.system !== state.system) return false;
-  return now - sn.startedAt >= SUPERNOVA_FREE_JUMP_MS;
-}
-
-/** Сколько секунд осталось до бесплатного прыжка (0 — уже можно). */
-export function freeJumpLeft(state: GameState, now: number): number {
-  const sn = supernovaOf(state);
-  if (!sn || sn.escaped || sn.refugees) return 0;
-  const left = SUPERNOVA_FREE_JUMP_MS - (now - sn.startedAt);
-  return left > 0 ? Math.ceil(left / 1000) : 0;
 }
 
 /** Сколько ещё игровых часов до взрыва — для подписи на экране. */

@@ -22,9 +22,11 @@ import {
   deliverRefugees,
   destroyStation,
   escapeSupernova,
+  galacticEscapeSupernova,
+  noteVisit,
+  stationKey,
   startSupernova,
   stationLocked,
-  supernovaFreeJump,
   tickSupernova,
   type Supernova,
 } from './supernova.ts';
@@ -131,9 +133,6 @@ export {
   SUPERNOVA_MAYDAY_HOURS,
   SUPERNOVA_REFUGEES_TONS,
   SUPERNOVA_REWARD_GEMS,
-  SUPERNOVA_FREE_JUMP_MS,
-  supernovaFreeJump,
-  freeJumpLeft,
   SUPERNOVA_TRIGGER_JUMPS,
   SUPERNOVA_TRIGGER_KILLS,
   type Supernova,
@@ -598,8 +597,17 @@ export interface GameState {
    */
   supernova?: Supernova | null;
   destroyedStations?: string[];
-  /** Когда событие закончилось: раньше чем через 6 игровых часов не повторяется. */
+  /** Когда событие закончилось (история журнала; повторности больше нет). */
   supernovaEndedAt?: number;
+  /** §133.10: событие бывает один раз в карьере — флаг закрывает его навсегда. */
+  supernovaDone?: boolean;
+  /**
+   * §133.10: системы, где игрок уже был, ключами `галактика:система`.
+   *
+   * Нужны для условия старта «Сверхновой»: считаются только прыжки в новые
+   * системы, возврат по знакомому маршруту событие не приближает.
+   */
+  visitedSystems?: string[];
 }
 
 /**
@@ -757,6 +765,8 @@ export function newGame(rngSeed: number): GameState {
     supernova: null,
     destroyedStations: [],
     supernovaEndedAt: 0,
+    supernovaDone: false,
+    visitedSystems: [stationKey(1, START_SYSTEM_LAVE)],
     // §89: время карьеры. `careerAt: 0` — «точки отсчёта ещё нет»:
     // первый `advance` только выставит её, не начислив разницу.
     careerMs: 0,
@@ -1260,13 +1270,7 @@ export function startJump(state: GameState, target: number, now: number, setting
   if (!Number.isInteger(target) || target < 0 || target >= systems.length) return { state, error: 'bad-target' };
   if (target === state.system) return { state, error: 'same-system' };
   const d = distance(systems[state.system], systems[target]);
-  /*
-   * §133.9: во время «Сверхновой» прыжок становится бесплатным через 30 секунд
-   * после стыковки, если беженцев так и не взяли. Топливо при таком прыжке не
-   * тратится вовсе — иначе «выход» не был бы выходом.
-   */
-  const free = supernovaFreeJump(state, now);
-  if (d > state.fuel && !free) return { state, error: 'too-far' };
+  if (d > state.fuel) return { state, error: 'too-far' };
   /*
    * §133.6: прыжок с топливом — это «ушли от сверхновой своим ходом».
    * Галактический двигатель при этом цел: его тратят только те, кому топлива
@@ -1284,7 +1288,7 @@ export function startJump(state: GameState, target: number, now: number, setting
     state: {
       ...state,
       stats: { ...state.stats, jumps: state.stats.jumps + 1 },
-      fuel: free ? state.fuel : state.fuel - d,
+      fuel: state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
       flight: {
         from: state.system,
@@ -2118,8 +2122,11 @@ export function nextGalaxyArrival(state: GameState, now?: number): GameState {
    * галактики. Считаем её от системы прибытия, как в `arrive`.
    */
   const board = refreshOffers(moved);
+  // §133.10: система прибытия — тоже посещение (считается для «Сверхновой»).
+  const visited = noteVisit(moved);
   return {
     ...moved,
+    visitedSystems: visited.visitedSystems,
     missionOffers: board.missionOffers,
     missionRng: board.missionRng,
     nextMissionId: board.nextMissionId,
@@ -2130,8 +2137,12 @@ export function galacticJump(state: GameState, now = 0): GalacticJumpResult {
   if (state.flight || state.combat) return { state, error: 'in-flight' };
   if (!state.ship.galacticHyperdrive) return { state, error: 'no-drive' };
 
-  // §133.6: улетели с беженцами — событие переходит в «вывезли».
-  const escaped = escapeSupernova(state, now).state;
+  /*
+   * §133.10: уход галактическим прыжком — это выход БЕЗ награды. Люди летят
+   * с тобой, но высадить их и получить камни уже негде: событие закрыто.
+   * Станция при этом гибнет, как и в любом другом исходе.
+   */
+  const escaped = galacticEscapeSupernova(state, now).state;
 
   return {
     state: {
@@ -3027,7 +3038,7 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
    * §133.6: прибытие — единственное место, где решается судьба «Сверхновой».
    * Сначала высадка (если летели с беженцами), потом возможный старт события.
    */
-  return afterArrival(arrived, at, events);
+  return afterArrival(noteVisit(arrived), at, events);
 }
 
 /**
@@ -3642,5 +3653,12 @@ export function deserialize(json: string): GameState {
   }
   if (!Array.isArray(state.destroyedStations)) state.destroyedStations = [];
   if (typeof state.supernovaEndedAt !== 'number') state.supernovaEndedAt = 0;
+  if (typeof state.supernovaDone !== 'boolean') state.supernovaDone = false;
+  /*
+   * §133.10: до этого условия старта считали все прыжки, а не новые системы.
+   * Старым сейвам ставим только текущую систему: пусть «новые» начинают
+   * копиться с момента обновления, а не выстреливают сразу.
+   */
+  if (!Array.isArray(state.visitedSystems)) state.visitedSystems = [stationKey(state.galaxy, state.system)];
   return state;
 }

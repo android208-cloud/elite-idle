@@ -31,8 +31,6 @@ import {
   supernovaOf,
   supernovaProgress,
   SUPERNOVA_REFUGEES_TONS,
-  supernovaFreeJump,
-  freeJumpLeft,
   SUPERNOVA_TRIGGER_KILLS,
   takeRefugees,
   buy,
@@ -948,10 +946,9 @@ function flightButtons(): string {
 
   // Перелёт: цель должна быть выбрана, быть не текущей и хватать топлива.
   let jumpReason = '';
-  const freeJump = supernovaFreeJump(state, Date.now());
   if (!dest) jumpReason = 'Сначала выберите цель на карте';
   else if (selected === state.system) jumpReason = 'Вы уже здесь';
-  else if (d > state.fuel && !freeJump) jumpReason = 'Не хватает топлива';
+  else if (d > state.fuel) jumpReason = 'Не хватает топлива';
 
   const jump = `<button class="btn" data-action="jump" data-to="${selected ?? ''}" ${jumpReason ? 'disabled' : ''}>Перелёт</button>`;
 
@@ -1240,7 +1237,7 @@ function mapScreen(): string {
     let reason = '';
     if (state.flight) reason = JUMP_ERRORS['in-flight'];
     else if (selected === state.system) reason = JUMP_ERRORS['same-system'];
-    else if (d > state.fuel && !supernovaFreeJump(state, Date.now())) reason = JUMP_ERRORS['too-far'];
+    else if (d > state.fuel) reason = JUMP_ERRORS['too-far'];
     /*
      * §132.9: ПРИЧИНА ОТКАЗА — В ПРАВОМ ВЕРХНЕМ УГЛУ.
      *
@@ -2253,13 +2250,7 @@ function marketScreen(): string {
       <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
-    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами.${
-      sn && !sn.refugees
-        ? (freeJumpLeft(state, Date.now()) > 0
-            ? ` Бесплатный прыжок через ${freeJumpLeft(state, Date.now())} с.`
-            : ' Прыжок можно совершить бесплатно, не берите топливо в расчёт.')
-        : ''
-    }</div>` : ''}</div></div>${locked ? refugeeCard + leaveCards : rows}`;
+    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами. Нет топлива на прыжок — уходите в другую галактику, но награды не будет.</div>` : ''}</div></div>${locked ? refugeeCard + leaveCards : rows}`;
 }
 
 /*
