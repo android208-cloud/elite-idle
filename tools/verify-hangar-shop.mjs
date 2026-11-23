@@ -109,7 +109,7 @@ async function openHangar(system, ship) {
   click(fw, tabBtn(fw, 'hangar'));
   await new Promise((r) => setTimeout(r, 250));
   const fh = content(fw);
-  check('в ангаре Аддер', /Adder · ваш корабль в ангаре/.test(fh));
+  check('в ангаре Аддер', /Adder · пристыкован/.test(fh));
   check('в ангаре бак 6.0 из 6.0', /6\.0 св\. г\. из 6\.0/.test(fh.replace(/\s+/g, ' ')));
   check('большого трюма для Аддера нет', !/Увеличенный трюм/.test(fh));
   check('лазер купить можно — это первое дело', /Импульсный лазер/.test(fh));
@@ -128,7 +128,7 @@ const lave = await openHangar(7, {});
 const laveText = content(lave);
 check('ангар открылся', lave.document.getElementById('title').textContent === 'Ангар',
   lave.document.getElementById('title').textContent);
-check('модель корабля названа по данным', /Cobra Mk III · ваш корабль в ангаре/.test(laveText));
+check('модель корабля названа по данным', /Cobra Mk III · пристыкован/.test(laveText));
 /* §109: здесь корабль — Кобра, и шапка обязана сказать «Cobra Mk III».
  * Проверка парная к «Аддеру» выше: вместе они и означают «динамическое». */
 click(lave, tabBtn(lave, 'ship'));

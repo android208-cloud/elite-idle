@@ -21,7 +21,7 @@ export interface Commodity {
 export const COMMODITIES: readonly Commodity[] = [
   { name: 'Еда', basePrice: 0x13, gradient: -0x02, baseQuantity: 0x06, mask: 0x01, unit: 0 },
   { name: 'Текстиль', basePrice: 0x14, gradient: -0x01, baseQuantity: 0x0a, mask: 0x03, unit: 0 },
-  { name: 'Радиоактивные материалы', basePrice: 0x41, gradient: -0x03, baseQuantity: 0x02, mask: 0x07, unit: 0 },
+  { name: 'Радиоактивные вещества', basePrice: 0x41, gradient: -0x03, baseQuantity: 0x02, mask: 0x07, unit: 0 },
   { name: 'Рабы / роботы-рабы', basePrice: 0x28, gradient: -0x05, baseQuantity: 0xe2, mask: 0x1f, unit: 0 },
   { name: 'Спиртное и вина', basePrice: 0x53, gradient: -0x05, baseQuantity: 0xfb, mask: 0x0f, unit: 0 },
   { name: 'Предметы роскоши', basePrice: 0xc4, gradient: 0x08, baseQuantity: 0x36, mask: 0x03, unit: 0 },

@@ -591,7 +591,7 @@ check('§132.8: в панели видна метка сборки', /§132\.\d+
   p9.querySelector('.uied-build')?.textContent);
 
 const f9 = p9.querySelector('[data-ui-prop="text"]');
-f9.value = f9.value.replace(' · ваш корабль в ангаре', '');
+f9.value = f9.value.replace(' · пристыкован', '');
 f9.dispatchEvent(new w9.Event('input', { bubbles: true }));
 check('§132.8: подпись правится', caption() === 'Adder', caption());
 
@@ -625,7 +625,7 @@ await wait(300);
 check('§132.8: второе нажатие стирает все правки',
   Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY) ?? '{}')).every(
     (k) => Object.keys(JSON.parse(w9.localStorage.getItem(EDIT_KEY))[k]).length === 0));
-check('§132.8: и текст вернулся к живому', /Cobra Mk III · ваш корабль в ангаре/.test(caption()), caption());
+check('§132.8: и текст вернулся к живому', /Cobra Mk III · пристыкован/.test(caption()), caption());
 w9.close();
 
 /*

@@ -104,7 +104,7 @@ check('§131: она выше остальных карточек', Number(ws.zI
 
 // Порядок: сперва модель корабля, потом топливо, потом всё остальное.
 const cards = [...main.querySelectorAll(':scope > .card')];
-check('§131: карточка корабля идёт раньше топлива', /корабль в ангаре/.test(cards[0]?.textContent ?? ''));
+check('§131: карточка корабля идёт раньше топлива', /пристыкован/.test(cards[0]?.textContent ?? ''));
 const order = [...main.children];
 check('§131: топливо — после модели корабля', order.indexOf(wrap) === 1, `${order.indexOf(wrap)}`);
 check('§131: под топливом остальной список',

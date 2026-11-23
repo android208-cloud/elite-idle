@@ -118,7 +118,18 @@ async function openContracts(opts) {
   check('кнопка стоит последней в строке — то есть справа',
     !!open && row?.classList.contains('row') && row.lastElementChild === open,
     row?.className ?? 'нет строки');
-  check('слева от неё заголовок «Станция»', /Станция/.test(row?.firstElementChild?.textContent ?? ''));
+  /*
+   * §133.4: кнопка переехала из строки заголовка в нижнюю строку действий —
+   * рядом с «Купить станцию», у правого края. Проверяем и это: она ниже
+   * заголовка и левее неё стоит действие станции.
+   */
+  const title = card.querySelector('h2');
+  check('кнопка ниже заголовка станции',
+    !!open && !!title && (title.compareDocumentPosition(open) & w.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  check('слева от неё — действие станции',
+    /Купить станцию|Ваша станция|--/.test(row?.firstElementChild?.textContent ?? ''),
+    row?.firstElementChild?.textContent?.trim() ?? '');
+  check('кнопка тональная, как соседняя', open?.classList.contains('tonal'), open?.className);
   check('на рынке в шапке по-прежнему деньги', /CR$/.test(w.document.getElementById('top-info').textContent),
     w.document.getElementById('top-info').textContent);
   w.close();
@@ -131,6 +142,17 @@ async function openContracts(opts) {
     w.document.getElementById('title').textContent);
   check('в шапке справа — репутация', w.document.getElementById('top-info').textContent === 'Репутация +4',
     w.document.getElementById('top-info').textContent);
+  /*
+   * §133.4: счётчик «0 из 3 в работе» живёт на карточке доски (c1), а не в
+   * шапке экрана; шапка — «Назад» и репутация.
+   */
+  const cards = [...w.document.querySelectorAll('#content .card')];
+  check('в шапке экрана нет счётчика контрактов', !/в работе/.test(cards[0]?.textContent ?? ''),
+    cards[0]?.textContent?.replace(/\s+/g, ' ').slice(0, 60));
+  check('счётчик перенесён на карточку доски', /0 из 3 в работе/.test(cards[1]?.textContent ?? ''),
+    cards[1]?.textContent?.replace(/\s+/g, ' ').slice(0, 60));
+  check('«Назад» — без стрелки', cards[0]?.querySelector('button')?.textContent.trim() === 'Назад',
+    cards[0]?.querySelector('button')?.textContent);
   check('доска из трёх предложений', w.document.querySelectorAll('[data-action="mission-take"]').length === 3,
     String(w.document.querySelectorAll('[data-action="mission-take"]').length));
   check('три предложения названы словами', /Курьер/.test(text(w)) && /Пассажиры/.test(text(w)));
@@ -171,7 +193,7 @@ async function openContracts(opts) {
   // Возврат на рынок: кнопка на карточке станции должна показать, что в работе.
   click(w, byAction(w, 'contracts-close'));
   await wait(300);
-  check('кнопка на станции считает взятые контракты', /Контракты \(1\) →/.test(text(w)),
+  check('кнопка на станции считает взятые контракты', /Контракты \(1\)/.test(text(w)),
     byAction(w, 'contracts-open')?.textContent.trim() ?? 'нет кнопки');
   w.close();
 }

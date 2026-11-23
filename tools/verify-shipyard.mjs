@@ -169,7 +169,7 @@ async function hangar(opts) {
   const canvas = w.document.getElementById('ship-model');
   check('ангар рисует модель своего корабля, а не Кобру',
     canvas?.dataset.ship === 'python', canvas?.dataset.ship ?? 'нет канваса');
-  check('и подпись называет тот же корабль', /Python · ваш корабль в ангаре/.test(content(w)));
+  check('и подпись называет тот же корабль', /Python · пристыкован/.test(content(w)));
   w.close();
 }
 {

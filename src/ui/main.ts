@@ -2079,24 +2079,22 @@ function holdScreen(): string {
  * Покупка в два нажатия, как корабль (§102.4) и пилот (§105): сумма такая,
  * что случайный тап по экрану не должен её тратить.
  */
-function stationBuyRow(): string {
+function stationBuyActions(): string {
   const system = currentSystem(state);
   const price = stationPrice(system);
 
   if (state.stations.includes(state.system)) {
-    return `<div class="row" style="margin-top:10px"><span class="chip">Ваша станция</span></div>`;
+    return `<span class="chip">Ваша станция</span>`;
   }
 
   const affordable = state.cash >= price * 10;
   if (stationBuyOpen && affordable) {
     // Цена — только здесь: решение уже принято, а платить вслепую нельзя.
-    return `<div class="row" style="margin-top:10px">
-      <button class="btn danger" data-action="station-buy-confirm">Подтвердить · ${cash(price)}</button>
-      <button class="btn text" data-action="station-buy-cancel">Отмена</button></div>`;
+    return `<button class="btn danger" data-action="station-buy-confirm">Подтвердить · ${cash(price)}</button>
+      <button class="btn text" data-action="station-buy-cancel">Отмена</button>`;
   }
 
-  return `<div class="row" style="margin-top:10px">
-    <button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : '--'}</button></div>`;
+  return `<button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : '--'}</button>`;
 }
 
 function marketScreen(): string {
@@ -2164,18 +2162,19 @@ function marketScreen(): string {
    *
    * Пользователь: «Контракты отдельным экраном со входом по кнопке
    * „Контракты" на карточке „Станция" на экране „Рынок", эта кнопка будет
-   * справа». Поэтому кнопка стоит в строке заголовка, у правого края, а не
-   * строкой доски под ценами: карточка станции и без того высокая, а вход
-   * должен быть на виду.
+   * справа». §133.4: кнопка переехала из строки заголовка в нижнюю строку
+   * действий — рядом с «Купить станцию», у правого края (в редакторе она
+   * была опущена на высоту этой строки и покрашена тональным цветом).
    */
   const takenNow = missionsOf(state).length;
-  return `<div class="sticky-fuel"><div class="card">
-    <div class="row"><h2 style="margin:0">Станция ${currentSystem(state).name}</h2>
-      <span class="spacer"></span>
-      <button class="btn text" data-action="contracts-open">Контракты${takenNow > 0 ? ` (${takenNow})` : ''} →</button></div>
-    <div class="sub" style="margin-top:2px">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
+  return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+    <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
-    ${stationBuyRow()}
+    <div class="row" style="margin-top:10px">
+      ${stationBuyActions()}
+      <span class="spacer"></span>
+      <button class="btn tonal" data-action="contracts-open">Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
+    </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div></div>${rows}`;
 }
 
@@ -2286,11 +2285,19 @@ function contractsScreen(): string {
     </div>`;
   }).join('');
 
+  /*
+   * §133.4: шапка экрана — только «Назад» и что даёт репутация.
+   *
+   * Пользователь: «В контактах „0 из 3 в работе" перенеси на карточку c1».
+   * Счётчик в работе — это про доску, а не про навигацию, поэтому он уехал в
+   * заголовок карточки «Доска станции» (она и есть c1, когда ничего не взято).
+   *
+   * «Назад» стала обычной кнопкой без стрелки: в редакторе пользователь снял
+   * «←» и покрасил её в основной цвет.
+   */
   return `<div class="card">
-    <div class="row"><button class="btn text" data-action="contracts-close">← Назад</button>
-      <span class="spacer"></span>
-      <span class="chip">${active.length} из ${MISSION_OFFERS} в работе</span></div>
-    <div class="sub" style="margin-top:2px">${repNote}</div>
+    <div class="row"><button class="btn" data-action="contracts-close">Назад</button></div>
+    <div class="sub" style="margin-top:8px">${repNote}</div>
   </div>
   ${active.length > 0
     ? `<div class="card"><h2>В работе</h2>
@@ -2298,8 +2305,11 @@ function contractsScreen(): string {
           missionTons(state) > 0 ? ` Контракты занимают ${missionTons(state)} т трюма.` : ''}</div></div>`
     : ''}
   ${activeCards}
-  <div class="card"><h2>Доска станции ${here.name}</h2>
-    <div class="sub">Три предложения, обновляются при каждом прибытии. В работе может быть ${MISSION_OFFERS} контракта; отказ до срока бесплатен, но стоит единицы репутации.</div>
+  <div class="card">
+    <div class="row"><h2 style="margin:0">Доска станции ${here.name}</h2>
+      <span class="spacer"></span>
+      <span class="chip">${active.length} из ${MISSION_OFFERS} в работе</span></div>
+    <div class="sub" style="margin-top:8px">Три предложения, обновляются при каждом прибытии. В работе может быть ${MISSION_OFFERS} контракта; отказ до срока бесплатен, но стоит единицы репутации.</div>
   </div>
   ${board.length > 0
     ? offers
@@ -2358,7 +2368,7 @@ function hangarScreen(): string {
   const model = docked
     ? `<div class="card ship-view">
       <canvas id="ship-model" data-ship="${state.ship.model}" aria-label="Модель корабля ${name}"></canvas>
-      <div class="sub" style="text-align:center">${name} · ваш корабль в ангаре</div>
+      <div class="sub" style="text-align:center">${name} · пристыкован</div>
     </div>`
     : '';
   /*
@@ -3638,7 +3648,7 @@ function drawShipFrame(now: number): void {
    *
    * Раньше `drawShipModel` вызывался без `ship`, а по умолчанию в нём
    * зашита Кобра — и в ангаре всегда стояла она, даже когда игрок уже
-   * купил Питон и подпись честно говорила «Python · ваш корабль в ангаре».
+   * купил Питон и подпись честно говорила «Python · пристыкован».
    * Модель берём из `data-ship`, чтобы её нельзя было рассинхронизировать
    * с подписью: и то, и другое пишется из `state.ship.model`.
    */
