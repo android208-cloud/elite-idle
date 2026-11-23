@@ -131,7 +131,7 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
     const w = dom.window;
     const stats = [...w.document.querySelectorAll('.stat')];
     const status = stats.find((e) => e.textContent.includes('Статус'));
-    const cargoCard = [...w.document.querySelectorAll('#content > .card')].find((c) => c.querySelector('h2')?.textContent === 'Груз');
+    const cargoCard = [...w.document.querySelectorAll('#content > .card')].find((c) => c.querySelector('h2')?.textContent === 'Груз в трюме');
     return { status, cargoCard, text: w.document.getElementById('content').textContent };
   }
 
@@ -141,7 +141,7 @@ async function patrol({ legal = 0, cargo = null, fuel = 35 } = {}) {
   {
     const { status, cargoCard } = await shipScreen({ legal: 0 });
     check('§83.2: чистый — «Статус» без рамки', !status?.className.includes('danger'));
-    check('§83.1: чистый — «Груз» без рамки', !cargoCard?.className.includes('danger'));
+    check('§83.1: чистый — «Груз в трюме» без рамки', !cargoCard?.className.includes('danger'));
   }
   /*
    * §83.2: «Статус» больше НЕ красится — пользователь сказал «тогда ладно,

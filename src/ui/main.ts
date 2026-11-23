@@ -676,7 +676,11 @@ function flightCard(): string {
   // §102.3: бак — свойство корабля.
   const tank = maxFuel(state.ship);
   if (!f) {
-    return `<div class="card"><h2>На станции ${currentSystem(state).name}</h2>
+    /*
+     * §133.5: «На станции LAVE» → «Станция LAVE» (правка текста в редакторе):
+     * предлог ни к чему, имя системы и так отвечает на «где я».
+     */
+    return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
       <div class="sub">${systemInfo(state.system)}</div></div>`;
   }
   /*
@@ -867,8 +871,8 @@ function shipScreen(): string {
       ? `<div class="card warn"><h2>Лазера нет</h2>
       <div class="sub">Без лазера вы не можете ни нападать, ни обороняться: карточка встречи предложит только «Бежать» и «Пропустить», а автобой не выиграет ни одного боя. Купите лазер в ангаре, пока стоите у причала.</div></div>`
       : ''}
-    <div class="card"><h2>Оборудование</h2><div class="muted">${equipmentSummary()}</div></div>
-    <div class="card${smuggling ? ' danger' : ''}"><h2>Груз</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
+    <div class="card"><h2>Оснащение корабля</h2><div class="muted">${equipmentSummary()}</div></div>
+    <div class="card${smuggling ? ' danger' : ''}"><h2>Груз в трюме</h2><div class="muted">${items || 'Трюм пуст'}</div></div>`;
 }
 
 /**
@@ -1285,7 +1289,7 @@ function mapScreen(): string {
     <div class="card map-card">
       <h2>Окрестности</h2>
       <canvas id="map-local" data-local="1"></canvas>
-      <div class="sub" id="local-hint">Радиус — по текущему топливу. Нажмите на точку, чтобы выбрать цель.</div>
+      <div class="sub" id="local-hint">Доступный радиус прыжка. Нажмите на точку, чтобы выбрать цель.</div>
     </div>
     <div class="card">${info}</div>`;
 }
@@ -2385,10 +2389,16 @@ function hangarScreen(): string {
    * §131.12: у прилипшей карточки верхние углы не гасятся, а закрашиваются
    * фоном страницы — скругление остаётся, а мелькать в нём нечему.
    */
-  return `${model}<div class="sticky-fuel"><div class="card"><h2>Топливо</h2>
+  /*
+   * §133.5: в редакторе карточке топлива задана высота 140, а кнопкам —
+   * сдвиг на 6 вниз. Высоту ставим как `min-height`, а не `height`: список
+   * ниже бывает любой длины, а обрезать его нельзя — карточка не коробка с
+   * прокруткой, содержимое просто вылезло бы за скругление.
+   */
+  return `${model}<div class="sticky-fuel"><div class="card" style="min-height:140px"><h2>Топливо</h2>
       <div class="sub">${ly(state.fuel)} из ${ly(tank)} · цена 0.2 CR за св. год</div>
       <div class="progress"><div style="width:${(state.fuel / tank) * 100}%"></div></div>
-      <div class="row">
+      <div class="row" style="margin-top:6px">
         <button class="btn tonal" data-action="refuel" data-n="10" ${docked && missing > 0 ? '' : 'disabled'}>+1.0</button>
         <button class="btn" data-action="refuel" data-n="${missing}" ${docked && missing > 0 ? '' : 'disabled'}>Полный бак</button>
       </div></div></div>
@@ -2472,7 +2482,9 @@ function shipyardCard(): string {
    * Теперь витрина просто показывает то, что есть. Где продают Анаконду,
    * игрок выясняет сам — это и есть открытие галактики.
    */
-  return `<div class="card"><h2>Верфь</h2>
+  // §133.5: в редакторе карточке верфи задана высота 150 — тоже `min-height`:
+  // кораблей в продаже бывает много, а фиксированная высота их обрезала бы.
+  return `<div class="card" style="min-height:150px"><h2>Верфь</h2>
       <div class="sub">Зачёт вашего ${SHIPS[mine].name} — ${cr(tradeIn)}. Платится только разница.</div>
       ${rows}</div>`;
 }
