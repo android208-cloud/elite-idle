@@ -81,6 +81,16 @@ import {
   escapeProgress,
   settleWonEncounter,
   type EncounterRole,
+  abandonMission,
+  deliverMission,
+  missionsOf,
+  missionRepOf,
+  missionTons,
+  offersOf,
+  takeMission,
+  MISSION_OFFERS,
+  type Mission,
+  type MissionKind,
 } from '../core/state.ts';
 import {
   formatSpan,
@@ -158,6 +168,12 @@ let hireOpen = false;
 
 /* §127: подтверждение покупки станции — живёт только на экране рынка. */
 let stationBuyOpen = false;
+
+/*
+ * §133.3: экран «Контракты» — поверх вкладки «Рынок», только на станции.
+ * Вкладка закрывает его так же, как экран пилотов (§115).
+ */
+let contractsOpen = false;
 
 /* §128: чьи панели «перелёт» и «корабль» раскрыты (одна за раз). */
 let movePilotFor: number | null = null;
@@ -2143,11 +2159,151 @@ function marketScreen(): string {
    * остаётся при прокрутке длинного списка товаров, а под неё уползают цены.
    * Своего кода у рынка нет — это тот же класс и тот же `syncStickyCards`.
    */
-  return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
-    <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
+  /*
+   * §133.3: КОНТРАКТЫ — ОТДЕЛЬНЫЙ ЭКРАН, ВХОД С КАРТОЧКИ СТАНЦИИ.
+   *
+   * Пользователь: «Контракты отдельным экраном со входом по кнопке
+   * „Контракты" на карточке „Станция" на экране „Рынок", эта кнопка будет
+   * справа». Поэтому кнопка стоит в строке заголовка, у правого края, а не
+   * строкой доски под ценами: карточка станции и без того высокая, а вход
+   * должен быть на виду.
+   */
+  const takenNow = missionsOf(state).length;
+  return `<div class="sticky-fuel"><div class="card">
+    <div class="row"><h2 style="margin:0">Станция ${currentSystem(state).name}</h2>
+      <span class="spacer"></span>
+      <button class="btn text" data-action="contracts-open">Контракты${takenNow > 0 ? ` (${takenNow})` : ''} →</button></div>
+    <div class="sub" style="margin-top:2px">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     ${stationBuyRow()}
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div></div>${rows}`;
+}
+
+/*
+ * §133.3: ЭКРАН «КОНТРАКТЫ».
+ *
+ * Живёт поверх вкладки «Рынок» (как «Пилоты» поверх ангара) и только на
+ * станции: в полёте доска не нужна — брать нечего, сдавать негде.
+ *
+ * Две карточки: сверху взятые, ниже доска. Взятые — первыми, потому что
+ * именно они горят по сроку: игрок открывает экран, чтобы понять, что у него
+ * в работе, а не что предлагают.
+ *
+ * Репутация — справа в шапке экрана (решение пользователя). Здесь же одной
+ * строкой сказано, что она делает: иначе «+4» читается как что угодно.
+ */
+const MISSION_KIND_NAMES: Record<MissionKind, string> = {
+  courier: 'Курьер',
+  passenger: 'Пассажиры',
+};
+
+/** Что за контракт — одной строкой, без легенды на пол-экрана. */
+function missionNote(m: Mission): string {
+  if (m.kind === 'courier') return 'Документы и посылки: места в трюме не просят';
+  return `Люди на борту: ${m.tons} ${plural(m.tons, 'тонна', 'тонны', 'тонн')} трюма занято`;
+}
+
+/** Срок в игровых часах — в реальные по нынешнему темпу. */
+function missionRealMs(hours: number): number {
+  return Math.round((hours * 3_600_000) / Math.max(1, settings.speed || 1));
+}
+
+function contractsScreen(): string {
+  const now = Date.now();
+  const systems = systemsOf(state.galaxy);
+  const here = systems[state.system];
+  const rep = missionRepOf(state);
+  const active = missionsOf(state);
+  const board = offersOf(state);
+
+  /*
+   * §91: в шапке — значение, но репутация без подписи читалась бы как
+   * непонятное «+4». Поэтому подпись здесь есть, а подробность — строкой
+   * ниже: сколько это даёт к оплате.
+   */
+  const repPct = Math.min(10, Math.abs(rep)) * 2;
+  const repNote = rep === 0
+    ? 'Репутация нулевая: оплата по номиналу.'
+    : rep > 0
+      ? `Репутация даёт +${repPct} % к оплате (потолок +20 %).`
+      : `Репутация отнимает ${repPct} % от оплаты (предел −20 %).`;
+
+  const activeCards = active.length === 0
+    ? ''
+    : active.map((m) => {
+        const sys = systems[m.to];
+        const left = m.deadline - now;
+        const ready = m.to === state.system;
+        /*
+         * Кнопка «Сдать» появляется только там, где сдавать можно, — и
+         * вместо неё сказано, где именно это будет. Серая кнопка без
+         * причины запрещена правилом §123.
+         */
+        const action = ready
+          ? `<button class="btn" data-action="mission-deliver" data-id="${m.id}">Сдать · ${cr(m.reward)}</button>`
+          : `<span class="muted">Сдать можно в системе ${sys.name}</span>`;
+        return `<div class="card">
+        <div class="row"><h2 style="margin:0">${MISSION_KIND_NAMES[m.kind]} · ${sys.name}</h2>
+          <span class="spacer"></span><span class="chip">${ly(distance(here, sys))}</span></div>
+        <div class="sub" style="margin-top:2px">${left > 0
+          ? `Осталось <span data-mission-left="${m.id}">${formatSpan(left)}</span>`
+          : 'Срок вышел — контракт сорвётся в ближайший тик'}</div>
+        <div class="grid" style="margin-top:10px">
+          ${stat('Награда', cr(m.reward))}
+          ${stat('Штраф за срыв', cr(m.penalty), true)}
+        </div>
+        <div class="sub" style="margin-top:8px">${missionNote(m)}</div>
+        <div class="row" style="margin-top:12px">${action}<span class="spacer"></span>
+          <button class="btn text" data-action="mission-abandon" data-id="${m.id}">Отказаться</button></div>
+      </div>`;
+      }).join('');
+
+  const offers = board.map((m) => {
+    const sys = systems[m.to];
+    const full = active.length >= MISSION_OFFERS;
+    const noRoom = m.tons > state.holdSpace;
+    /*
+     * Причина отказа — словами (§123), и она же объясняет, что делать:
+     * «нет места» без числа заставляет игрока считать в уме.
+     */
+    const reason = full
+      ? `В работе уже ${MISSION_OFFERS} контракта — сначала сдайте или откажитесь от одного`
+      : noRoom
+        ? `Нужно ${m.tons} т трюма, свободно ${state.holdSpace} т`
+        : '';
+    return `<div class="card">
+      <div class="row"><h2 style="margin:0">${MISSION_KIND_NAMES[m.kind]} · ${sys.name}</h2>
+        <span class="spacer"></span><span class="chip">${ly(distance(here, sys))}</span></div>
+      <div class="sub" style="margin-top:2px">${missionNote(m)}</div>
+      <div class="grid" style="margin-top:10px">
+        ${stat('Награда', cr(m.reward))}
+        ${stat('Срок', formatSpan(missionRealMs(m.hours)))}
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" data-action="mission-take" data-id="${m.id}" ${reason ? 'disabled' : ''}>Взять</button>
+        ${reason ? `<span class="muted">${reason}</span>` : `<span class="muted">Штраф за срыв ${cr(m.penalty)}</span>`}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="row"><button class="btn text" data-action="contracts-close">← Назад</button>
+      <span class="spacer"></span>
+      <span class="chip">${active.length} из ${MISSION_OFFERS} в работе</span></div>
+    <div class="sub" style="margin-top:2px">${repNote}</div>
+  </div>
+  ${active.length > 0
+    ? `<div class="card"><h2>В работе</h2>
+        <div class="sub">Срок идёт и в закрытой вкладке: контракт сорвётся сам, со штрафом.${
+          missionTons(state) > 0 ? ` Контракты занимают ${missionTons(state)} т трюма.` : ''}</div></div>`
+    : ''}
+  ${activeCards}
+  <div class="card"><h2>Доска станции ${here.name}</h2>
+    <div class="sub">Три предложения, обновляются при каждом прибытии. В работе может быть ${MISSION_OFFERS} контракта; отказ до срока бесплатен, но стоит единицы репутации.</div>
+  </div>
+  ${board.length > 0
+    ? offers
+    : `<div class="card"><div class="sub">Предложений нет: доска обновится при следующем прибытии.</div></div>`}`;
 }
 
 /** Номер предмета на верфи (1 — топливо), как в EQSHP; используется в подсказке. */
@@ -3152,10 +3308,21 @@ function tickCareer(state: GameState, now: number): GameState {
  * экране стояло «Корабль» слева и «КОРАБЛЬ» справа. Осталось значение:
  * слева ГДЕ, справа ЧТО здесь важно (см. `topValue` в `top-bar.ts`).
  */
-function topBar(busy: boolean): void {
+function topBar(busy: boolean, override: string | null = null): void {
   const el = document.getElementById('top-info');
   if (!el) return;
-  el.textContent = topValue(state, busy ? null : tab);
+  el.textContent = override ?? topValue(state, busy ? null : tab);
+}
+
+/**
+ * §133.3: репутация в шапке — «Репутация +4».
+ *
+ * Подпись здесь нужна: без неё «+4» в правом верхнем углу читается как что
+ * угодно. Заголовок «Контракты» её не дублирует — он говорит, где вы.
+ */
+function repLabel(rep: number): string {
+  const sign = rep > 0 ? '+' : rep < 0 ? '−' : '';
+  return `Репутация ${sign}${Math.abs(rep)}`;
 }
 
 /**
@@ -3223,6 +3390,8 @@ function editorScreen(): string {
   if (state.combat) return 'combat';
   if (state.salvage) return 'salvage';
   if (pilotsOpen && tab === 'hangar') return 'pilots';
+  // §133.3: у доски контрактов своя разметка — правки не должны налезать на рынок.
+  if (contractsOpen && tab === 'market' && !state.flight) return 'contracts';
   return tab;
 }
 
@@ -3268,6 +3437,12 @@ function render(): void {
   // закрывается (это делает обработчик вкладок), как и экран отладки.
   const showPilots = pilotsOpen && !showDev && !inCombat && !inSalvage && tab === 'hangar';
   /*
+   * §133.3: контракты — поверх рынка и только на станции. В полёте вкладка
+   * называется «Трюм», и доски там нет вовсе.
+   */
+  const showContracts = contractsOpen && !showDev && !inCombat && !inSalvage
+    && tab === 'market' && !state.flight;
+  /*
    * §118: предупреждение о второй вкладке — поверх ЛЮБОГО экрана, включая
    * бой: если сохранение сейчас заблокировано, игрок обязан это знать, а
    * не выяснять через час, куда делся прогресс.
@@ -3280,7 +3455,9 @@ function render(): void {
         ? devScreen()
         : showPilots
           ? pilotsScreen()
-          : screens[tab]();
+          : showContracts
+            ? contractsScreen()
+            : screens[tab]();
   content.innerHTML = (otherTab && !tabTaken ? tabWarningCard() : '') + content0;
   document.getElementById('title')!.textContent = inCombat
     ? 'Бой'
@@ -3290,8 +3467,14 @@ function render(): void {
         ? 'Отладка'
         : showPilots
           ? 'Пилоты'
-          : tabLabel(tab);
-  topBar(inCombat || inSalvage);
+          : showContracts
+            ? 'Контракты'
+            : tabLabel(tab);
+  /*
+   * §133.3: репутация — справа в шапке экрана контрактов (решение
+   * пользователя). В остальных местах шапка живёт по правилу §91.
+   */
+  topBar(inCombat || inSalvage, showContracts ? repLabel(missionRepOf(state)) : null);
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
     const off = blocked.includes(t.id);
@@ -3599,6 +3782,15 @@ function updateFlight(): void {
     const pilot = state.pilots.find((p) => p.id === Number(el.dataset.pilotNext));
     if (pilot) el.textContent = formatSpan(pilot.nextRunAt - now);
   }
+  /*
+   * §133.3: обратный отсчёт контрактов — тем же тиком, что и у пилотов:
+   * срок горит постоянно, а полная перерисовка раз в секунду убивала бы
+   * обработчики кнопок.
+   */
+  for (const el of document.querySelectorAll<HTMLElement>('[data-mission-left]')) {
+    const m = missionsOf(state).find((x) => x.id === Number(el.dataset.missionLeft));
+    if (m) el.textContent = formatSpan(m.deadline - now);
+  }
   const encEta = document.getElementById('enc-eta');
   if (state.encounter && encEta) encEta.textContent = fmtDur(state.encounter.resolveAt - now);
 }
@@ -3668,6 +3860,7 @@ function onAction(el: HTMLElement): void {
        */
       devOpen = false;
       pilotsOpen = false; // §115: экран пилотов — тоже
+      contractsOpen = false; // §133.3: доска контрактов — тоже
       // §102.4: подтверждение покупки корабля живёт только на вкладке.
       confirmShip = null;
       // §105: то же для найма и открытого списка маршрутов.
@@ -4201,6 +4394,58 @@ function onAction(el: HTMLElement): void {
       hireOpen = false;
       hireShip = null;
       render();
+      break;
+    }
+    /*
+     * §133.3: доска контрактов. Вход с карточки станции, выход — «Назад»
+     * или любая вкладка.
+     */
+    case 'contracts-open': {
+      contractsOpen = true;
+      render();
+      break;
+    }
+    case 'contracts-close': {
+      contractsOpen = false;
+      render();
+      break;
+    }
+    case 'mission-take': {
+      const now = Date.now();
+      const r = takeMission(state, Number(el.dataset.id), now, settings);
+      if (r.error) {
+        // Кнопка запрещена, но запрет дублируется правилом в ядре (§123).
+        addLog(r.error === 'no-hold' ? 'Контракт не взят: нет места в трюме или в работе уже три' : 'Контракт уже недоступен');
+        break;
+      }
+      state = r.state;
+      const m = missionsOf(state).find((x) => x.id === Number(el.dataset.id));
+      if (m) {
+        addLog(`Контракт взят: ${MISSION_KIND_NAMES[m.kind]} · ${systemsOf(state.galaxy)[m.to].name}, срок ${formatSpan(m.deadline - now)}`);
+      }
+      break;
+    }
+    case 'mission-deliver': {
+      const r = deliverMission(state, Number(el.dataset.id));
+      if (r.error) {
+        addLog(r.error === 'wrong-system' ? 'Сдать контракт можно только в целевой системе' : 'Контракт уже не в работе');
+        break;
+      }
+      const done = missionsOf(state).find((x) => x.id === Number(el.dataset.id));
+      state = r.state;
+      if (done) {
+        addLog(`Контракт сдан: ${systemsOf(state.galaxy)[done.to].name}, +${cr(done.reward)}`);
+      }
+      break;
+    }
+    case 'mission-abandon': {
+      const before = missionsOf(state).find((x) => x.id === Number(el.dataset.id));
+      const r = abandonMission(state, Number(el.dataset.id));
+      if (r.error) break;
+      state = r.state;
+      if (before) {
+        addLog(`Контракт отменён: ${systemsOf(state.galaxy)[before.to].name}, репутация −1`);
+      }
       break;
     }
     case 'dev-editor': {
