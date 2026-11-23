@@ -433,6 +433,8 @@ const JUMP_ERRORS: Record<JumpError, string> = {
   // §78: патруль требует полного боекомплекта и запаса топлива.
   'no-missiles': 'Для патруля нужно 4 ракеты',
   'no-fuel': 'Мало топлива даже на возврат',
+  // §133.12: во время «Сверхновой» патруль и пиратство закрыты.
+  'locked': 'Станция занята беженцами: патруль и пиратство недоступны',
 };
 
 const SHIP_ERRORS: Record<ShipError, string> = {
@@ -960,7 +962,9 @@ function flightButtons(): string {
    */
   const pirate = isCriminal(state.legal);
   let patrolReason = '';
-  if (state.ship.missiles < patrolMissilesRequired(state.ship)) {
+  if (stationLocked(state)) {
+    patrolReason = JUMP_ERRORS['locked'];
+  } else if (state.ship.missiles < patrolMissilesRequired(state.ship)) {
     patrolReason = `Не полный боекомплект: ${state.ship.missiles} из ${patrolMissilesRequired(state.ship)}`;
   } else if (state.fuel <= PATROL_RETURN_RESERVE) {
     patrolReason = `Нужен запас топлива на возврат: в баке ${ly(state.fuel)}`;

@@ -1050,6 +1050,8 @@ export type JumpError =
   | 'bad-target'
   /** §78: для патруля нужно четыре ракеты. */
   | 'no-missiles'
+  /** §133.12: во время «Сверхновой» станция занята беженцами — не до патруля. */
+  | 'locked'
   /** §78: топлива не хватает даже на резерв возврата. */
   | 'no-fuel';
 
@@ -1322,6 +1324,12 @@ export function startJump(state: GameState, target: number, now: number, setting
  */
 export function startPatrol(state: GameState, now: number): JumpResult {
   if (state.flight) return { state, error: 'in-flight' };
+  /*
+   * §133.12: во время «Сверхновой» патруль и пиратство недоступны.
+   * Пользователь: «Патруль и пиратство пусть будут тоже недоступны».
+   * Патруль — это вылет в систему, где горит звезда; там не до охоты.
+   */
+  if (stationLocked(state)) return { state, error: 'locked' };
   /*
    * §102: «полный боекомплект» — это боекомплект КОРАБЛЯ, а не 4 ракеты.
    * У Аспа слотов один, и требование четырёх запирало перехватчик на

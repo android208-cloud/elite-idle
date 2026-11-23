@@ -174,6 +174,14 @@ test('§133.6: на станции события нельзя ни заправ
   assert.equal(sell({ ...started, cargo: started.cargo.map((n, i) => (i === 0 ? 3 : n)) }, 0, 1).amount, 0);
 });
 
+test('§133.12: патруль и пиратство во время события недоступны', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  assert.equal(startPatrol(base, T0 + 1000).error, 'locked');
+  // Ушли — патруль снова работает.
+  const left = escapeSupernova(base, T0 + 2000).state;
+  assert.equal(startPatrol(left, T0 + 3000).error, undefined);
+});
+
 test('§133.8: беженцев 250 тонн, берут сколько влезет', () => {
   const base = startSupernova(veteran(), T0, calm).state;
   const capacity = holdCapacity(base.ship);
@@ -245,8 +253,9 @@ test('§133.6: уход прыжком сохраняет двигатель и 
 });
 
 test('§133.6: взрыв уничтожает станцию навсегда и сжигает двигатель', () => {
-  // Взрыв возможен только когда корабль не на станции — уходим в патруль.
-  const base = startPatrol(startSupernova(veteran(), T0, calm).state, T0).state;
+  // Взрыв возможен только когда корабль не на станции. Патруль во время
+  // события закрыт (§133.12), поэтому уходим в него ДО начала события.
+  const base = startSupernova(startPatrol(veteran(), T0).state, T0, calm).state;
   const exploded = tickSupernova(base, T0 + HOUR * SUPERNOVA_HOURS, calm);
   assert.equal(exploded.exploded, true);
 
@@ -288,8 +297,8 @@ test('§133.6: «Сверхновая» включает advance и уносит
   assert.equal(docked.state.galaxy, 2, 'на станции ничего не взрывается');
   assert.ok(supernovaOf(docked.state), 'событие ещё идёт');
 
-  // В патруле ударная волна настигает по расписанию.
-  const patrolling = startPatrol(started, T0).state;
+  // В патруле ударная волна настигает по расписанию (патруль начат раньше).
+  const patrolling = startSupernova(startPatrol(veteran(), T0).state, T0, calm).state;
   const later = advance(patrolling, T0 + HOUR * (SUPERNOVA_HOURS + 1), calm);
   assert.ok(later.events.some((e) => e.text.includes('Сверхновая')));
   assert.equal(later.state.galaxy, 3, 'унесло в следующую галактику');

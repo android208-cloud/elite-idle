@@ -95,6 +95,14 @@ check('есть кнопка «Макс.»', !!d.querySelector('[data-action="re
 check('«Купить станцию» неактивна', d.querySelector('[data-action="station-buy"]')?.disabled === true);
 check('контракты на этой станции закрыты', d.querySelector('[data-action="contracts-open"]')?.disabled === true);
 
+/* ---------- Корабль: патруль и пиратство закрыты ---------- */
+click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'ship'));
+await wait(250);
+const patrolBtn = d.querySelector('[data-action="patrol"]');
+check('кнопка патруля/пиратства выключена', patrolBtn?.disabled === true,
+  patrolBtn?.textContent?.trim() ?? 'кнопки нет');
+check('и сказано, почему', /патруль и пиратство недоступны/.test(text()));
+
 /* ---------- Ангар: только корабль и топливо ---------- */
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'hangar'));
 await wait(300);
