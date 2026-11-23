@@ -30,6 +30,7 @@ import {
   stationLocked,
   supernovaOf,
   supernovaProgress,
+  SUPERNOVA_REFUGEES_TONS,
   SUPERNOVA_TRIGGER_KILLS,
   takeRefugees,
   buy,
@@ -2142,15 +2143,36 @@ function marketScreen(): string {
    * сам за себя: на станции осталось одно дело, и оно стоит ноль.
    */
   const refugeeCard = sn && !sn.escaped
-    ? `<div class="card"><div class="good-row">
+    ? (() => {
+        const left = Math.max(0, SUPERNOVA_REFUGEES_TONS - sn.taken);
+        const canTake = left > 0 && state.holdSpace > 0;
+        return `<div class="card"><div class="good-row">
         <div><div class="name">Беженцы</div>
-          <div class="muted">В трюме: ${cargoTons(state)} т · Свободно: ${state.holdSpace} т${sn.refugees ? ' · уже на борту' : ''}</div></div>
+          <div class="muted">В наличии: ${left} т · На борту: ${sn.taken} т · Свободно: ${state.holdSpace} т</div></div>
         <div class="price">0.0 CR</div></div>
       <div class="row" style="margin-top:10px">
         <span class="spacer"></span>
-        <button class="btn tonal" data-action="refugees" ${sn.refugees ? 'disabled' : ''}>Макс.</button>
-      </div></div>`
+        <button class="btn tonal" data-action="refugees" ${canTake ? '' : 'disabled'}>Макс.</button>
+      </div></div>`;
+      })()
     : '';
+  /*
+   * §133.8: ГРУЗ ИГРОК ВЫБРАСЫВАЕТ САМ.
+   *
+   * Пользователь: «если в трюме есть товары, то вместо „продать всё“ будет
+   * „оставить всё“, мы сами решим, что выбросить». Поэтому на закрытой станции
+   * карточки товара показывают только то, что лежит в трюме, и одну кнопку —
+   * «Оставить всё». Ни продать, ни купить здесь уже нельзя.
+   */
+  const leaveCards = COMMODITIES.map((c, i) => {
+    const have = state.cargo[i];
+    if (!have || !locked) return '';
+    return `<div class="card"><div class="good-row">
+        <div><div class="name">${c.name}</div>
+          <div class="muted">В трюме: ${have} ${UNITS[c.unit]}</div></div></div>
+      <div class="row" style="margin-top:10px"><span class="spacer"></span>
+        <button class="btn text" data-action="leave-all" data-i="${i}">Оставить всё</button></div></div>`;
+  }).join('');
   const docked = !locked;
   const rows = COMMODITIES.map((c, i) => {
     const m = state.market[i];
@@ -2228,7 +2250,7 @@ function marketScreen(): string {
       <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
-    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами.</div>` : ''}</div></div>${locked ? refugeeCard : rows}`;
+    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами.</div>` : ''}</div></div>${locked ? refugeeCard + leaveCards : rows}`;
 }
 
 /*
@@ -4043,14 +4065,21 @@ function onAction(el: HTMLElement): void {
       tradeLog('Продано', i, r.amount, state.cash - cashBefore);
       break;
     }
+    case 'leave-all': {
+      // §133.8: «оставить всё» — груз остаётся на гибнущей станции.
+      const i = Number(el.dataset.i);
+      const r = jettisonCargo(state, i, state.cargo[i] ?? 0);
+      state = r.state;
+      if (r.dropped > 0) addLog(`Оставлено на станции: ${COMMODITIES[i].name} — ${r.dropped}`);
+      break;
+    }
     case 'refugees': {
       // §133.6: беженцы занимают трюм целиком — это осознанное действие.
       const r = takeRefugees(state, Date.now());
       state = r.state;
       handleEvents(r.events);
-      if (r.error === 'missions') addLog('Сначала высадите пассажиров по контракту: трюм должен быть свободен');
       if (r.error === 'no-station') addLog('Станции больше нет — спасать некого');
-      if (r.error === 'already') addLog('Беженцы уже на борту');
+      if (r.error === 'no-hold') addLog('В трюме нет свободного места: оставьте товар на станции');
       break;
     }
     case 'refuel': {

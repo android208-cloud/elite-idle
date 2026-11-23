@@ -40,6 +40,8 @@ export const SUPERNOVA_LEAK_PER_HOUR = 20;
 export const SUPERNOVA_HOURS = 3;
 /** Как часто в журнал падает сигнал бедствия (20 игровых минут). */
 export const SUPERNOVA_MAYDAY_HOURS = 1 / 3;
+/** Сколько тонн беженцев ждёт на станции. Число из обсуждения: 250. */
+export const SUPERNOVA_REFUGEES_TONS = 250;
 /** Награда: 100 г драгоценных камней — ровно как в оригинале. */
 export const SUPERNOVA_REWARD_GEMS = 100;
 /** После провала событие не возвращается раньше, чем через 6 игровых часов. */
@@ -71,11 +73,13 @@ export interface Supernova {
    * награда ждёт первой стыковки. Флаг живёт, пока беженцев не высадят.
    */
   escaped: boolean;
-  /** Беженцы на борту: трюм занят целиком, груза нет. */
+  /** Беженцы на борту: сколько тонн уже взято. */
+  taken: number;
+  /** Взяли хотя бы кого-то. */
   refugees: boolean;
 }
 
-export type SupernovaError = 'none' | 'not-here' | 'no-station' | 'already' | 'missions';
+export type SupernovaError = 'none' | 'not-here' | 'no-station' | 'already' | 'no-hold';
 
 export const supernovaOf = (state: GameState): Supernova | null => state.supernova ?? null;
 
@@ -158,6 +162,7 @@ export function startSupernova(
     leakedTo: now,
     maydayAt: now + hour * SUPERNOVA_MAYDAY_HOURS,
     maydays: 0,
+    taken: 0,
     refugees: false,
     escaped: false,
   };
@@ -301,31 +306,40 @@ export function takeRefugees(
     return { state, error: 'not-here', events: [] };
   }
   if (!stationAlive(state)) return { state, error: 'no-station', events: [] };
-  if (sn.refugees) return { state, error: 'already', events: [] };
-  // Пассажиры по контракту — тоже люди: пока они на борту, инвариант трюма
-  // («свободно + груз + контракты = вместимость») не даст занять его целиком.
-  if ((state.missions ?? []).some((m) => m.tons > 0)) {
-    return { state, error: 'missions', events: [] };
-  }
+  /*
+   * §133.8: БЕЖЕНЦЕВ РОВНО 250 ТОНН, И БЕРУТ СКОЛЬКО ВЛЕЗЕТ.
+   *
+   * Пользователь: «беженцев будет всего 250 тонн, если в трюме есть товары, то
+   * вместо „продать всё“ будет „оставить всё“, мы сами решим, что выбросить.
+   * Если взяли беженцев не на полный трюм, то награду не получаем».
+   *
+   * Отсюда три правила:
+   *   * груз больше не выбрасывается автоматически — трюм освобождает игрок;
+   *   * взяли столько, сколько было свободно (и сколько есть на станции);
+   *   * награда только за ПОЛНЫЙ трюм — то есть если свободного места не
+   *     осталось совсем ничего.
+   */
+  // Защита от сейвов, где поля `taken` ещё не было.
+  const already = Number.isFinite(sn.taken) ? sn.taken : 0;
+  const left = Math.max(0, SUPERNOVA_REFUGEES_TONS - already);
+  const room = Math.min(left, state.holdSpace);
+  if (room <= 0) return { state, error: 'no-hold', events: [] };
 
-  const tons = holdCapacity(state.ship);
-  const cargo = state.cargo.map((n, i) => (i <= 12 ? 0 : n));
-  const dropped = state.cargo.reduce((sum, n, i) => sum + (i <= 12 ? n : 0), 0);
+  const taken = already + room;
+  const full = state.holdSpace - room === 0;
   return {
     state: {
       ...state,
-      cargo,
-      cargoOrigin: [],
-      holdSpace: 0,
-      supernova: { ...sn, refugees: true },
+      holdSpace: state.holdSpace - room,
+      supernova: { ...sn, taken, refugees: true },
     },
     events: [
       {
         type: 'supernova',
         at: now,
-        text: dropped > 0
-          ? `Беженцы на борту: ${tons} т, груз (${dropped} т) выброшен. Прыгайте — топливо течёт.`
-          : `Беженцы на борту: ${tons} т. Прыгайте — топливо течёт.`,
+        text: full
+          ? `Беженцы на борту: ${taken} т — трюм полон. Прыгайте, топливо течёт.`
+          : `Беженцы на борту: ${taken} т из ${SUPERNOVA_REFUGEES_TONS}. Трюм не полон — награды не будет, пока не освободите место.`,
       },
     ],
   };
@@ -345,22 +359,29 @@ export function deliverRefugees(
   // Прилетели в ту же систему, откуда ушли? Значит никуда не ушли.
   if (sn.galaxy === state.galaxy && sn.system === state.system) return { state, events: [] };
 
+  const capacity = holdCapacity(state.ship);
+  const freed = capacity - (state.missions ?? []).reduce((s, m) => s + m.tons, 0);
+  // §133.8: платят только за полный трюм беженцев. Взяли меньше — спасли
+  // людей, но награды нет: так «выбросить товар» остаётся настоящим выбором.
+  const full = sn.taken >= capacity;
   const cargo = state.cargo.slice();
-  cargo[GEMS_INDEX] = (cargo[GEMS_INDEX] ?? 0) + SUPERNOVA_REWARD_GEMS;
+  if (full) cargo[GEMS_INDEX] = (cargo[GEMS_INDEX] ?? 0) + SUPERNOVA_REWARD_GEMS;
   return {
     state: {
       ...state,
       cargo,
-      holdSpace: holdCapacity(state.ship) - (state.missions ?? []).reduce((s, m) => s + m.tons, 0),
+      holdSpace: freed,
       supernova: null,
       supernovaEndedAt: now,
-      missionRep: (state.missionRep ?? 0) + 5,
+      missionRep: (state.missionRep ?? 0) + (full ? 5 : 0),
     },
     events: [
       {
         type: 'supernova',
         at: now,
-        text: `Беженцы высажены. В благодарность — ${SUPERNOVA_REWARD_GEMS} г драгоценных камней.`,
+        text: full
+          ? `Беженцы высажены. В благодарность — ${SUPERNOVA_REWARD_GEMS} г драгоценных камней.`
+          : `Беженцы высажены: ${sn.taken} т из ${capacity} — трюм был занят не полностью, награды нет.`,
       },
     ],
   };

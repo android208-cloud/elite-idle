@@ -128,6 +128,7 @@ export {
   supernovaProgress,
   takeRefugees,
   SUPERNOVA_MAYDAY_HOURS,
+  SUPERNOVA_REFUGEES_TONS,
   SUPERNOVA_REWARD_GEMS,
   SUPERNOVA_TRIGGER_JUMPS,
   SUPERNOVA_TRIGGER_KILLS,
@@ -3621,6 +3622,14 @@ export function deserialize(json: string): GameState {
    * читаются как «события нет», погибших станций нет, кулдаун не идёт.
    */
   if (state.supernova === undefined) state.supernova = null;
+  // §133.8: в первых сборках события не было счётчика тонн — считаем, что
+  // беженцы, если они на борту, занимали трюм целиком.
+  if (state.supernova && typeof state.supernova.taken !== 'number') {
+    state.supernova = {
+      ...state.supernova,
+      taken: state.supernova.refugees ? holdCapacity(state.ship) : 0,
+    };
+  }
   if (!Array.isArray(state.destroyedStations)) state.destroyedStations = [];
   if (typeof state.supernovaEndedAt !== 'number') state.supernovaEndedAt = 0;
   return state;

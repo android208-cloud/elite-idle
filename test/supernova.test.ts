@@ -45,6 +45,7 @@ import {
   tickSupernova,
   SUPERNOVA_HOURS,
   SUPERNOVA_LEAK_PER_HOUR,
+  SUPERNOVA_REFUGEES_TONS,
   SUPERNOVA_REWARD_GEMS,
   SUPERNOVA_TRIGGER_JUMPS,
   SUPERNOVA_TRIGGER_KILLS,
@@ -157,7 +158,18 @@ test('§133.6: на станции события нельзя ни заправ
   assert.equal(sell({ ...started, cargo: started.cargo.map((n, i) => (i === 0 ? 3 : n)) }, 0, 1).amount, 0);
 });
 
-test('§133.6: беженцы занимают трюм целиком, груз выбрасывается', () => {
+test('§133.8: беженцев 250 тонн, берут сколько влезет', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const capacity = holdCapacity(base.ship);
+  const first = takeRefugees(base, T0 + 1000);
+  assert.equal(first.error, undefined);
+  assert.equal(supernovaOf(first.state)!.taken, Math.min(SUPERNOVA_REFUGEES_TONS, capacity));
+  assert.equal(first.state.holdSpace, 0, 'трюм занят полностью');
+  // Места больше нет — второй раз не берут.
+  assert.equal(takeRefugees(first.state, T0 + 2000).error, 'no-hold');
+});
+
+test('§133.8: груз больше не выбрасывается сам — его оставляет игрок', () => {
   const base = startSupernova(veteran(), T0, calm).state;
   const loaded: GameState = {
     ...base,
@@ -166,20 +178,25 @@ test('§133.6: беженцы занимают трюм целиком, груз
   };
   const taken = takeRefugees(loaded, T0 + 1000);
   assert.equal(taken.error, undefined);
-  assert.equal(taken.state.holdSpace, 0);
-  assert.equal(taken.state.cargo[0], 0, 'груз выброшен');
-  assert.equal(supernovaOf(taken.state)!.refugees, true);
-  assert.equal(takeRefugees(taken.state, T0 + 2000).error, 'already');
+  assert.equal(taken.state.cargo[0], 4, 'груз остался в трюме');
+  const capacity = holdCapacity(base.ship);
+  assert.equal(supernovaOf(taken.state)!.taken, Math.min(SUPERNOVA_REFUGEES_TONS, capacity - 4), 'взяли только свободное место');
+  // Свободное место кончилось, но трюм забит не только людьми — награды не будет.
+  const jumped = startJump(taken.state, neighbour(taken.state), T0 + 2000, calm).state;
+  const landed = deliverRefugees({ ...jumped, system: 11, flight: null }, T0 + 3000, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], 0, 'награды нет');
+  assert.equal(missionRepOf(landed.state), 0);
 });
 
-test('§133.6: с пассажирами по контракту беженцев не берут', () => {
+test('§133.8: пустой трюм заполняется целиком — награда есть', () => {
   const base = startSupernova(veteran(), T0, calm).state;
-  const withMission: GameState = {
-    ...base,
-    missions: [{ id: 1, kind: 'passenger', from: 1, to: 2, tons: 2, hours: 3, deadline: T0 + HOUR, reward: 1000, penalty: 200, secret: false }],
-    holdSpace: base.holdSpace - 2,
-  };
-  assert.equal(takeRefugees(withMission, T0 + 1000).error, 'missions');
+  const capacity = holdCapacity(base.ship);
+  const taken = takeRefugees(base, T0 + 1000).state;
+  assert.equal(supernovaOf(taken)!.taken, Math.min(SUPERNOVA_REFUGEES_TONS, capacity));
+  const jumped = startJump(taken, neighbour(taken), T0 + 2000, calm).state;
+  const landed = deliverRefugees({ ...jumped, system: 11, flight: null }, T0 + 3000, calm);
+  // Кобра: трюм 20 ≤ 250, значит полный трюм беженцев — награда.
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS);
 });
 
 test('§133.6: уход прыжком сохраняет двигатель и гасит утечку', () => {

@@ -27,8 +27,9 @@ const NOW = Date.now();
 
 function boot({ supernova }) {
   const state = {
-    version: 6, galaxy: 2, system: 3, cash: 200000, fuel: 60, holdSpace: 8,
-    cargo: Array(17).fill(0), market: Array(17).fill({ price: 100, quantity: 5 }),
+    version: 6, galaxy: 2, system: 3, cash: 200000, fuel: 60, holdSpace: 16,
+    cargo: Array(17).fill(0).map((_, i) => (i === 0 ? 4 : 0)),
+    market: Array(17).fill({ price: 100, quantity: 5 }),
     rng: 1, flight: null,
     ship: {
       model: 'cobra3', laser: 'pulse', missiles: 4, ecm: false, energyBomb: false,
@@ -63,7 +64,7 @@ function boot({ supernova }) {
 
 const event = {
   galaxy: 2, system: 3, startedAt: NOW - 60000, at: NOW + 3 * HOUR,
-  leakedTo: NOW - 60000, maydayAt: NOW + HOUR, maydays: 0, refugees: false, escaped: false,
+  leakedTo: NOW - 60000, maydayAt: NOW + HOUR, maydays: 0, taken: 0, refugees: false, escaped: false,
 };
 
 /* ---------- Событие идёт ---------- */
@@ -78,11 +79,14 @@ await wait(900);
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'market'));
 await wait(300);
 
-check('на «Рынке» одна карточка — «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
+check('на «Рынке» карточка «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
 check('и цена у неё 0.0 CR', /0\.0 CR/.test(text()));
-check('из товаров на станции не осталось ничего',
+check('сказано, сколько беженцев на станции', /В наличии: 250 т/.test(text()));
+check('из товаров остались только те, что в трюме, и без покупки',
   d.querySelectorAll('#content [data-action="buy1"], #content [data-action="sell1"]').length === 0,
   `${d.querySelectorAll('#content [data-action="buy1"]').length} карточек с покупкой`);
+check('у товара в трюме кнопка «Оставить всё»',
+  /Оставить всё/.test(text()) && !!d.querySelector('[data-action="leave-all"]'));
 check('есть кнопка «Макс.»', !!d.querySelector('[data-action="refugees"]'),
   d.querySelector('[data-action="refugees"]')?.textContent?.trim() ?? '');
 check('«Купить станцию» неактивна', d.querySelector('[data-action="station-buy"]')?.disabled === true);
@@ -100,21 +104,29 @@ check('кнопок заправки нет', d.querySelectorAll('#content [data
 check('оборудования и верфи в ангаре нет',
   !/Оборудование/.test(hangar) && !/Верфь/.test(hangar));
 
-/* ---------- Возвращаемся и берём всех ---------- */
+/* ---------- Оставляем груз и берём всех ---------- */
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'market'));
 await wait(300);
+click(d.querySelector('[data-action="leave-all"]'));
+await wait(250);
+check('после «Оставить всё» товара в трюме нет', !/Товары: 4/.test(text()) && !d.querySelector('[data-action="leave-all"]'));
+
 click(d.querySelector('[data-action="refugees"]'));
-await wait(300);
+await wait(250);
 const after = text();
-check('после «Макс.» трюм занят целиком', /Трюм 0 из 20/.test(after), after.match(/Трюм[^·]*/)?.[0] ?? '');
-const maxBtn = d.querySelector('[data-action="refugees"]');
-check('кнопка «Макс.» погасла', maxBtn?.disabled === true);
-check('и появилась подпись «уже на борту»', /уже на борту/.test(after));
+check('«Макс.» взял всех, кто влез', /На борту: 20 т/.test(after), after.match(/В наличии[^·]*·[^·]*/)?.[0] ?? '');
+check('трюм занят целиком', /Трюм 0 из 20/.test(after), after.match(/Трюм[^·]*/)?.[0] ?? '');
+check('кнопка «Макс.» погасла', d.querySelector('[data-action="refugees"]')?.disabled === true);
+
+// Разворачиваем журнал и читаем его целиком.
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
 await wait(250);
+const expand = d.querySelector('[data-action="log-toggle"]');
+if (expand && /Развернуть/.test(expand.textContent)) { click(expand); await wait(200); }
 const journal = d.getElementById('content')?.textContent ?? '';
-check('журнал записал посадку беженцев', /Беженцы на борту: 20 т/.test(journal),
-  journal.replace(/\s+/g, ' ').slice(0, 120));
+
+check('журнал записал, что оставили груз', /Оставлено на станции/.test(journal));
+check('и что трюм полон беженцами', /Беженцы на борту: 20 т — трюм полон/.test(journal));
 w.close();
 
 /* ---------- Без события всё по-старому ---------- */
