@@ -78,39 +78,43 @@ await wait(900);
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'market'));
 await wait(300);
 
-check('на «Рынке» есть карточка «Сверхновая»', text().includes('Сверхновая'), text().slice(0, 120));
-check('и в ней сказано, что топливо течёт', /Топливо течёт/.test(text()));
-check('есть кнопка «Взять беженцев»', !!d.querySelector('[data-action="refugees"]'));
-
-const tradeButtons = [...d.querySelectorAll('#content [data-action="buy1"], #content [data-action="sell1"]')];
-check('торговать нельзя: все кнопки товара выключены',
-  tradeButtons.length > 0 && tradeButtons.every((b) => b.disabled),
-  `${tradeButtons.filter((b) => !b.disabled).length} из ${tradeButtons.length} живых`);
+check('на «Рынке» одна карточка — «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
+check('и цена у неё 0.0 CR', /0\.0 CR/.test(text()));
+check('из товаров на станции не осталось ничего',
+  d.querySelectorAll('#content [data-action="buy1"], #content [data-action="sell1"]').length === 0,
+  `${d.querySelectorAll('#content [data-action="buy1"]').length} карточек с покупкой`);
+check('есть кнопка «Макс.»', !!d.querySelector('[data-action="refugees"]'),
+  d.querySelector('[data-action="refugees"]')?.textContent?.trim() ?? '');
+check('«Купить станцию» неактивна', d.querySelector('[data-action="station-buy"]')?.disabled === true);
 check('контракты на этой станции закрыты', d.querySelector('[data-action="contracts-open"]')?.disabled === true);
 
-/* ---------- Ангар: заправка закрыта ---------- */
+/* ---------- Ангар: только корабль и топливо ---------- */
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'hangar'));
 await wait(300);
-const refuelButtons = [...d.querySelectorAll('#content [data-action="refuel"]')];
-check('заправиться нельзя', refuelButtons.length > 0 && refuelButtons.every((b) => b.disabled),
-  `${refuelButtons.filter((b) => !b.disabled).length} из ${refuelButtons.length} живых`);
+const hangar = text();
+check('в ангаре осталась карточка «Топливо»', /Топливо/.test(hangar));
+check('и модель корабля', !!d.querySelector('#ship-model') || /пристыкован/.test(hangar));
+check('вместо кнопок — «Топлива на станции не осталось»',
+  /Топлива на станции не осталось/.test(hangar));
+check('кнопок заправки нет', d.querySelectorAll('#content [data-action="refuel"]').length === 0);
+check('оборудования и верфи в ангаре нет',
+  !/Оборудование/.test(hangar) && !/Верфь/.test(hangar));
 
-/* ---------- Возвращаемся и берём беженцев ---------- */
+/* ---------- Возвращаемся и берём всех ---------- */
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'market'));
 await wait(300);
 click(d.querySelector('[data-action="refugees"]'));
 await wait(300);
 const after = text();
-check('после нажатия трюм занят целиком', /Трюм 0 из 20/.test(after), after.match(/Трюм[^·]*/)?.[0] ?? '');
-check('кнопка исчезла: беженцы уже на борту', !d.querySelector('[data-action="refugees"]'));
-check('и появилась подпись про «на борту»', /Беженцы на борту/.test(after));
-// Журнал — отдельная вкладка; при пустом журнале строки живут в карточке.
+check('после «Макс.» трюм занят целиком', /Трюм 0 из 20/.test(after), after.match(/Трюм[^·]*/)?.[0] ?? '');
+const maxBtn = d.querySelector('[data-action="refugees"]');
+check('кнопка «Макс.» погасла', maxBtn?.disabled === true);
+check('и появилась подпись «уже на борту»', /уже на борту/.test(after));
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
-await wait(200);
+await wait(250);
 const journal = d.getElementById('content')?.textContent ?? '';
-check('журнал записал посадку беженцев',
-  /Беженцы на борту: 20 т/.test(journal),
-  journal.replace(/\s+/g, ' ').slice(0, 140));
+check('журнал записал посадку беженцев', /Беженцы на борту: 20 т/.test(journal),
+  journal.replace(/\s+/g, ' ').slice(0, 120));
 w.close();
 
 /* ---------- Без события всё по-старому ---------- */

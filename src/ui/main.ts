@@ -2096,7 +2096,7 @@ function holdScreen(): string {
  * Покупка в два нажатия, как корабль (§102.4) и пилот (§105): сумма такая,
  * что случайный тап по экрану не должен её тратить.
  */
-function stationBuyActions(): string {
+function stationBuyActions(disabled = false): string {
   const system = currentSystem(state);
   const price = stationPrice(system);
 
@@ -2105,13 +2105,15 @@ function stationBuyActions(): string {
   }
 
   const affordable = state.cash >= price * 10;
-  if (stationBuyOpen && affordable) {
+  if (stationBuyOpen && affordable && !disabled) {
     // Цена — только здесь: решение уже принято, а платить вслепую нельзя.
     return `<button class="btn danger" data-action="station-buy-confirm">Подтвердить · ${cash(price)}</button>
       <button class="btn text" data-action="station-buy-cancel">Отмена</button>`;
   }
 
-  return `<button class="btn tonal" data-action="station-buy" ${affordable ? '' : 'disabled'}>${affordable ? 'Купить станцию' : '--'}</button>`;
+  // §133.7: во время события станция не продаётся — кнопка гаснет целиком.
+  const off = disabled || !affordable;
+  return `<button class="btn tonal" data-action="station-buy" ${off ? 'disabled' : ''}>${disabled || !affordable ? '--' : 'Купить станцию'}</button>`;
 }
 
 function marketScreen(): string {
@@ -2132,15 +2134,22 @@ function marketScreen(): string {
     return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
       <div class="sub">Станции здесь больше нет: звезда вспыхнула, а спасать было некому.</div></div>`;
   }
-  const snCard = sn && !sn.escaped
-    ? `<div class="card illegal"><h2>Сверхновая</h2>
-      <div class="sub">Топливо течёт: ${ly(state.fuel)} из ${ly(maxFuel(state.ship))} · до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч</div>
-      <div class="sub">${sn.refugees
-        ? 'Беженцы на борту. Прыгайте к любой станции — здесь их уже не спасти.'
-        : 'Станция занята беженцами: заправки, торговли и оборудования здесь нет.'}</div>
-      <div class="row" style="margin-top:10px">${sn.refugees
-        ? '<span class="muted">Трюм занят целиком</span>'
-        : '<button class="btn tonal" data-action="refugees">Взять беженцев</button>'}</div></div>`
+  /*
+   * §133.7: РЫНОК ЗАКРЫТОЙ СТАНЦИИ — ОДНА КАРТОЧКА.
+   *
+   * Пользователь: «рынок доступен только с одной карточкой „Беженцы“ с ценой
+   * 0.0 cr и кнопкой „Макс.“, остальные кнопки не активны». Так экран говорит
+   * сам за себя: на станции осталось одно дело, и оно стоит ноль.
+   */
+  const refugeeCard = sn && !sn.escaped
+    ? `<div class="card"><div class="good-row">
+        <div><div class="name">Беженцы</div>
+          <div class="muted">В трюме: ${cargoTons(state)} т · Свободно: ${state.holdSpace} т${sn.refugees ? ' · уже на борту' : ''}</div></div>
+        <div class="price">0.0 CR</div></div>
+      <div class="row" style="margin-top:10px">
+        <span class="spacer"></span>
+        <button class="btn tonal" data-action="refugees" ${sn.refugees ? 'disabled' : ''}>Макс.</button>
+      </div></div>`
     : '';
   const docked = !locked;
   const rows = COMMODITIES.map((c, i) => {
@@ -2210,16 +2219,16 @@ function marketScreen(): string {
    * была опущена на высоту этой строки и покрашена тональным цветом).
    */
   const takenNow = missionsOf(state).length;
-  return `${snCard}<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+  return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
     <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     <div class="row" style="margin-top:10px">
-      ${stationBuyActions()}
+      ${stationBuyActions(locked)}
       <span class="spacer"></span>
       <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
-    ${locked ? '<div class="sub">Пока идёт событие, станция торгует только беженцами</div>' : ''}</div></div>${rows}`;
+    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами.</div>` : ''}</div></div>${locked ? refugeeCard : rows}`;
 }
 
 /*
@@ -2412,8 +2421,14 @@ function equipmentRows(): string {
 }
 
 function hangarScreen(): string {
-  // §133.6: во время «Сверхновой» станция не заправляет и не продаёт.
-  const docked = !state.flight && !stationLocked(state);
+  /*
+   * §133.7: `docked` — «корабль на станции» (от него зависит модель), а
+   * `trading` — «станция ещё чем-то торгует». Во время «Сверхновой» корабль
+   * стоит в ангаре, но заправлять его нечем, и путать эти два состояния
+   * нельзя: модель должна остаться.
+   */
+  const docked = !state.flight;
+  const trading = docked && !stationLocked(state);
   const tank = maxFuel(state.ship);
   const missing = tank - state.fuel;
   // Модель корабля живёт в ангаре: это место про сам корабль, а экран
@@ -2446,19 +2461,30 @@ function hangarScreen(): string {
    * ниже бывает любой длины, а обрезать его нельзя — карточка не коробка с
    * прокруткой, содержимое просто вылезло бы за скругление.
    */
+  /*
+   * §133.7: ВО ВРЕМЯ «СВЕРХНОВОЙ» АНГАР — ЭТО ДВЕ КАРТОЧКИ.
+   *
+   * Пользователь: «экран „ангар“ — только мой корабль и карточка „топливо“,
+   * вместо кнопок надпись „Топлива на станции не осталось“». Топливо увозят
+   * беженцы, оборудование и верфь закрыты — показывать их выключенными значит
+   * обещать то, чего не будет.
+   */
+  const fuelActions = stationLocked(state)
+    ? '<div class="sub" style="margin-top:6px">Топлива на станции не осталось</div>'
+    : `<div class="row" style="margin-top:6px">
+        <button class="btn tonal" data-action="refuel" data-n="10" ${trading && missing > 0 ? '' : 'disabled'}>+1.0</button>
+        <button class="btn" data-action="refuel" data-n="${missing}" ${trading && missing > 0 ? '' : 'disabled'}>Полный бак</button>
+      </div>`;
   return `${model}<div class="sticky-fuel"><div class="card" style="min-height:140px"><h2>Топливо</h2>
       <div class="sub">${ly(state.fuel)} из ${ly(tank)} · цена 0.2 CR за св. год</div>
       <div class="progress"><div style="width:${(state.fuel / tank) * 100}%"></div></div>
-      <div class="row" style="margin-top:6px">
-        <button class="btn tonal" data-action="refuel" data-n="10" ${docked && missing > 0 ? '' : 'disabled'}>+1.0</button>
-        <button class="btn" data-action="refuel" data-n="${missing}" ${docked && missing > 0 ? '' : 'disabled'}>Полный бак</button>
-      </div></div></div>
-    <div class="card"><h2>Оборудование</h2>
+      ${fuelActions}</div></div>
+    ${stationLocked(state) ? '' : `<div class="card"><h2>Оборудование</h2>
       <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
     ${shipyardCard()}
     ${pilotsSummaryCard()}
-    ${galacticCard()}`;
+    ${galacticCard()}`}`;
 }
 
 /**
