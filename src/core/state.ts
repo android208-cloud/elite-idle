@@ -24,6 +24,7 @@ import {
   escapeSupernova,
   startSupernova,
   stationLocked,
+  supernovaFreeJump,
   tickSupernova,
   type Supernova,
 } from './supernova.ts';
@@ -130,6 +131,9 @@ export {
   SUPERNOVA_MAYDAY_HOURS,
   SUPERNOVA_REFUGEES_TONS,
   SUPERNOVA_REWARD_GEMS,
+  SUPERNOVA_FREE_JUMP_MS,
+  supernovaFreeJump,
+  freeJumpLeft,
   SUPERNOVA_TRIGGER_JUMPS,
   SUPERNOVA_TRIGGER_KILLS,
   type Supernova,
@@ -1256,7 +1260,13 @@ export function startJump(state: GameState, target: number, now: number, setting
   if (!Number.isInteger(target) || target < 0 || target >= systems.length) return { state, error: 'bad-target' };
   if (target === state.system) return { state, error: 'same-system' };
   const d = distance(systems[state.system], systems[target]);
-  if (d > state.fuel) return { state, error: 'too-far' };
+  /*
+   * §133.9: во время «Сверхновой» прыжок становится бесплатным через 30 секунд
+   * после стыковки, если беженцев так и не взяли. Топливо при таком прыжке не
+   * тратится вовсе — иначе «выход» не был бы выходом.
+   */
+  const free = supernovaFreeJump(state, now);
+  if (d > state.fuel && !free) return { state, error: 'too-far' };
   /*
    * §133.6: прыжок с топливом — это «ушли от сверхновой своим ходом».
    * Галактический двигатель при этом цел: его тратят только те, кому топлива
@@ -1274,7 +1284,7 @@ export function startJump(state: GameState, target: number, now: number, setting
     state: {
       ...state,
       stats: { ...state.stats, jumps: state.stats.jumps + 1 },
-      fuel: state.fuel - d,
+      fuel: free ? state.fuel : state.fuel - d,
       legal: legalAfterLaunch(state.legal, state.cargo),
       flight: {
         from: state.system,

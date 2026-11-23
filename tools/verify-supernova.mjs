@@ -81,7 +81,9 @@ await wait(300);
 
 check('на «Рынке» карточка «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
 check('и цена у неё 0.0 CR', /0\.0 CR/.test(text()));
-check('сказано, сколько беженцев на станции', /В наличии: 250 т/.test(text()));
+check('сказано, сколько беженцев на станции', /В наличии: 200 т/.test(text()));
+check('и что прыжок уже бесплатный (событие идёт больше 30 с)',
+  /Прыжок можно совершить бесплатно/.test(text()));
 check('из товаров остались только те, что в трюме, и без покупки',
   d.querySelectorAll('#content [data-action="buy1"], #content [data-action="sell1"]').length === 0,
   `${d.querySelectorAll('#content [data-action="buy1"]').length} карточек с покупкой`);
@@ -126,7 +128,8 @@ if (expand && /Развернуть/.test(expand.textContent)) { click(expand); 
 const journal = d.getElementById('content')?.textContent ?? '';
 
 check('журнал записал, что оставили груз', /Оставлено на станции/.test(journal));
-check('и что трюм полон беженцами', /Беженцы на борту: 20 т — трюм полон/.test(journal));
+check('и что забрали всех беженцев', /Беженцы на борту: 20 т — забрали всех/.test(journal));
+check('после беженцев бесплатного прыжка больше нет', /Бесплатный прыжок|можно совершить бесплатно/.test(text()) === false);
 w.close();
 
 /* ---------- Без события всё по-старому ---------- */

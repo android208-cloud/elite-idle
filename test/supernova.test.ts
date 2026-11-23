@@ -31,6 +31,9 @@ import {
 } from '../src/core/state.ts';
 import {
   deliverRefugees,
+  freeJumpLeft,
+  supernovaFreeJump,
+  SUPERNOVA_FREE_JUMP_MS,
   destroyStation,
   escapeSupernova,
   GEMS_INDEX,
@@ -197,6 +200,44 @@ test('§133.8: пустой трюм заполняется целиком — �
   const landed = deliverRefugees({ ...jumped, system: 11, flight: null }, T0 + 3000, calm);
   // Кобра: трюм 20 ≤ 250, значит полный трюм беженцев — награда.
   assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS);
+});
+
+test('§133.9: «все 200 взяты» — полный трюм, даже если он больше', () => {
+  // Анаконда: трюм 253 т, беженцев 200 — добрать нечего, но награда есть.
+  const base = startSupernova(
+    veteran({ ship: { ...veteran().ship, model: 'anaconda' }, holdSpace: holdCapacity(veteran({ ship: { ...veteran().ship, model: 'anaconda' } }).ship) }),
+    T0,
+    calm,
+  ).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  assert.equal(supernovaOf(taken)!.taken, SUPERNOVA_REFUGEES_TONS);
+  assert.ok(taken.holdSpace > 0, 'место в трюме ещё осталось');
+  const jumped = startJump(taken, neighbour(taken), T0 + 2000, calm).state;
+  const landed = deliverRefugees({ ...jumped, system: 11, flight: null }, T0 + 3000, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS, 'взяли всех — награда есть');
+});
+
+test('§133.9: через 30 секунд после стыковки прыжок бесплатный', () => {
+  const base = { ...startSupernova(veteran(), T0, calm).state, fuel: 0 };
+  const target = neighbour({ ...base, fuel: maxFuel(base.ship) });
+  assert.equal(supernovaFreeJump(base, T0 + 1000), false, 'сразу после стыковки — нет');
+  assert.equal(freeJumpLeft(base, T0 + 1000), 29);
+  assert.equal(startJump(base, target, T0 + 1000, calm).error, 'too-far', 'без топлива и без льготы не улететь');
+
+  const late = T0 + SUPERNOVA_FREE_JUMP_MS + 1;
+  assert.equal(supernovaFreeJump(base, late), true);
+  const jumped = startJump(base, target, late, calm);
+  assert.equal(jumped.error, undefined, 'прыжок разрешён');
+  assert.equal(jumped.state.fuel, 0, 'топливо не тратится');
+  assert.equal(supernovaOf(jumped.state), null, 'событие окончено');
+});
+
+test('§133.9: взяли беженцев — бесплатный прыжок отменяется', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  const late = T0 + SUPERNOVA_FREE_JUMP_MS + 1000;
+  assert.equal(supernovaFreeJump({ ...taken, fuel: 0 }, late), false);
+  assert.equal(startJump({ ...taken, fuel: 0 }, neighbour(taken), late, calm).error, 'too-far');
 });
 
 test('§133.6: уход прыжком сохраняет двигатель и гасит утечку', () => {

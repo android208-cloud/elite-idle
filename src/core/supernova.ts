@@ -40,8 +40,15 @@ export const SUPERNOVA_LEAK_PER_HOUR = 20;
 export const SUPERNOVA_HOURS = 3;
 /** Как часто в журнал падает сигнал бедствия (20 игровых минут). */
 export const SUPERNOVA_MAYDAY_HOURS = 1 / 3;
-/** Сколько тонн беженцев ждёт на станции. Число из обсуждения: 250. */
-export const SUPERNOVA_REFUGEES_TONS = 250;
+/** Сколько тонн беженцев ждёт на станции (решение пользователя: 200). */
+export const SUPERNOVA_REFUGEES_TONS = 200;
+/**
+ * Через сколько реальных секунд после стыковки прыжок становится бесплатным,
+ * если беженцев так и не взяли. Это выход из события для тех, кому нечем
+ * улететь: сортировать груз на гибнущей станции можно сколько угодно, но
+ * застрять в игре нельзя.
+ */
+export const SUPERNOVA_FREE_JUMP_MS = 30_000;
 /** Награда: 100 г драгоценных камней — ровно как в оригинале. */
 export const SUPERNOVA_REWARD_GEMS = 100;
 /** После провала событие не возвращается раньше, чем через 6 игровых часов. */
@@ -326,7 +333,11 @@ export function takeRefugees(
   if (room <= 0) return { state, error: 'no-hold', events: [] };
 
   const taken = already + room;
-  const full = state.holdSpace - room === 0;
+  // «Взяли всех» — не «трюм забит под край», а «забрали всё, что могли»:
+  // у Анаконды трюм 253 т, а беженцев 200, и добрать нечего (§133.9).
+  const capacity = holdCapacity(state.ship);
+  const needed = Math.min(SUPERNOVA_REFUGEES_TONS, capacity);
+  const full = taken >= needed;
   return {
     state: {
       ...state,
@@ -338,8 +349,8 @@ export function takeRefugees(
         type: 'supernova',
         at: now,
         text: full
-          ? `Беженцы на борту: ${taken} т — трюм полон. Прыгайте, топливо течёт.`
-          : `Беженцы на борту: ${taken} т из ${SUPERNOVA_REFUGEES_TONS}. Трюм не полон — награды не будет, пока не освободите место.`,
+          ? `Беженцы на борту: ${taken} т — забрали всех. Прыгайте, топливо течёт.`
+          : `Беженцы на борту: ${taken} т из ${needed}: в трюме остался груз. Награды не будет, пока не освободите место.`,
       },
     ],
   };
@@ -361,9 +372,15 @@ export function deliverRefugees(
 
   const capacity = holdCapacity(state.ship);
   const freed = capacity - (state.missions ?? []).reduce((s, m) => s + m.tons, 0);
-  // §133.8: платят только за полный трюм беженцев. Взяли меньше — спасли
-  // людей, но награды нет: так «выбросить товар» остаётся настоящим выбором.
-  const full = sn.taken >= capacity;
+  /*
+   * §133.8–133.9: платят за «всех забрали», а не за «трюм забит под край».
+   * Взяли меньше, чем было можно, — значит часть трюма держал груз: беженцев
+   * спасли, награды нет. Так «оставить всё» остаётся настоящим выбором, но
+   * владелец Анаконды (трюм 253 т против 200 т беженцев) не наказан за то,
+   * что добрать ему нечего.
+   */
+  const needed = Math.min(SUPERNOVA_REFUGEES_TONS, capacity);
+  const full = sn.taken >= needed;
   const cargo = state.cargo.slice();
   if (full) cargo[GEMS_INDEX] = (cargo[GEMS_INDEX] ?? 0) + SUPERNOVA_REWARD_GEMS;
   return {
@@ -381,10 +398,37 @@ export function deliverRefugees(
         at: now,
         text: full
           ? `Беженцы высажены. В благодарность — ${SUPERNOVA_REWARD_GEMS} г драгоценных камней.`
-          : `Беженцы высажены: ${sn.taken} т из ${capacity} — трюм был занят не полностью, награды нет.`,
+          : `Беженцы высажены: ${sn.taken} т из ${needed} — часть трюма держал груз, награды нет.`,
       },
     ],
   };
+}
+
+/**
+ * §133.9: БЕСПЛАТНЫЙ ВЫХОД.
+ *
+ * Пользователь: «сделаем бесплатный выход из квеста — сделать прыжок через
+ * 30 секунд после стыковки, не взяв беженцев». Смысл: если игрок не может или
+ * не хочет брать людей (нет места, нет топлива на прыжок, или он владелец
+ * Анаконды и ещё сортирует груз), событие не должно превращаться в ловушку.
+ * Через полминуты после стыковки прыжок разрешён без топлива.
+ *
+ * Взял беженцев — бесплатный прыжок отменяется: за них платят топливом, как
+ * и было.
+ */
+export function supernovaFreeJump(state: GameState, now: number): boolean {
+  const sn = supernovaOf(state);
+  if (!sn || sn.escaped || sn.refugees) return false;
+  if (sn.galaxy !== state.galaxy || sn.system !== state.system) return false;
+  return now - sn.startedAt >= SUPERNOVA_FREE_JUMP_MS;
+}
+
+/** Сколько секунд осталось до бесплатного прыжка (0 — уже можно). */
+export function freeJumpLeft(state: GameState, now: number): number {
+  const sn = supernovaOf(state);
+  if (!sn || sn.escaped || sn.refugees) return 0;
+  const left = SUPERNOVA_FREE_JUMP_MS - (now - sn.startedAt);
+  return left > 0 ? Math.ceil(left / 1000) : 0;
 }
 
 /** Сколько ещё игровых часов до взрыва — для подписи на экране. */
