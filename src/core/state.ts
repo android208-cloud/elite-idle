@@ -18,6 +18,15 @@ import {
   type MarketEntry,
 } from './market.ts';
 import { missionTons, refreshOffers, tickMissions, type Mission } from './missions.ts';
+import {
+  deliverRefugees,
+  destroyStation,
+  escapeSupernova,
+  startSupernova,
+  stationLocked,
+  tickSupernova,
+  type Supernova,
+} from './supernova.ts';
 import { nextByte, nextFloat } from './rng.ts';
 import {
   PILOT_HIRE_FEE,
@@ -89,7 +98,7 @@ export { nextByte } from './rng.ts';
  * Сохранения версий 2, 3 и 4 читаются по-прежнему: недостающие поля
  * дополняются значениями по умолчанию, а не отказом в загрузке.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /*
  * §133: контракты. Экран берёт их из ядра, как и всё остальное, — чтобы у
@@ -108,6 +117,23 @@ export {
   missionTons,
 } from './missions.ts';
 export type { Mission, MissionError, MissionKind, MissionResult } from './missions.ts';
+export {
+  deliverRefugees,
+  hoursLeft,
+  stationAlive,
+  stationKey,
+  stationLocked,
+  supernovaArmed,
+  supernovaOf,
+  supernovaProgress,
+  takeRefugees,
+  SUPERNOVA_MAYDAY_HOURS,
+  SUPERNOVA_REWARD_GEMS,
+  SUPERNOVA_TRIGGER_JUMPS,
+  SUPERNOVA_TRIGGER_KILLS,
+  type Supernova,
+  type SupernovaProgress,
+} from './supernova.ts';
 
 /**
  * Бак стартовой Кобры — опорная величина для расчёта времени прыжка.
@@ -557,6 +583,18 @@ export interface GameState {
   missionRep?: number;
   nextMissionId?: number;
   missionRng?: number;
+  /*
+   * §133.6: секретная миссия «Сверхновая». Поле необязательное — сохранения
+   * до §133.6 читаются без миграции, как и поля контрактов.
+   *
+   * `destroyedStations` — ключи `галактика:система` станций, погибших от
+   * взрыва. Такие станции не возвращаются: это единственное необратимое
+   * изменение карты в игре.
+   */
+  supernova?: Supernova | null;
+  destroyedStations?: string[];
+  /** Когда событие закончилось: раньше чем через 6 игровых часов не повторяется. */
+  supernovaEndedAt?: number;
 }
 
 /**
@@ -649,7 +687,9 @@ export type GameEventType =
   /** §105: пилоты вернулись с рейсов и принесли деньги. */
   | 'fleet'
   /** §118: изменился правовой статус — с цифрой и причиной. */
-  | 'legal';
+  | 'legal'
+  /** §133.6: секретная миссия «Сверхновая» — утечка, MAYDAY, взрыв, награда. */
+  | 'supernova';
 
 export interface GameEvent {
   type: GameEventType;
@@ -708,6 +748,10 @@ export function newGame(rngSeed: number): GameState {
     missionRep: 0,
     nextMissionId: 1,
     missionRng: rngSeed >>> 0,
+    // §133.6: событие не идёт, погибших станций нет.
+    supernova: null,
+    destroyedStations: [],
+    supernovaEndedAt: 0,
     // §89: время карьеры. `careerAt: 0` — «точки отсчёта ещё нет»:
     // первый `advance` только выставит её, не начислив разницу.
     careerMs: 0,
@@ -782,6 +826,8 @@ const cargoTonsOf = (cargo: readonly number[]): number =>
 /** Покупка: не больше, чем есть на рынке, влезает в трюм и хватает денег. */
 export function buy(state: GameState, index: number, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
+  // §133.6: во время события станция торгует только беженцами.
+  if (stationLocked(state)) return { state, amount: 0 };
   const entry = state.market[index];
   let t = Math.min(entry.quantity, Math.floor(amount), cargoRoom(state, index));
   if (entry.price > 0) t = Math.min(t, Math.floor(state.cash / entry.price));
@@ -808,6 +854,8 @@ export function buy(state: GameState, index: number, amount: number): TradeResul
 /** Продажа: не больше, чем в трюме. */
 export function sell(state: GameState, index: number, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
+  // §133.6: продавать здесь тоже некому — станция занята беженцами.
+  if (stationLocked(state)) return { state, amount: 0 };
   const t = Math.min(state.cargo[index], Math.floor(amount));
   if (t <= 0) return { state, amount: 0 };
 
@@ -833,6 +881,8 @@ export function sell(state: GameState, index: number, amount: number): TradeResu
 /** Заправка (в десятых долях св. года): не больше, чем влезает и чем хватает денег. */
 export function refuel(state: GameState, amount: number): TradeResult {
   if (state.flight || amount <= 0) return { state, amount: 0 };
+  // §133.6: на станции беженцев заправки нет — иначе миссия решается за 14 CR.
+  if (stationLocked(state)) return { state, amount: 0 };
   // §102.3: бак — свойство корабля, а не общая константа.
   const t = Math.min(
     maxFuel(state.ship) - state.fuel,
@@ -1206,6 +1256,13 @@ export function startJump(state: GameState, target: number, now: number, setting
   if (target === state.system) return { state, error: 'same-system' };
   const d = distance(systems[state.system], systems[target]);
   if (d > state.fuel) return { state, error: 'too-far' };
+  /*
+   * §133.6: прыжок с топливом — это «ушли от сверхновой своим ходом».
+   * Галактический двигатель при этом цел: его тратят только те, кому топлива
+   * не хватило.
+   */
+  const left = escapeSupernova(state, now);
+  state = left.state;
 
   // Длительность хранится в «базовых» миллисекундах (при speed = 1),
   // поэтому смена темпа потом влияет и на уже начатый полёт.
@@ -2023,32 +2080,53 @@ function accrueFleet(
  * Мы не моделируем таймер обратного отсчёта: как и обычный прыжок, переход
  * мгновенный (или, в idle-режиме, может быть растянут настройками темпа).
  */
-export function galacticJump(state: GameState): GalacticJumpResult {
-  if (state.flight || state.combat) return { state, error: 'in-flight' };
-  if (!state.ship.galacticHyperdrive) return { state, error: 'no-drive' };
-
+export function nextGalaxyArrival(state: GameState, now?: number): GameState {
   // GCNT идёт по кругу: 1..8 → снова 1
   const galaxy = (state.galaxy % GALAXY_COUNT) + 1;
   const systems = systemsOf(galaxy);
   const system = nearestSystem(systems, GALACTIC_ARRIVAL.x, GALACTIC_ARRIVAL.y);
   const [fluct, rng] = nextByte(state.rng);
+  const moved: GameState = {
+    ...state,
+    galaxy,
+    system,
+    market: generateMarket(systems[system], fluct),
+    rng,
+    // Смена галактики очищает криминальное дозье
+    legal: 0,
+    escapeRoute: [],
+    escapeStatus: -1,
+    encounter: null,
+    combat: null,
+    flight: null,
+  };
+  /*
+   * §133.6: «толчок» сверхновой и обычный галактический прыжок оставляют
+   * игрока в новой галактике, но станция там другая — доска контрактов
+   * обязана обновиться, иначе на экране висели бы предложения из прошлой
+   * галактики. Считаем её от системы прибытия, как в `arrive`.
+   */
+  const board = refreshOffers(moved);
+  return {
+    ...moved,
+    missionOffers: board.missionOffers,
+    missionRng: board.missionRng,
+    nextMissionId: board.nextMissionId,
+  };
+}
+
+export function galacticJump(state: GameState, now = 0): GalacticJumpResult {
+  if (state.flight || state.combat) return { state, error: 'in-flight' };
+  if (!state.ship.galacticHyperdrive) return { state, error: 'no-drive' };
+
+  // §133.6: улетели с беженцами — событие переходит в «вывезли».
+  const escaped = escapeSupernova(state, now).state;
 
   return {
     state: {
-      ...state,
-      galaxy,
-      system,
-      market: generateMarket(systems[system], fluct),
-      rng,
+      ...nextGalaxyArrival(escaped, now),
       // Галактический гипердвигатель одноразовый
-      ship: { ...state.ship, galacticHyperdrive: false },
-      // Смена галактики очищает криминальное дозье
-      legal: 0,
-      escapeRoute: [],
-      escapeStatus: -1,
-      encounter: null,
-      combat: null,
-      flight: null,
+      ship: { ...escaped.ship, galacticHyperdrive: false },
     },
   };
 }
@@ -2934,7 +3012,26 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
     missionRng: board.missionRng,
     nextMissionId: board.nextMissionId,
   };
-  return arrived;
+  /*
+   * §133.6: прибытие — единственное место, где решается судьба «Сверхновой».
+   * Сначала высадка (если летели с беженцами), потом возможный старт события.
+   */
+  return afterArrival(arrived, at, events);
+}
+
+/**
+ * §133.6: что происходит на прибытии вокруг «Сверхновой».
+ *
+ * Порядок важен: сперва высадка беженцев (иначе старт нового события затёр бы
+ * их судьбу), потом — проверка, не пора ли начать событие.
+ */
+function afterArrival(state: GameState, at: number, events: GameEvent[]): GameState {
+  const delivered = deliverRefugees(state, at, DEFAULT_SETTINGS);
+  if (delivered.state !== state) {
+    state = delivered.state;
+    events.push(...delivered.events);
+  }
+  return state;
 }
 
 /**
@@ -3110,6 +3207,13 @@ export function advance(
       s = spawnEncounter(s, tSpawn, settings, events);
     } else {
       s = arrive(s, tArrive, events);
+      // §133.6: прибытие могло включить «Сверхновую» — условия проверяются
+      // здесь, где известен темп игры (от него зависят часы до взрыва).
+      const started = startSupernova(s, tArrive, settings);
+      if (started.state !== s) {
+        s = started.state;
+        events.push(...started.events);
+      }
     }
   }
 
@@ -3131,6 +3235,33 @@ export function advance(
   if (ticked.state !== s) {
     s = ticked.state;
     events.push(...ticked.events);
+  }
+
+  /*
+   * §133.6: «Сверхновая». Утечка и сигналы бедствия считаются по игровым
+   * часам, поэтому в закрытой вкладке топливо вытекает так же, как при
+   * открытой. Взрыв не убивает игрока (смертей в игре нет): гибнет станция,
+   * сгорает галактический двигатель, корабль уносит в следующую галактику.
+   */
+  const tickedSupernova = tickSupernova(s, now, settings);
+  if (tickedSupernova.state !== s) {
+    s = tickedSupernova.state;
+    events.push(...tickedSupernova.events);
+  }
+  if (tickedSupernova.exploded) {
+    const dead = destroyStation(s, now);
+    s = dead.state;
+    events.push(...dead.events);
+    s = {
+      ...nextGalaxyArrival({ ...s, fuel: 0 }, now),
+      ship: { ...s.ship, galacticHyperdrive: false },
+      missionRep: (s.missionRep ?? 0) - 10,
+    };
+    events.push({
+      type: 'supernova',
+      at: now,
+      text: 'Провал «Сверхновой»: репутация −10, галактический двигатель сгорел.',
+    });
   }
 
   return { state: s, events };
@@ -3485,5 +3616,12 @@ export function deserialize(json: string): GameState {
     state.missionOffers = board.missionOffers;
     state.missionRng = board.missionRng;
   }
+  /*
+   * §133.6: «Сверхновая» появилась позже остальных полей. Сохранения до неё
+   * читаются как «события нет», погибших станций нет, кулдаун не идёт.
+   */
+  if (state.supernova === undefined) state.supernova = null;
+  if (!Array.isArray(state.destroyedStations)) state.destroyedStations = [];
+  if (typeof state.supernovaEndedAt !== 'number') state.supernovaEndedAt = 0;
   return state;
 }

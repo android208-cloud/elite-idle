@@ -202,6 +202,8 @@ export function refreshOffers(state: GameState): GameState {
  * пассажирский контракт действительно мешает грузить товар — в этом и смысл.
  */
 export function takeMission(state: GameState, id: number, now: number, settings: Settings): MissionResult {
+  // §133.6: во время «Сверхновой» брать контракты негде и некогда.
+  if (state.supernova && !state.supernova.escaped) return { state, error: 'no-offer' };
   const offer = offersOf(state).find((o) => o.id === id);
   if (!offer) return { state, error: 'no-offer' };
   if (missionsOf(state).length >= MISSION_OFFERS) return { state, error: 'no-hold' };

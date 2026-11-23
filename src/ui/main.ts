@@ -25,6 +25,13 @@ import { layoutLabels, placeSingle, type Box, type LabelItem } from './label-lay
 import { EQUIPMENT, enemyById, equipmentAvailable, LASER_NAMES, legalLabel, rankOf, type EquipmentId } from '../core/ships.ts';
 import {
   advance,
+  hoursLeft,
+  stationAlive,
+  stationLocked,
+  supernovaOf,
+  supernovaProgress,
+  SUPERNOVA_TRIGGER_KILLS,
+  takeRefugees,
   buy,
   buyEquipment,
   buyShip,
@@ -119,6 +126,7 @@ import {
   type PilotRole,
 } from '../core/fleet.ts';
 import {
+  holdCapacity,
   maxFuel,
   maxMissiles,
   patrolMissilesRequired,
@@ -1960,7 +1968,12 @@ function priceChip(i: number): string {
  */
 function holdBar(): string {
   const tons = cargoTons(state);
-  const cap = tons + state.holdSpace;
+  /*
+   * §133.6: при беженцах на борту трюм занят, но груза нет — `tons + holdSpace`
+   * дало бы «0 из 0». Вместимость берём у корабля, а сумму оставляем как
+   * нижнюю границу для старых сейвов, где она могла быть больше.
+   */
+  const cap = Math.max(holdCapacity(state.ship), tons + state.holdSpace);
   const pct = cap > 0 ? Math.min(100, (tons / cap) * 100) : 0;
   return `<div class="progress"><div style="width:${pct}%"></div></div>`;
 }
@@ -2104,7 +2117,32 @@ function stationBuyActions(): string {
 function marketScreen(): string {
   // §98: в полёте рынок недоступен, но вкладка не пустует — это «Трюм».
   if (state.flight) return holdScreen();
-  const docked = true;
+  /*
+   * §133.6: СТАНЦИЯ ВО ВРЕМЯ «СВЕРХНОВОЙ».
+   *
+   * Пользователь: «не позволить заправиться на станции (доступен только рынок
+   * с беженцами)». Поэтому здесь торговать нечем: все действия по товару
+   * выключены, а вместо них — одна кнопка «Взять беженцев». Так миссия не
+   * решается за 14 CR заправки.
+   */
+  const sn = supernovaOf(state);
+  const locked = stationLocked(state);
+  // Погибшая станция не возвращается: на её месте не торгуют и не чинят.
+  if (!stationAlive(state)) {
+    return `<div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+      <div class="sub">Станции здесь больше нет: звезда вспыхнула, а спасать было некому.</div></div>`;
+  }
+  const snCard = sn && !sn.escaped
+    ? `<div class="card illegal"><h2>Сверхновая</h2>
+      <div class="sub">Топливо течёт: ${ly(state.fuel)} из ${ly(maxFuel(state.ship))} · до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч</div>
+      <div class="sub">${sn.refugees
+        ? 'Беженцы на борту. Прыгайте к любой станции — здесь их уже не спасти.'
+        : 'Станция занята беженцами: заправки, торговли и оборудования здесь нет.'}</div>
+      <div class="row" style="margin-top:10px">${sn.refugees
+        ? '<span class="muted">Трюм занят целиком</span>'
+        : '<button class="btn tonal" data-action="refugees">Взять беженцев</button>'}</div></div>`
+    : '';
+  const docked = !locked;
   const rows = COMMODITIES.map((c, i) => {
     const m = state.market[i];
     /*
@@ -2140,7 +2178,8 @@ function marketScreen(): string {
       </div></div>`;
   }).join('');
   const tons = cargoTons(state);
-  const cap = tons + state.holdSpace;
+  // §133.6: см. `holdBar` — при беженцах вместимость берём у корабля.
+  const cap = Math.max(holdCapacity(state.ship), tons + state.holdSpace);
   /*
    * §130: на рынке заголовок — «Станция», а не «Рынок».
    *
@@ -2171,15 +2210,16 @@ function marketScreen(): string {
    * была опущена на высоту этой строки и покрашена тональным цветом).
    */
   const takenNow = missionsOf(state).length;
-  return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
+  return `${snCard}<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
     <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
     ${holdBar()}
     <div class="row" style="margin-top:10px">
       ${stationBuyActions()}
       <span class="spacer"></span>
-      <button class="btn tonal" data-action="contracts-open">Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
+      <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
-    ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}</div></div>${rows}`;
+    ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
+    ${locked ? '<div class="sub">Пока идёт событие, станция торгует только беженцами</div>' : ''}</div></div>${rows}`;
 }
 
 /*
@@ -2213,6 +2253,15 @@ function missionRealMs(hours: number): number {
 
 function contractsScreen(): string {
   const now = Date.now();
+  /*
+   * §133.6: во время «Сверхновой» доска закрыта — на станции сейчас одно дело,
+   * и это не контракты.
+   */
+  if (stationLocked(state)) {
+    return `<div class="card"><h2>Контракты</h2>
+      <div class="sub">Станция занята беженцами: доска закрыта, пока идёт событие.</div>
+      <div class="row" style="margin-top:10px"><button class="btn" data-action="contracts-close">Назад</button></div></div>`;
+  }
   const systems = systemsOf(state.galaxy);
   const here = systems[state.system];
   const rep = missionRepOf(state);
@@ -2324,7 +2373,8 @@ function contractsScreen(): string {
 const equipmentNote = (item: (typeof EQUIPMENT)[number]): string => `${cr(item.price)} · №${item.screenNumber} на верфи`;
 
 function equipmentRows(): string {
-  const docked = !state.flight;
+  // §133.6: во время «Сверхновой» станция оборудованием не торгует.
+  const docked = !state.flight && !stationLocked(state);
   const tek = currentSystem(state).techLevel;
   return EQUIPMENT.map((item) => {
     const have = owns(state.ship, item.id);
@@ -2362,7 +2412,8 @@ function equipmentRows(): string {
 }
 
 function hangarScreen(): string {
-  const docked = !state.flight;
+  // §133.6: во время «Сверхновой» станция не заправляет и не продаёт.
+  const docked = !state.flight && !stationLocked(state);
   const tank = maxFuel(state.ship);
   const missing = tank - state.fuel;
   // Модель корабля живёт в ангаре: это место про сам корабль, а экран
@@ -2424,7 +2475,8 @@ function hangarScreen(): string {
  * совершает обмен.
  */
 function shipyardCard(): string {
-  const docked = !state.flight;
+  // §133.6: верфь тоже закрыта, пока станция занята беженцами.
+  const docked = !state.flight && !stationLocked(state);
   const economy = currentSystem(state).economy;
   const forSale = shipsForSale(economy);
   const mine = state.ship.model;
@@ -2997,6 +3049,19 @@ function statsCard(): string {
     kills: 0, fled: 0, skipped: 0, goodTrades: 0, badTrades: 0,
     tradeProfit: 0, jumps: 0, dockings: 0, dockingFails: 0,
   };
+  /*
+   * §133.6: ПРОГРЕСС «СВЕРХНОВОЙ» — ТОЛЬКО ПОСЛЕ ПЕРВЫХ ДВУХ УСЛОВИЙ.
+   *
+   * Пользователь: ранг «Опасный» оставить дополнительным условием, но прогресс
+   * показывать только когда галактика ≠ 1 и прыжков больше 32 — иначе секрет
+   * перестаёт быть секретом с первого экрана.
+   */
+  const snProgress = supernovaProgress(state);
+  const snHint = snProgress.basicsMet
+    ? `<div class="card"><h2>Сверхновая</h2>
+      <div class="sub">${snProgress.rankMet ? 'Ранг «Опасный» есть.' : `Нужен ранг «Опасный»: ${state.kills} из ${SUPERNOVA_TRIGGER_KILLS} уничтоженных.`}
+      ${snProgress.driveMet ? 'Галактический двигатель на борту.' : 'Нужен галактический гипердвигатель.'}</div></div>`
+    : '';
   const trades = st.goodTrades + st.badTrades;
   const rate = trades > 0 ? Math.round((st.goodTrades / trades) * 100) : 0;
   const profitSign = st.tradeProfit >= 0 ? '+' : '−';
@@ -3010,6 +3075,7 @@ function statsCard(): string {
       ${stat('Пропущено', String(st.skipped))}
       ${stat('Доход флота', cr(st.pilotIncome ?? 0))}
     </div>
+    ${snHint}
     <h2 style="margin-top:14px">Торговля</h2>
     <div class="grid">
       ${stat('Удачных', String(st.goodTrades))}
@@ -3949,6 +4015,16 @@ function onAction(el: HTMLElement): void {
       }
       state = r.state;
       tradeLog('Продано', i, r.amount, state.cash - cashBefore);
+      break;
+    }
+    case 'refugees': {
+      // §133.6: беженцы занимают трюм целиком — это осознанное действие.
+      const r = takeRefugees(state, Date.now());
+      state = r.state;
+      handleEvents(r.events);
+      if (r.error === 'missions') addLog('Сначала высадите пассажиров по контракту: трюм должен быть свободен');
+      if (r.error === 'no-station') addLog('Станции больше нет — спасать некого');
+      if (r.error === 'already') addLog('Беженцы уже на борту');
       break;
     }
     case 'refuel': {
