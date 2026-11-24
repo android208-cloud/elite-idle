@@ -285,6 +285,56 @@ test('§133.6: уход прыжком сохраняет двигатель и 
   assert.equal(later.state.fuel, jumped.state.fuel);
 });
 
+/*
+ * §133.20: ВЫБРОС В ДРУГУЮ ГАЛАКТИКУ.
+ *
+ * Пользователь: «я забрал беженцев, перелетел на соседнюю станцию, но меня не
+ * перекинуло в другую галактику». Оригинал и наша спека (§133.4 п. 5):
+ * «прыжок уводит не в выбранную систему, а в другую галактику». Значит уход с
+ * беженцами не бывает обычным прыжком: волна догоняет корабль на прибытии.
+ */
+test('§133.20: с беженцами прыжок кончается в другой галактике', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  const jumped = startJump(taken, neighbour(taken), T0 + 2000, calm);
+  assert.equal(jumped.error, undefined);
+  assert.equal(jumped.state.flight?.castAway, true, 'полёт помечен: выбросит в другую галактику');
+
+  const arrived = advance(jumped.state, T0 + 2000 + 60 * 60_000, calm).state;
+  assert.equal(arrived.flight, null, 'долетели');
+  assert.equal(arrived.galaxy, 3, 'галактика 2 → 3');
+  assert.equal(refugeesAboard(arrived) > 0, true, 'люди на борту');
+  assert.equal(stationAlive({ ...arrived, galaxy: 2, system: 3 }), false, 'станция в прошлой галактике погибла');
+
+  // Награда выдаётся и здесь: способ ухода на неё не влияет (§133.11).
+  const landed = deliverRefugees(arrived, T0 + 5000, calm);
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS);
+});
+
+test('§133.20: без беженцев прыжок обычный — в выбранную систему', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const target = neighbour(base);
+  const jumped = startJump(base, target, T0 + 2000, calm);
+  assert.equal(jumped.state.flight?.castAway, undefined, 'броска нет');
+  const arrived = advance(jumped.state, T0 + 2000 + 60 * 60_000, calm).state;
+  assert.equal(arrived.galaxy, 2, 'галактика та же');
+  assert.equal(arrived.system, target, 'и система та, куда летели');
+});
+
+test('§133.20: на погибшую станцию не прыгнуть', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const target = neighbour(base);
+  // Из соседней системы обратно на погибшую — отказ, а не полёт в пустоту.
+  const fromNeighbour: GameState = {
+    ...base,
+    system: target,
+    destroyedStations: [stationKey(2, 3)],
+  };
+  assert.equal(startJump(fromNeighbour, 3, T0, calm).error, 'no-station');
+  // Живая станция прыгается как обычно.
+  assert.equal(startJump({ ...fromNeighbour, destroyedStations: [] }, 3, T0, calm).error, undefined);
+});
+
 test('§133.6: взрыв уничтожает станцию навсегда и сжигает двигатель', () => {
   // Взрыв возможен только когда корабль не на станции. Патруль во время
   // события закрыт (§133.12), поэтому уходим в него ДО начала события.

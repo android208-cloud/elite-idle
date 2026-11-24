@@ -434,6 +434,8 @@ const JUMP_ERRORS: Record<JumpError, string> = {
   'in-flight': 'Корабль уже в полёте',
   'same-system': 'Вы уже в этой системе',
   'too-far': 'Не хватает топлива',
+  // §133.20: станция погибла навсегда — лететь туда некуда.
+  'no-station': 'Станции здесь больше нет',
   'bad-target': 'Неверная цель',
   // §78: патруль требует полного боекомплекта и запаса топлива.
   'no-missiles': 'Для патруля нужно 4 ракеты',
@@ -1258,6 +1260,8 @@ function mapScreen(): string {
     let reason = '';
     if (state.flight) reason = JUMP_ERRORS['in-flight'];
     else if (selected === state.system) reason = JUMP_ERRORS['same-system'];
+    // §133.20: погибшая станция остаётся на карте крестом — лететь некуда.
+    else if (!stationAlive(state, selected)) reason = JUMP_ERRORS['no-station'];
     else if (d > state.fuel) reason = JUMP_ERRORS['too-far'];
     /*
      * §132.9: ПРИЧИНА ОТКАЗА — В ПРАВОМ ВЕРХНЕМ УГЛУ.
@@ -1314,10 +1318,26 @@ function mapScreen(): string {
 
   // Две карты одна под другой: общая (вся галактика, горизонтальная)
   // и местная (окно вокруг корабля, крупно).
+  /*
+   * §133.20: ПОГИБШИЕ СТАНЦИИ — СТРОКОЙ ПОД КАРТОЙ.
+   *
+   * Пользователь: «станция со сверхновой не исчезла с карты». Крест на месте
+   * точки виден только там, где станция стояла, и только если вернуться в эту
+   * галактику. Строка называет её по имени — так пропажа не остаётся
+   * незамеченной.
+   */
+  const deadNames = (state.destroyedStations ?? [])
+    .map((k) => k.split(':').map(Number))
+    .filter(([g]) => g === state.galaxy)
+    .map(([, sys]) => systemsOf(state.galaxy)[sys]?.name)
+    .filter((n): n is string => !!n);
+  const deadLine = deadNames.length
+    ? `<div class="sub" style="color:#a2605c">Станции больше нет: ${deadNames.join(', ')} ×</div>`
+    : '';
   return `<div class="card map-card">
       <h2>Галактика ${state.galaxy}</h2>
       <canvas id="map-overview"></canvas>
-      <div class="sub">Рамка — область местной карты ниже.</div>${legend}
+      <div class="sub">Рамка — область местной карты ниже.</div>${deadLine}${legend}
     </div>
     <div class="card map-card">
       <h2>Окрестности</h2>
@@ -1775,10 +1795,31 @@ function drawSystems(
     // На местной карте точки крупнее: их немного, и по ним надо попадать
     // пальцем. На общей — мельче, иначе 256 точек сольются в пятно.
     const big = view.canvas.dataset.local === '1';
-    const radius = isHere ? (big ? 6 : 4.5) : reachable ? (big ? 4.5 : 3) : big ? 3.5 : 2.2;
-    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
-    ctx.fill();
+    /*
+     * §133.20: ПОГИБШАЯ СТАНЦИЯ — КРЕСТ.
+     *
+     * Пользователь: «станция со сверхновой не исчезла с карты, как должна
+     * была». Сама звезда никуда не делась, но станции в системе больше нет, и
+     * по точке этого было не понять. Крест говорит сразу: место есть, лететь
+     * туда незачем.
+     */
+    if (!stationAlive(state, sys.index)) {
+      const r = big ? 4.5 : 3.5;
+      ctx.strokeStyle = isSel ? '#ffd37a' : '#a2605c';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(p.x - r, p.y - r);
+      ctx.lineTo(p.x + r, p.y + r);
+      ctx.moveTo(p.x + r, p.y - r);
+      ctx.lineTo(p.x - r, p.y + r);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    } else {
+      const radius = isHere ? (big ? 6 : 4.5) : reachable ? (big ? 4.5 : 3) : big ? 3.5 : 2.2;
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = isHere ? '#4fd8c4' : reachable ? '#dde4e2' : '#5c6b68';
+      ctx.fill();
+    }
     if (isSel) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, view.canvas.dataset.local === '1' ? 12 : 9, 0, Math.PI * 2);
@@ -1808,13 +1849,14 @@ function drawSystems(
     })
     .map(({ sys, p }) => {
       const reachable = distance(here, sys) <= state.fuel;
+      const dead = !stationAlive(state, sys.index);
       return {
         x: p.x,
         y: p.y,
-        text: sys.name,
-        sub: `${shortEconomy(sys.economy)} · Т${sys.techLevel + 1}`,
+        text: dead ? `${sys.name} ×` : sys.name,
+        sub: dead ? 'станции нет' : `${shortEconomy(sys.economy)} · Т${sys.techLevel + 1}`,
         index: sys.index,
-        color: sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88',
+        color: dead ? '#a2605c' : sys.index === here.index ? '#4fd8c4' : reachable ? '#dde4e2' : '#7b8b88',
         subColor: sys.index === here.index ? 'rgba(79,216,196,.72)' : 'rgba(221,228,226,.55)',
       };
     });

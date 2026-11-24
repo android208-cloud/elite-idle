@@ -24,6 +24,7 @@ import {
   escapeSupernova,
   galacticEscapeSupernova,
   noteVisit,
+  stationAlive,
   stationKey,
   startSupernova,
   stationLocked,
@@ -407,6 +408,16 @@ export interface Flight {
   encounters: number;
   /** Когда случилась последняя встреча (реальное время), — точка отсчёта. */
   lastEncounterAt: number;
+  /**
+   * §133.20: ПОЛЁТ, КОТОРЫЙ КОНЧИТСЯ В ДРУГОЙ ГАЛАКТИКЕ.
+   *
+   * Ушли с гибнущей станции с беженцами — ударная волна достаёт корабль в
+   * пути и выбрасывает его в следующую галактику (решение пользователя и
+   * оригинал: «прыжок уводит не в выбранную систему, а в другую галактику»).
+   * Флаг живёт в полёте, потому что бросок случается на ПРИБЫТИИ: топливо и
+   * время прыжка уже оплачены, а куда именно выбросило — решает `arrive`.
+   */
+  castAway?: boolean;
   /**
    * Патруль (§78): полёт внутри системы, а не прыжок между ними.
    *
@@ -1064,7 +1075,9 @@ export type JumpError =
   /** §133.12: во время «Сверхновой» станция занята беженцами — не до патруля. */
   | 'locked'
   /** §78: топлива не хватает даже на резерв возврата. */
-  | 'no-fuel';
+  | 'no-fuel'
+  /** §133.20: в этой системе станции больше нет — прыжок туда бессмыслен. */
+  | 'no-station';
 
 export type GalacticJumpError = 'in-flight' | 'no-drive';
 
@@ -1285,6 +1298,21 @@ export function startJump(state: GameState, target: number, now: number, setting
   const d = distance(systems[state.system], systems[target]);
   if (d > state.fuel) return { state, error: 'too-far' };
   /*
+   * §133.20: НА ПОГИБШУЮ СТАНЦИЮ НЕ ЛЕТЯТ.
+   *
+   * Пользователь: «станция со сверхновой не исчезла с карты, как должна была,
+   * и туда можно вернуться». Прыжок туда теперь не начинается: в системе нет
+   * ни рынка, ни топлива, ни ремонта — лететь некуда и незачем.
+   */
+  if (!stationAlive(state, target)) return { state, error: 'no-station' };
+  /*
+   * §133.20: флаг «выбросит в другую галактику» считается ДО `escapeSupernova`
+   * — тот сразу закрывает событие и переводит его в «вывезли».
+   */
+  const snBefore = state.supernova;
+  const castAway = !!snBefore && !snBefore.escaped && snBefore.refugees
+    && snBefore.galaxy === state.galaxy && snBefore.system === state.system;
+  /*
    * §133.6: прыжок с топливом — это «ушли от сверхновой своим ходом».
    * Галактический двигатель при этом цел: его тратят только те, кому топлива
    * не хватило.
@@ -1316,6 +1344,9 @@ export function startJump(state: GameState, target: number, now: number, setting
         // Отсчёт первой — от момента вылета.
         encounters: 0,
         lastEncounterAt: now,
+        // Поле ставим только когда оно есть: `undefined` в сохранении не
+        // выживает, и обратимость сейва ломается (test/speed).
+        ...(castAway ? { castAway: true } : {}),
       },
     },
   };
@@ -3125,6 +3156,25 @@ function escapeStep(
 /** Прибытие в систему: обновляется рынок со случайным колебанием. */
 function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
   const flight = state.flight!;
+  /*
+   * §133.20: УДАРНАЯ ВОЛНА.
+   *
+   * Корабль ушёл с гибнущей станции с беженцами — волна догоняет его в пути и
+   * выбрасывает в следующую галактику. Прибытие считается как галактический
+   * прыжок: рынок, доска контрактов и сбережения здешнего флота — по новой
+   * галактике. Топливо и время прыжка уже списаны, двигатель при этом цел.
+   */
+  if (flight.castAway) {
+    const thrown = nextGalaxyArrival({ ...state, flight: null, encounter: null, combat: null }, at);
+    const landed = systemsOf(thrown.galaxy)[thrown.system];
+    events.push({
+      type: 'supernova',
+      at,
+      text: `Ударная волна сверхновой догнала корабль в пути: вы в галактике ${thrown.galaxy}. Беженцы на борту — высадите их на любой станции.`,
+    });
+    events.push({ type: 'arrived', at, name: landed.name, text: `Прибытие: ${landed.name}` });
+    return thrown;
+  }
   const system = systemsOf(state.galaxy)[flight.to];
   const [fluct, rng] = nextByte(state.rng);
   if (state.encounter) events.push({ type: 'vanished', at, text: 'Корабль остался позади' });

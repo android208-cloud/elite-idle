@@ -25,9 +25,9 @@ const check = (name, cond, extra = '') => {
 const HOUR = 3_600_000;
 const NOW = Date.now();
 
-function boot({ supernova, system = 3, holdSpace = 16, cargo, flight = null }) {
+function boot({ supernova, system = 3, galaxy = 2, holdSpace = 16, cargo, flight = null, destroyed = [] }) {
   const state = {
-    version: 6, galaxy: 2, system, cash: 200000, fuel: 60, holdSpace,
+    version: 6, galaxy, system, cash: 200000, fuel: 60, holdSpace,
     cargo: cargo ?? Array(17).fill(0).map((_, i) => (i === 0 ? 4 : 0)),
     market: Array(17).fill({ price: 100, quantity: 5 }),
     rng: 1, flight,
@@ -42,7 +42,7 @@ function boot({ supernova, system = 3, holdSpace = 16, cargo, flight = null }) {
     cargoBasis: Array(17).fill(0), cargoOrigin: [], escapeRoute: [], escapeStatus: -1,
     careerMs: 0, careerAt: 0,
     missions: [], missionOffers: [], missionRep: 0, nextMissionId: 1, missionRng: 1,
-    supernova, destroyedStations: [], supernovaEndedAt: 0,
+    supernova, destroyedStations: destroyed, supernovaEndedAt: 0,
   };
   const dom = new JSDOM(html, {
     runScripts: 'dangerously', pretendToBeVisual: true, url: 'https://elite.test/',
@@ -281,6 +281,63 @@ const flightDrop = df.querySelector('[data-action="deliver-refugees"]');
 check('но высадить в полёте нельзя', !flightDrop || flightDrop.disabled === true,
   flightDrop ? flightDrop.outerHTML.slice(0, 120) + ' | ' + flightText.slice(0, 120) : 'кнопки нет');
 wf.close();
+
+/* ---------- §133.20: бросок в другую галактику и крест на карте ---------- */
+/*
+ * Пользователь: «забрал беженцев, перелетел на соседнюю станцию, но меня не
+ * перекинуло в другую галактику, а станция со сверхновой не исчезла с карты».
+ * Полёт с бросок проверяется на прибытии: ждём ~1 с реального времени, пока
+ * таймер доведёт прыжок до конца.
+ */
+const thrown = boot({
+  supernova: { ...escapedEvent },
+  holdSpace: 0,
+  cargo: Array(17).fill(0),
+  // Станция помечена погибшей ещё на вылете (`startJump` → `escapeSupernova`);
+  // здесь проверяем, что бросок эту пометку не теряет.
+  destroyed: ['2:3'],
+  flight: {
+    from: 3, to: 11, departAt: NOW, dueAt: NOW + 900, arriveAt: NOW + 900,
+    fuelUsed: 20, remainingBaseMs: 900, elapsedBaseMs: 0,
+    encounters: 0, lastEncounterAt: 0, patrol: false, patrolFuelUsed: 0, castAway: true,
+  },
+});
+const wt = thrown.window, dt = wt.document;
+await wait(2200);
+const saveT = JSON.parse(JSON.parse(wt.localStorage.getItem('elite-idle-save-v1')).state);
+check('§133.20: бросок унёс в другую галактику', saveT.galaxy === 3, String(saveT.galaxy));
+check('§133.20: и беженцы по-прежнему на борту', saveT.supernova?.taken === 20, String(saveT.supernova?.taken));
+dt.querySelector('[data-action="tab"][data-tab="market"]')
+  .dispatchEvent(new wt.MouseEvent('click', { bubbles: true }));
+await wait(300);
+const thrownText = dt.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('§133.20: на новом рынке есть кнопка «Высадить»',
+  !!dt.querySelector('[data-action="deliver-refugees"]') && !dt.querySelector('[data-action="deliver-refugees"]').disabled);
+check('§133.20: бросок не теряет пометку о погибшей станции',
+  (saveT.destroyedStations ?? []).includes('2:3'), (saveT.destroyedStations ?? []).join(','));
+check('§133.20: в журнале сказано про ударную волну',
+  /Ударная волна/.test((JSON.parse(wt.localStorage.getItem('elite-idle-save-v1')).log ?? []).map((l) => l.text).join(' | ')),
+  thrownText.slice(0, 80));
+wt.close();
+
+/*
+ * Погибшая станция в текущей галактике: на карте — крест, под картой — строка
+ * с именем, а на её месте станции уже нет.
+ */
+const graveyard = boot({ supernova: null, system: 3, destroyed: ['2:3'] });
+const wg = graveyard.window, dg = wg.document;
+await wait(900);
+dg.querySelector('[data-action="tab"][data-tab="map"]')
+  .dispatchEvent(new wg.MouseEvent('click', { bubbles: true }));
+await wait(300);
+const mapText = dg.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('§133.20: под картой названа погибшая станция', /Станции больше нет: \S+ ×/.test(mapText), mapText.slice(0, 120));
+dg.querySelector('[data-action="tab"][data-tab="market"]')
+  .dispatchEvent(new wg.MouseEvent('click', { bubbles: true }));
+await wait(300);
+check('§133.20: на её месте станции нет',
+  /Станции здесь больше нет/.test(dg.getElementById('content').textContent));
+wg.close();
 
 console.log(`\n${ok}/${ok + bad} проверок §133.6 пройдено`);
 process.exit(bad === 0 ? 0 : 1);
