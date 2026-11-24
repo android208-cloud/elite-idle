@@ -77,6 +77,8 @@ import {
   pilotCycleMs,
   pilotEncounters,
   pilotRouteProfit,
+  pilotGalaxy,
+  awayFleetOutstanding,
   surveillanceMap,
   type PilotError,
   type GameEvent,
@@ -1283,8 +1285,11 @@ function mapScreen(): string {
    * Пилоты без маршрута тоже видны здесь — иначе «нанял, а он не летит»
    * выглядело бы поломкой.
    */
-  const flying = state.pilots.filter((p) => p.route !== null);
-  const idle = state.pilots.length - flying.length;
+  // §133.15: чужие галактики в легенду не попадают — их маршруты на этой
+  // карте не нарисованы, и легенда без линий была бы загадкой.
+  const here = state.pilots.filter((p) => pilotGalaxy(state, p) === state.galaxy);
+  const flying = here.filter((p) => p.route !== null);
+  const idle = here.length - flying.length;
   const roles = [...new Set(flying.map((p) => p.role))];
   const legend = roles.length
     ? `<div class="sub" style="margin-top:6px">Маршруты пилотов: ${roles
@@ -1574,7 +1579,15 @@ const MAX_ROUTE_LINES = 40;
  *     пучок одинаковых.
  */
 function drawPilotRoutes(ctx: CanvasRenderingContext2D, view: ChartView): void {
-  const pilots = state.pilots ?? [];
+  /*
+   * §133.15: РИСУЕМ ТОЛЬКО СВОЮ ГАЛАКТИКУ.
+   *
+   * Пользователь заметил: после перехода в другую галактику на карте
+   * остались старые маршруты. Причина — маршрут хранит НОМЕРА систем, а у
+   * новой галактики свои системы под теми же номерами: линии «есть», только
+   * ведут не туда. Фильтр по галактике пилота снимает это целиком.
+   */
+  const pilots = (state.pilots ?? []).filter((p) => pilotGalaxy(state, p) === state.galaxy);
   if (!pilots.length) return;
 
   const systems = systemsOf(state.galaxy);
@@ -2618,7 +2631,10 @@ function shipyardCard(): string {
 function fleetTotals(): { count: number; inRoute: number; perHour: number; earned: number } {
   let perHour = 0;
   let inRoute = 0;
-  for (const p of state.pilots) {
+  // §133.15: числа — про пилотов ЗДЕСЬ. Чужие галактики считаются отдельно
+  // (`awayTotals`), иначе «доход в час» обещал бы деньги, которых не будет.
+  const local = state.pilots.filter((p) => pilotGalaxy(state, p) === state.galaxy);
+  for (const p of local) {
     const cycle = pilotCycleMs(state, p, settings);
     if (cycle <= 0) continue;
     const income = pilotRunIncome(pilotRouteProfit(state, p), p.id - 1, p.runs);
@@ -2626,11 +2642,41 @@ function fleetTotals(): { count: number; inRoute: number; perHour: number; earne
     inRoute++;
   }
   return {
-    count: state.pilots.length,
+    count: local.length,
     inRoute,
     perHour,
     earned: state.stats?.pilotIncome ?? 0,
   };
+}
+
+/**
+ * §133.15: ЧТО ОСТАЛОСЬ В ДРУГИХ ГАЛАКТИКАХ.
+ *
+ * Пользователь: пилоты из старой галактики «не должны быть видны в ангаре
+ * новой», а кредиты «должны копиться и быть зачислены по возвращении».
+ * Значит в ангаре их нет — но игрок обязан знать, что флот не пропал, и
+ * сколько уже накоплено. Поэтому одна строка на галактику, без карточек.
+ */
+function awayTotals(): { galaxy: number; pilots: number; pending: number }[] {
+  const map = new Map<number, { pilots: number; pending: number }>();
+  for (const p of state.pilots) {
+    const g = pilotGalaxy(state, p);
+    if (g === state.galaxy) continue;
+    const row = map.get(g) ?? { pilots: 0, pending: 0 };
+    row.pilots++;
+    row.pending += Math.max(0, p.pending ?? 0);
+    map.set(g, row);
+  }
+  return [...map].map(([galaxy, v]) => ({ galaxy, ...v })).sort((a, b) => a.galaxy - b.galaxy);
+}
+
+/** Одна строка про флот в других галактиках (или пустая, если его нет). */
+function awayFleetLine(): string {
+  const rows = awayTotals();
+  if (rows.length === 0) return '';
+  return rows
+    .map((r) => `Галактика ${r.galaxy}: пилотов ${r.pilots}, накоплено ${cr(r.pending)} — зачислим по возвращении`)
+    .join('<br>');
 }
 
 /**
@@ -2647,15 +2693,25 @@ function fleetTotals(): { count: number; inRoute: number; perHour: number; earne
 function pilotsSummaryCard(): string {
   if (state.kills < PILOT_MIN_KILLS) return '';
   const t = fleetTotals();
+  const awayLine = awayFleetLine();
 
+  // §133.15: строка про чужие галактики нужна в обеих ветках — и когда здесь
+  // пилотов нет вовсе, игрок должен видеть, где флот и сколько он накопил.
+  const awayBlock = awayLine
+    ? `<div class="sub" style="margin-top:6px;color:var(--dim)">${awayLine}</div>`
+    : '';
   const body = t.count === 0
-    ? `<div class="sub">Пилот не нанят. Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему.</div>`
+    ? `<div class="sub">${awayLine
+      ? 'Здесь пилотов нет: флот остался в другой галактике и работает там.'
+      : 'Пилот не нанят. Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему.'}</div>${awayBlock}`
     : `<div class="grid">
         ${stat('Пилотов', String(t.count))}
         ${stat('В рейсе', String(t.inRoute))}
         ${stat('Доход в час', `${t.perHour} CR`)}
       </div>
-      <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Один маршрут — один пилот.</div>`;
+      <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Один маршрут — один пилот.</div>${
+        awayLine ? `<div class="sub" style="margin-top:6px;color:var(--dim)">${awayLine}</div>` : ''
+      }`;
 
   return `<div class="card" data-action="pilots-open" style="cursor:pointer">
       <div class="row"><h2 style="margin:0">Пилоты</h2><span class="spacer"></span>
@@ -2687,7 +2743,11 @@ function pilotsScreen(): string {
   const economy = currentSystem(state).economy;
   const t = fleetTotals();
 
-  const cards = state.pilots.map((p) => {
+  // §133.15: карточки — только пилоты этой галактики. Остальные видны одной
+  // строкой ниже: их нельзя ни переставить, ни сменить им корабль отсюда.
+  const localPilots = state.pilots.filter((p) => pilotGalaxy(state, p) === state.galaxy);
+  const awayLine = awayFleetLine();
+  const cards = localPilots.map((p) => {
     const cycle = pilotCycleMs(state, p, settings);
     const profit = pilotRouteProfit(state, p);
     const income = pilotRunIncome(profit, p.id - 1, p.runs);
@@ -2818,7 +2878,9 @@ function pilotsScreen(): string {
         ${stat('Принесли', cr(t.earned))}
       </div>
       <div class="sub" style="margin-top:8px">Пилот летает маршрут сам: три четверти выручки — вам, четверть — ему. Рейс — настоящий перелёт туда и обратно плюс два часа отдыха. Один маршрут — один пилот.</div>
-      <div class="sub">Сверху — кто приносит больше в час; пилоты без маршрута в конце. Нанять нового можно выше списка.</div>
+      <div class="sub">Сверху — кто приносит больше в час; пилоты без маршрута в конце. Нанять нового можно выше списка.</div>${
+        awayLine ? `<div class="sub" style="margin-top:6px;color:var(--dim)">${awayLine}</div>` : ''
+      }
     </div>
     <div class="card"><h2>Нанять пилота</h2>
       <div class="sub">Пилот приходит со своим кораблём: цена = корабль + задаток ${cr(PILOT_HIRE_FEE)}.</div>
@@ -2842,6 +2904,8 @@ function pilotsScreen(): string {
 function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): string {
   const spec = SHIPS[pilot.ship];
   const role = routeRole;
+  // §133.15: линию делят и значки показывают только пилоты этой галактики.
+  const localPilots = state.pilots.filter((p) => pilotGalaxy(state, p) === state.galaxy);
 
   const roles = (Object.keys(PILOT_ROLE_NAMES) as PilotRole[]).map((id) => {
     const active = id === role;
@@ -2901,7 +2965,7 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
   const rows = options.map((o) => {
     // §129: та же проверка, что в ядре — иначе витрина обещает запрет,
     // которого нет, или разрешает то, что ядро отклонит.
-    const taken = laneBusy(state.pilots, pilot, o.i, role);
+    const taken = laneBusy(localPilots, pilot, o.i, role);
     const isCurrent = pilot.route?.to === o.i && pilot.role === role;
     /*
      * §132.12: ЗНАЧОК ТОГО, КТО УЖЕ НА ЭТОЙ ЛИНИИ.
@@ -2915,7 +2979,7 @@ function pilotRoutePanel(pilot: Pilot, systems: ReturnType<typeof systemsOf>): s
      * свободна. Теперь перед действием видны роли всех, кто на ней: значок
      * роли плюс подсказка с именем.
      */
-    const guard = state.pilots
+    const guard = localPilots
       .filter((other) => other.id !== pilot.id && other.route?.from === pilot.home && other.route?.to === o.i)
       .map((other) => `<span title="${PILOT_ROLE_NAMES[other.role]}: ${other.name}">${roleIcon(other.role)}</span>`)
       .join('');
@@ -3167,6 +3231,8 @@ function cancelGalacticJump(): void {
 /** Отсчёт дошёл до нуля — прыгаем тем же путём, что и раньше. */
 function fireGalacticJump(): void {
   const from = state.galaxy;
+  // §133.15: сколько флот накопил в той галактике, куда мы летим.
+  const credited = awayFleetOutstanding(state, (state.galaxy % 8) + 1);
   galacticAt = null;
   stopGalacticTicker();
   const r = galacticJump(state, Date.now());
@@ -3180,6 +3246,7 @@ function fireGalacticJump(): void {
   addLog(
     `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
   );
+  if (credited > 0) addLog(`Флот: зачислено ${cr(credited)} — накоплено пилотами в галактике ${state.galaxy}`);
   tab = 'map';
   render();
 }
@@ -3436,6 +3503,7 @@ function openDocking(): boolean {
         // Галактический прыжок: цель не нужна — она задана жёстко
         // (точка 96,96), а двигатель одноразовый.
         const from = state.galaxy;
+        const credited = awayFleetOutstanding(state, (state.galaxy % 8) + 1);
         const rg = galacticJump(state);
         if (rg.error) {
           addLog(
@@ -3449,6 +3517,7 @@ function openDocking(): boolean {
           addLog(
             `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
           );
+          if (credited > 0) addLog(`Флот: зачислено ${cr(credited)} — накоплено пилотами в галактике ${state.galaxy}`);
           tab = 'map';
         }
         render();

@@ -1527,7 +1527,7 @@ export function pilotCycleMs(
   settings: Settings = DEFAULT_SETTINGS,
 ): number {
   if (!pilot.route) return 0;
-  const systems = systemsOf(state.galaxy);
+  const systems = systemsOf(pilot.galaxy ?? state.galaxy);
   const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
   return 2 * flight + settings.pilotRestMs;
 }
@@ -1557,7 +1557,7 @@ export function pilotEncounters(
 ): number {
   if (!pilot.route) return 0;
   if (settings.encounterRate <= 0) return 0;
-  const systems = systemsOf(state.galaxy);
+  const systems = systemsOf(pilot.galaxy ?? state.galaxy);
   const flight = baseJumpDuration(routeDistance(systems, pilot.route), settings);
   const period = ENCOUNTER_PERIOD_MS / settings.encounterRate;
   // Первая встреча — в середине пути, дальше по периоду; пол — одна за плечо.
@@ -1576,26 +1576,82 @@ export function pilotEncounters(
  * Экспортируется, чтобы карточка показывала игроку ТЕ ЖЕ риски, по которым
  * потом считает `accrueFleet`. Двух источников правды тут быть не должно.
  */
-export function surveillanceMap(state: GameState): number[] {
-  const systems = systemsOf(state.galaxy);
+export function surveillanceMap(state: GameState, galaxy = state.galaxy): number[] {
+  const systems = systemsOf(galaxy);
   const map = systems.map((sys) => sys.government);
   for (const pilot of state.pilots) {
+    // §133.15: дежурит только полиция ЭТОЙ галактики — чужие сюда не летают.
+    if (pilotGalaxy(state, pilot) !== galaxy) continue;
     if (pilot.role !== 'police' || !pilot.route) continue;
     map[pilot.route.to] = Math.min(7, map[pilot.route.to] + POLICE_SURVEILLANCE_BONUS);
   }
   return map;
 }
 
+/**
+ * §133.15: В КАКОЙ ГАЛАКТИКЕ РАБОТАЕТ ПИЛОТ.
+ *
+ * В сохранениях до §133.15 поля нет — тогда пилот считается местным: до
+ * появления галактических прыжков других вариантов и быть не могло.
+ */
+export function pilotGalaxy(state: GameState, pilot: Pilot): number {
+  return pilot.galaxy ?? state.galaxy;
+}
+
+/**
+ * §133.15: СКОЛЬКО ФЛОТ НАКОПИЛ В ЭТОЙ ГАЛАКТИКЕ (десятые CR).
+ *
+ * Пилоты в других галактиках летают и зарабатывают, но деньги лежат у них,
+ * а не на счёте командира: зачислить их может только тот, кто туда прилетит.
+ */
+export function awayFleetOutstanding(state: GameState, galaxy = state.galaxy): number {
+  let sum = 0;
+  for (const pilot of state.pilots) {
+    if (pilotGalaxy(state, pilot) !== galaxy) continue;
+    sum += Math.max(0, pilot.pending ?? 0);
+  }
+  return sum;
+}
+
+/**
+ * §133.15: ЗАЧИСЛИТЬ НАКОПЛЕННОЕ.
+ *
+ * Вызывается при прибытии в галактику (галактический прыжок, «толчок»
+ * сверхновой): сбережения пилотов этой галактики переходят на счёт, а сами
+ * пилоты снова считаются местными и работают уже напрямую.
+ */
+export function creditAwayFleet(
+  state: GameState,
+  galaxy = state.galaxy,
+): { state: GameState; credited: number } {
+  const credited = awayFleetOutstanding(state, galaxy);
+  if (credited <= 0) return { state, credited: 0 };
+  return {
+    credited,
+    state: {
+      ...state,
+      cash: state.cash + credited,
+      pilots: state.pilots.map((p) =>
+        pilotGalaxy(state, p) === galaxy && (p.pending ?? 0) > 0 ? { ...p, pending: 0 } : p),
+      stats: {
+        ...state.stats,
+        pilotIncome: (state.stats.pilotIncome ?? 0) + credited,
+      },
+    },
+  };
+}
+
 /** Выручка рейса пилота в десятых кредита. */
 export function pilotRouteProfit(state: GameState, pilot: Pilot): number {
   if (!pilot.route) return 0;
-  const systems = systemsOf(state.galaxy);
+  const galaxy = pilot.galaxy ?? state.galaxy;
+  const systems = systemsOf(galaxy);
   // §108: полицейскому платят наградой за патруль, а не торговой маржой.
   if (pilot.role === 'police') return policeBounty(systems[pilot.route.to].government);
   if (pilot.role === 'pirate') {
-    return pirateLoot(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold);
+    return pirateLoot(galaxy, systems, pilot.route, SHIPS[pilot.ship].hold);
   }
-  return routeProfit(state.galaxy, systems, pilot.route, SHIPS[pilot.ship].hold, pilot.role);
+  return routeProfit(galaxy, systems, pilot.route, SHIPS[pilot.ship].hold, pilot.role);
 }
 
 /**
@@ -1630,6 +1686,9 @@ export function hirePilot(state: GameState, id: ShipId, now: number): PilotResul
     runs: 0,
     failures: 0,
     transfer: null,
+    // §133.15: нанят здесь — здесь и летает, пока не сменится галактика.
+    galaxy: state.galaxy,
+    pending: 0,
   };
 
   return {
@@ -1662,6 +1721,8 @@ export function assignPilotRoute(
 
   const pilot = state.pilots.find((p) => p.id === pilotId);
   if (!pilot) return { state, error: 'none' };
+  // §133.15: пилоту, оставшемуся в другой галактике, маршрут отсюда не задать.
+  if (pilotGalaxy(state, pilot) !== state.galaxy) return { state, error: 'none' };
   // §128: пока пилот летит на новую планету, маршрут ему не назначить.
   if (pilot.transfer && now < pilot.transfer.until) return { state, error: 'busy' };
   /*
@@ -1681,7 +1742,9 @@ export function assignPilotRoute(
 
   // §129: линию делят только пилоты одного типа — полицейский торговцу не
   // конкурент, он эту линию и прикрывает.
-  if (laneBusy(state.pilots, pilot, to, role)) return { state, error: 'taken' };
+  // §133.15: линию делят только пилоты ЭТОЙ галактики.
+  const local = state.pilots.filter((p) => pilotGalaxy(state, p) === state.galaxy);
+  if (laneBusy(local, pilot, to, role)) return { state, error: 'taken' };
 
   const cycle = 2 * baseJumpDuration(ly, settings) + settings.pilotRestMs;
   /*
@@ -1845,17 +1908,34 @@ function accrueFleet(
 ): GameState {
   if (state.pilots.length === 0) return state;
 
-  const systems = systemsOf(state.galaxy);
   /*
-   * §108: надзор считается ОДИН раз на весь досчёт — с учётом ваших
-   * полицейских. Так торговец, стоящий в той же системе, что и дежурный,
-   * получает защиту в том же тике, а не со следующего.
+   * §133.15: У КАЖДОЙ ГАЛАКТИКИ СВОЙ МИР.
+   *
+   * После галактического прыжка пилоты остаются там, где летали, — и
+   * считать их рейсы по системам НОВОЙ галактики нельзя: индексы маршрута
+   * взяты из старой, и на новой карте они означают совсем другие планеты
+   * (другой профит, другой риск). Поэтому контекст (системы, надзор,
+   * охраняемые линии) считается на галактику пилота, а не на игрока.
    */
-  const surv = surveillanceMap(state);
-  const guarded = new Set<number>();
-  for (const other of state.pilots) {
-    if (other.role === 'police' && other.route) guarded.add(other.route.to);
-  }
+  interface GalaxyCtx { systems: ReturnType<typeof systemsOf>; surv: number[]; guarded: Set<number> }
+  const ctxCache = new Map<number, GalaxyCtx>();
+  const ctxFor = (galaxy: number): GalaxyCtx => {
+    const cached = ctxCache.get(galaxy);
+    if (cached) return cached;
+    /*
+     * §108: надзор считается ОДИН раз на весь досчёт — с учётом ваших
+     * полицейских. Так торговец, стоящий в той же системе, что и дежурный,
+     * получает защиту в том же тике, а не со следующего.
+     */
+    const guarded = new Set<number>();
+    for (const other of state.pilots) {
+      if (pilotGalaxy(state, other) !== galaxy) continue;
+      if (other.role === 'police' && other.route) guarded.add(other.route.to);
+    }
+    const ctx = { systems: systemsOf(galaxy), surv: surveillanceMap(state, galaxy), guarded };
+    ctxCache.set(galaxy, ctx);
+    return ctx;
+  };
   let cash = state.cash;
   let legal = state.legal;
   let rng = state.rng;
@@ -1883,6 +1963,20 @@ function accrueFleet(
       kept.push(pilot);
       continue;
     }
+    /*
+     * §133.15: пилот в чужой галактике летает по своим системам, а деньги
+     * не приходят на счёт сразу: они копятся у него и зачисляются, когда
+     * корабль вернётся в эту галактику (иначе флот был бы печатным станком,
+     * работающим из любой точки мира).
+     */
+    const galaxy = pilotGalaxy(state, pilot);
+    const away = galaxy !== state.galaxy;
+    const { systems, surv, guarded } = ctxFor(galaxy);
+    let pendingGain = 0;
+    const earn = (amount: number): void => {
+      if (away) pendingGain += amount;
+      else gained += amount;
+    };
     // §118: с чего начали — чтобы в заметке показать, сколько добавили.
     const legalBefore = legal;
 
@@ -1927,14 +2021,14 @@ function accrueFleet(
      * кубик — риск и есть единственное, что меняет сумму.
      */
     const gross = pilot.role === 'pirate'
-      ? pirateLoot(state.galaxy, systems, pilot.route, spec.hold)
+      ? pirateLoot(galaxy, systems, pilot.route, spec.hold)
       : pilot.role === 'police'
         ? policeBounty(systems[pilot.route.to].government)
-        : routeProfit(state.galaxy, systems, pilot.route, spec.hold, pilot.role);
+        : routeProfit(galaxy, systems, pilot.route, spec.hold, pilot.role);
     // У контрабандиста при досмотре отнимают только запрещёнку — законный
     // груз доезжает (§107, решение пользователя).
     const legalOnly = pilot.role === 'smuggler'
-      ? routeProfit(state.galaxy, systems, pilot.route, spec.hold, 'trader')
+      ? routeProfit(galaxy, systems, pilot.route, spec.hold, 'trader')
       : gross;
 
     let runs = 0;
@@ -1959,9 +2053,10 @@ function accrueFleet(
           cash -= Math.round(shipPrice(pilot.ship) * PIRATE_REPAIR_SHARE);
           continue;
         }
-        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
+        earn(pilotRunIncome(gross, wage, pilot.runs + runs));
         runs++;
-        legal = Math.min(255, legal + PIRATE_LEGAL_PER_RUN);
+        // §133.15: пиратство в чужой галактике не пачкает ваш розыск здесь.
+        if (!away) legal = Math.min(255, legal + PIRATE_LEGAL_PER_RUN);
         continue;
       }
 
@@ -1982,7 +2077,7 @@ function accrueFleet(
           cash -= Math.round(shipPrice(pilot.ship) * POLICE_REPAIR_SHARE);
           continue;
         }
-        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
+        earn(pilotRunIncome(gross, wage, pilot.runs + runs));
         runs++;
         continue;
       }
@@ -1994,12 +2089,12 @@ function accrueFleet(
         }
         if (inspected) {
           failures++;
-          gained += pilotRunIncome(legalOnly, wage, pilot.runs + runs);
+          earn(pilotRunIncome(legalOnly, wage, pilot.runs + runs));
           cash -= SMUGGLER_FINE;
           legal = Math.min(255, legal + SMUGGLER_LEGAL);
           continue;
         }
-        gained += pilotRunIncome(gross, wage, pilot.runs + runs);
+        earn(pilotRunIncome(gross, wage, pilot.runs + runs));
         runs++;
         continue;
       }
@@ -2016,18 +2111,18 @@ function accrueFleet(
       if (raided) {
         const watched = guarded.has(pilot.route.from) || guarded.has(pilot.route.to);
         if (watched && draw() < POLICE_INTERCEPT) {
-          gained += pilotRunIncome(gross, wage, pilot.runs + runs);
+          earn(pilotRunIncome(gross, wage, pilot.runs + runs));
           runs++;
           continue;
         }
         failures++;
         continue;
       }
-      gained += pilotRunIncome(gross, wage, pilot.runs + runs);
+      earn(pilotRunIncome(gross, wage, pilot.runs + runs));
       runs++;
     }
 
-    done += runs;
+    if (!away) done += runs;
     changed = true;
 
     if (lost) {
@@ -2061,6 +2156,8 @@ function accrueFleet(
       nextRunAt: pilot.nextRunAt + count * cycle,
       runs: pilot.runs + runs,
       failures: pilot.failures + failures,
+      // §133.15: заработок «на той стороне» лежит у пилота до возвращения.
+      pending: away ? (pilot.pending ?? 0) + pendingGain : pilot.pending,
     });
   }
 
@@ -2129,11 +2226,16 @@ export function nextGalaxyArrival(state: GameState, now?: number): GameState {
    * обязана обновиться, иначе на экране висели бы предложения из прошлой
    * галактики. Считаем её от системы прибытия, как в `arrive`.
    */
-  const board = refreshOffers(moved);
+  /*
+   * §133.15: прилетели — сбережения здешнего флота идут на счёт. Пилоты,
+   * оставленные здесь в прошлый раз, всё это время летали и копили.
+   */
+  const { state: withFleet } = creditAwayFleet(moved, galaxy);
+  const board = refreshOffers(withFleet);
   // §133.10: система прибытия — тоже посещение (считается для «Сверхновой»).
-  const visited = noteVisit(moved);
+  const visited = noteVisit(withFleet);
   return {
-    ...moved,
+    ...withFleet,
     visitedSystems: visited.visitedSystems,
     missionOffers: board.missionOffers,
     missionRng: board.missionRng,
@@ -3279,6 +3381,8 @@ export function advance(
     events.push(...tickedSupernova.events);
   }
   if (tickedSupernova.exploded) {
+    // §133.15: сколько накопил флот в той галактике, куда нас уносит.
+    const fleetCredit = awayFleetOutstanding(s, (s.galaxy % GALAXY_COUNT) + 1);
     const dead = destroyStation(s, now);
     s = dead.state;
     events.push(...dead.events);
@@ -3292,6 +3396,13 @@ export function advance(
       at: now,
       text: 'Провал «Сверхновой»: репутация −10, галактический двигатель сгорел.',
     });
+    if (fleetCredit > 0) {
+      events.push({
+        type: 'fleet',
+        at: now,
+        text: `Флот: зачислено ${(fleetCredit / 10).toFixed(1)} CR, накопленных в галактике ${(s.galaxy % GALAXY_COUNT) + 1}`,
+      });
+    }
   }
 
   return { state: s, events };
@@ -3548,7 +3659,13 @@ export function deserialize(json: string): GameState {
     state.nextMissionId = ids.length > 0 ? Math.max(...ids) + 1 : 1;
   }
   // §128: в сохранениях до перелётов поля нет — все пилоты дома.
-  state.pilots = state.pilots.map((p) => ({ ...p, transfer: p.transfer ?? null }));
+  state.pilots = state.pilots.map((p) => ({
+    ...p,
+    transfer: p.transfer ?? null,
+    // §133.15: у старых пилотов галактики нет — считаем её текущей.
+    galaxy: p.galaxy ?? state.galaxy,
+    pending: p.pending ?? 0,
+  }));
   // §107: в сохранениях шага 1 роли и счётчика провалов нет.
   state.pilots = state.pilots.map((p) => ({
     ...p,
