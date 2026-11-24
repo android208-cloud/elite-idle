@@ -740,6 +740,8 @@ export function newGame(rngSeed: number): GameState {
   const lave = systemsOf(1)[START_SYSTEM_LAVE];
   const fresh: GameState = {
     version: SAVE_VERSION,
+    // §133.15a: в новой игре флот весь местный — чинить нечего.
+    pilotGalaxyRepair: true,
     galaxy: 1,
     system: START_SYSTEM_LAVE,
     cash: START_CASH,
@@ -3718,8 +3720,10 @@ export function deserialize(json: string): GameState {
   const broken = state.pilotGalaxyRepair ? [] : state.pilots.filter(
     (p) => p.route && !pilotRouteFitsGalaxy(p, p.galaxy ?? 1),
   );
-  state.pilotGalaxyRepair = true;
   if (broken.length > 0) {
+    // Помечаем только когда починка действительно что-то сделала: иначе
+    // флаг появлялся бы в любом сейве и ломал обратимость сохранения.
+    state.pilotGalaxyRepair = true;
     /*
      * Голосование: какая галактика объясняет больше «невозможных» маршрутов,
      * та и настоящая. Пилот, чей маршрут возможен в нескольких галактиках,

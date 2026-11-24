@@ -98,6 +98,8 @@ describe('§133.15a починка испорченного сейва', () => {
     const broken: GameState = {
       ...base,
       galaxy: 2,
+      // Сейв из промежуточной сборки: починка ещё не выполнялась.
+      pilotGalaxyRepair: false,
       pilots: [
         p(1, 'adder', 187, 240, 2),   // 4.2 св. г. в первой, 45.6 во второй
         p(2, 'cobra3', 254, 251, 2),  // возможно только в первой
@@ -115,7 +117,9 @@ describe('§133.15a починка испорченного сейва', () => {
     const base = newGame(1);
     // 3 → 116 — 3.6 св. г. в третьей галактике (бак питона 8.0).
     const pilot = p(1, 'python', 3, 116, 3);
-    const fresh: GameState = { ...base, galaxy: 3, pilots: [pilot] } as unknown as GameState;
+    const fresh: GameState = {
+      ...base, galaxy: 3, pilots: [pilot], pilotGalaxyRepair: false,
+    } as unknown as GameState;
     const back = deserialize(serialize(fresh));
     assert.equal(back.pilots[0].galaxy, 3);
   });
