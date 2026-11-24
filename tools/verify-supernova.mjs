@@ -79,6 +79,13 @@ await wait(900);
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'market'));
 await wait(300);
 
+check('палитра события включена (html.supernova)',
+  d.documentElement.classList.contains('supernova'));
+const band = d.getElementById('supernova-band');
+check('в шапке полоса «СВЕРХНОВА»', !!band && band.hidden === false && /СВЕРХНОВА/.test(band.textContent ?? ''),
+  band?.textContent?.replace(/\s+/g, ' ') ?? 'нет полосы');
+check('и в ней обратный отсчёт', /до взрыва \d/.test(band?.textContent ?? ''));
+
 check('на «Рынке» карточка «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
 check('и цена у неё 0.0 CR', /0\.0 CR/.test(text()));
 check('сказано, сколько беженцев на станции', /В наличии: 200 т/.test(text()));
@@ -151,6 +158,8 @@ w2.document.querySelector('[data-action="tab"][data-tab="market"]')
 await wait(300);
 const text2 = () => d2.getElementById('content').textContent.replace(/\s+/g, ' ');
 check('без события карточки «Сверхновая» нет', !text2().includes('Сверхновая'));
+check('и палитра обычная', !d2.documentElement.classList.contains('supernova'));
+check('полоса события спрятана', d2.getElementById('supernova-band')?.hidden === true);
 const buy2 = [...d2.querySelectorAll('#content [data-action="buy1"]')];
 check('и торговля живая', buy2.length > 0 && buy2.some((b) => !b.disabled));
 w2.close();

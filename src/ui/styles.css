@@ -17,6 +17,61 @@
   color-scheme: dark;
 }
 
+/*
+ * §133.13: ПАЛИТРА «СВЕРХНОВОЙ».
+ *
+ * Пользователь выбрал вариант, где залито всё, но «общий фон — чёрный».
+ * Поэтому переменные переопределяются на самом `html`: поверхности тёплые
+ * красно-коричневые, фон под ними — чистый чёрный, чтобы карточки читались
+ * как карточки, а не сливались в одно красное пятно.
+ *
+ * Класс ставится на время события (см. `render` в `main.ts`) и снимается,
+ * как только событие кончилось, — отдельной темы «навсегда» тут нет.
+ */
+html.supernova {
+  --bg: #000000;
+  --surface: #2a1210;
+  --surface-2: #361815;
+  --surface-3: #41201b;
+  --on-surface: #ffe3df;
+  --on-variant: #e0b7b0;
+  --outline: #6b332c;
+  --primary: #ff7a63;
+  --on-primary: #2a0b07;
+  --primary-container: #6d1b12;
+  --on-primary-container: #ffd0c7;
+  --good: #a8cc8a;
+  --warn: #ffcf8a;
+}
+
+/*
+ * Полоса события: единственное, что «шумит». Всё остальное в этот момент
+ * спокойное — игрок сортирует груз и читает числа, а не любуется тревогой.
+ */
+.supernova-band {
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: #b3261e;
+  color: #fff0ec;
+  font-size: 12px;
+  line-height: 1.4;
+  animation: supernova-pulse 2.4s ease-in-out infinite;
+}
+.supernova-band strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .1em;
+}
+@keyframes supernova-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .8; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .supernova-band { animation: none; }
+}
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--on-surface);

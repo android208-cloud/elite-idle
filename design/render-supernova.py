@@ -29,6 +29,14 @@ def pal(kind):
             on_container="#ffb9ad", good="#8fbf7a", bad="#ff8a80", warn="#ffc67a",
             band="#8f1f16", band_text="#ffd9d3", card_outline="#5b2a24",
         )
+    if kind == "d":  # выбранный вариант: красные поверхности на чёрном фоне
+        return dict(
+            bg="#000000", surface="#2a1210", surface2="#361815", surface3="#41201b",
+            text="#ffe3df", variant="#e0b7b0", outline="#6b332c",
+            primary="#ff7a63", on_primary="#2a0b07", container="#6d1b12",
+            on_container="#ffd0c7", good="#a8cc8a", bad="#ff9c8f", warn="#ffcf8a",
+            band="#b3261e", band_text="#fff0ec", card_outline="#6b332c",
+        )
     if kind == "c":  # акценты красные, поверхности — как сейчас
         return dict(
             bg="#0f1514", surface="#151d1c", surface2="#1c2625", surface3="#232f2e",
@@ -131,6 +139,6 @@ def screen(kind):
     return img
 
 
-for kind in ("a", "b", "c"):
+for kind in ("a", "b", "c", "d"):
     screen(kind).save(f"/home/user/elite-idle/design/supernova-red-{kind}.png")
 print("ok")

@@ -3601,6 +3601,23 @@ function render(): void {
    * пользователя). В остальных местах шапка живёт по правилу §91.
    */
   topBar(inCombat || inSalvage, showContracts ? repLabel(missionRepOf(state)) : null);
+  /*
+   * §133.13: «СВЕРХНОВА» — палитра и полоса события.
+   *
+   * Пользователь выбрал вариант «всё в красных оттенках, но общий фон чёрный».
+   * Класс живёт на `html`, потому что фон задаётся именно там; снимается,
+   * когда событие закончилось, — тема не прилипает к игре.
+   */
+  const nova = supernovaOf(state);
+  const novaOn = !!nova && !nova.escaped;
+  document.documentElement.classList.toggle('supernova', novaOn);
+  const novaBand = document.getElementById('supernova-band');
+  if (novaBand) {
+    novaBand.hidden = !novaOn;
+    novaBand.innerHTML = novaOn
+      ? `<strong>СВЕРХНОВА</strong>утечка топлива · до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч`
+      : '';
+  }
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();
   document.getElementById('nav')!.innerHTML = TABS.map((t) => {
     const off = blocked.includes(t.id);
