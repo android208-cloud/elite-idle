@@ -80,6 +80,47 @@ describe('§133.15 прыжок не уносит флот', () => {
   });
 });
 
+describe('§133.15a починка испорченного сейва', () => {
+  /** Пилот-заготовка: важны только корабль, дом и маршрут. */
+  const p = (id: number, ship: string, home: number, to: number, galaxy: number, runs = 40) => ({
+    id, name: `Пилот ${id}`, ship, home, route: { from: home, to },
+    nextRunAt: 2_000_000, role: 'trader' as const, runs, failures: 0,
+    transfer: null, galaxy, pending: 0,
+  });
+
+  it('маршрут, невозможный в записанной галактике, возвращает пилота домой', () => {
+    /*
+     * Настоящий случай пользователя: промежуточная сборка приписала всем
+     * старым пилотам ТЕКУЩУЮ (вторую) галактику. Маршруты этих пилотов
+     * возможны только в первой, а два только что нанятых — только во второй.
+     */
+    const base = newGame(1);
+    const broken: GameState = {
+      ...base,
+      galaxy: 2,
+      pilots: [
+        p(1, 'adder', 187, 240, 2),   // 4.2 св. г. в первой, 45.6 во второй
+        p(2, 'cobra3', 254, 251, 2),  // возможно только в первой
+        p(3, 'python', 82, 86, 2, 0), // нанят во второй: 68.1 против 8.0
+      ],
+    } as unknown as GameState;
+    const back = deserialize(serialize(broken));
+    const g = back.pilots.map((x) => x.id + ':' + x.galaxy);
+    assert.deepEqual(g, ['1:1', '2:1', '3:2'], 'старые — в первой, новый — во второй');
+  });
+
+  it('здоровый сейв не трогают', () => {
+    // Маршрут возможен в третьей галактике — значит пилот там и работает,
+    // даже если такая же линия случайно уложилась бы в первую.
+    const base = newGame(1);
+    // 3 → 116 — 3.6 св. г. в третьей галактике (бак питона 8.0).
+    const pilot = p(1, 'python', 3, 116, 3);
+    const fresh: GameState = { ...base, galaxy: 3, pilots: [pilot] } as unknown as GameState;
+    const back = deserialize(serialize(fresh));
+    assert.equal(back.pilots[0].galaxy, 3);
+  });
+});
+
 describe('§133.15 деньги копятся у пилота', () => {
   it('в чужой галактике счёт не растёт, а копится долг флота', () => {
     const away = galacticJump(fleet(), 2_000_000).state;

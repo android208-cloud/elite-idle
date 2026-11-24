@@ -25,7 +25,7 @@ const check = (name, cond, extra = '') => {
 
 const LAVE = 7;
 const REORTE = 39;
-const QUQUOR = 148; // одна из соседних систем
+const DISO = 147; // соседняя система: LAVE → DISO 3.6 св. г., REORTE → DISO 5.6
 
 /** Пилот в рейсе. */
 const pilot = (id, role, from, to, extra = {}) => ({
@@ -123,8 +123,8 @@ const COLOR = { trader: '#4fd8c4', smuggler: '#ffd37a', pirate: '#ff8a80', polic
 const data = save({
   pilots: [
     pilot(1, 'trader', LAVE, REORTE),
-    pilot(2, 'smuggler', LAVE, QUQUOR),
-    pilot(3, 'pirate', REORTE, QUQUOR),
+    pilot(2, 'smuggler', LAVE, DISO),
+    pilot(3, 'pirate', REORTE, DISO),
     pilot(4, 'police', LAVE, LAVE), // патруль: своя система
     pilot(5, 'trader', LAVE, REORTE), // второй на том же маршруте
     { ...pilot(6, 'trader', LAVE, REORTE), route: null }, // стоит в ангаре

@@ -536,6 +536,14 @@ export interface GameState {
    * чисел, которые могли бы разойтись с балансом.
    */
   pilots: Pilot[];
+  /**
+   * §133.15a: починка галактик флота уже выполнена.
+   *
+   * Флаг нужен, чтобы починка срабатывала ОДИН раз: иначе будущее изменение
+   * бака корабля сделало бы старые маршруты «невозможными» и разбросало бы
+   * живой флот по чужим галактикам.
+   */
+  pilotGalaxyRepair?: boolean;
   /** Счётчик для `Pilot.id`: он не должен переиспользоваться после увольнения. */
   nextPilotId: number;
   /**
@@ -1586,6 +1594,23 @@ export function surveillanceMap(state: GameState, galaxy = state.galaxy): number
     map[pilot.route.to] = Math.min(7, map[pilot.route.to] + POLICE_SURVEILLANCE_BONUS);
   }
   return map;
+}
+
+/**
+ * §133.15a: ВОЗМОЖЕН ЛИ ЭТОТ МАРШРУТ В ЭТОЙ ГАЛАКТИКЕ.
+ *
+ * Маршрут назначают только в пределах бака корабля (`assignPilotRoute`),
+ * поэтому проверка расстояния — честный способ понять, к какой галактике
+ * относится пара номеров систем. Нужна для починки сейвов, где пилоту
+ * приписали не ту галактику.
+ */
+export function pilotRouteFitsGalaxy(pilot: Pilot, galaxy: number): boolean {
+  if (!pilot.route) return true;
+  const systems = systemsOf(galaxy);
+  const from = systems[pilot.route.from];
+  const to = systems[pilot.route.to];
+  if (!from || !to) return false;
+  return distance(from, to) <= SHIPS[pilot.ship].range;
 }
 
 /**
@@ -3676,6 +3701,56 @@ export function deserialize(json: string): GameState {
     galaxy: p.galaxy ?? 1,
     pending: p.pending ?? 0,
   }));
+  /*
+   * §133.15a: ПОЧИНКА УЖЕ ИСПОРЧЕННЫХ СЕЙВОВ.
+   *
+   * Промежуточная сборка приписывала старым пилотам ТЕКУЩУЮ галактику и
+   * сохраняла это в файл. Такой сейв внешне не отличить от нового — но
+   * маршрут в нём физически невозможен: система `to` не достаётся из `home`
+   * баком этого корабля. А раз маршрут назначают только в пределах бака,
+   * «невозможный маршрут» — верный признак, что пилот из другой галактики.
+   *
+   * Поэтому ищем галактику, где маршрут возможен, и берём ближайшую по
+   * номеру: игрок начинает в первой и уходит вперёд, так что флот с большей
+   * вероятностью остался в младшей галактике. Пилота, чей маршрут в его
+   * галактике законен, не трогаем вовсе.
+   */
+  const broken = state.pilotGalaxyRepair ? [] : state.pilots.filter(
+    (p) => p.route && !pilotRouteFitsGalaxy(p, p.galaxy ?? 1),
+  );
+  state.pilotGalaxyRepair = true;
+  if (broken.length > 0) {
+    /*
+     * Голосование: какая галактика объясняет больше «невозможных» маршрутов,
+     * та и настоящая. Пилот, чей маршрут возможен в нескольких галактиках,
+     * идёт туда, где сейчас основная часть оставленного флота, — иначе двое
+     * из двадцати остались бы в чужой галактике просто потому, что их линия
+     * случайно укладывается и в неё.
+     */
+    const votes = new Map<number, number>();
+    for (const p of broken) {
+      for (let g = 1; g <= GALAXY_COUNT; g++) {
+        if (pilotRouteFitsGalaxy(p, g)) votes.set(g, (votes.get(g) ?? 0) + 1);
+      }
+    }
+    let home = 0;
+    let most = 0;
+    for (const [g, n] of votes) {
+      if (n > most || (n === most && g < home)) {
+        home = g;
+        most = n;
+      }
+    }
+    state.pilots = state.pilots.map((p) => {
+      if (!p.route) return p;
+      if (pilotRouteFitsGalaxy(p, home)) return { ...p, galaxy: home };
+      if (pilotRouteFitsGalaxy(p, p.galaxy ?? 1)) return p;
+      for (let g = 1; g <= GALAXY_COUNT; g++) {
+        if (pilotRouteFitsGalaxy(p, g)) return { ...p, galaxy: g };
+      }
+      return p;
+    });
+  }
   // §107: в сохранениях шага 1 роли и счётчика провалов нет.
   state.pilots = state.pilots.map((p) => ({
     ...p,

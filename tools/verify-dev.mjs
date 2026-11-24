@@ -126,8 +126,8 @@ const overviewMarkers = () => fills.filter((f) => f.canvas === 'map-overview' &&
 
 const w = boot(save([
   pilot(1, 'trader', LAVE, REORTE),
-  pilot(2, 'smuggler', LAVE, 148),
-  pilot(3, 'pirate', REORTE, 148),
+  pilot(2, 'smuggler', LAVE, 147),
+  pilot(3, 'pirate', REORTE, 147),
 ]));
 
 await new Promise((r) => w.addEventListener('load', r, { once: true }));
