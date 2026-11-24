@@ -89,8 +89,22 @@ check('и в ней обратный отсчёт', /до взрыва \d/.test(
 check('на «Рынке» карточка «Беженцы»', /Беженцы/.test(text()), text().slice(0, 130));
 check('и цена у неё 0.0 CR', /0\.0 CR/.test(text()));
 check('сказано, сколько беженцев на станции', /В наличии: 200 т/.test(text()));
-check('сказано, что можно уйти в другую галактику без награды',
-  /уходите в другую галактику, но награды не будет/.test(text()));
+/*
+ * §133.19: НА КАРТОЧКЕ «СТАНЦИЯ» ПОДСКАЗОК НЕТ.
+ *
+ * Пользователь: «убери подсказку на карточке „станция“». Строка «Сверхновая:
+ * топливо течёт… уходите в другую галактику» была советом на карточке с
+ * цифрами; отсчёт и так висит в полосе события, а выход из события — своей
+ * кнопкой ниже.
+ */
+const stationCard = () => [...d.querySelectorAll('#content .card')]
+  .find((c) => /^Станция /.test(c.querySelector('h2')?.textContent ?? ''));
+check('§133.19: на карточке «Станция» нет подсказки про событие',
+  !/Сверхновая|уходите в другую галактику|торгует только беженцами/.test(stationCard()?.textContent ?? ''),
+  (stationCard()?.textContent ?? '').slice(0, 90));
+/* §133.19: пока в трюме только товар, полоса считает только товар. */
+const barBefore = stationCard()?.querySelector('.progress > div')?.style.width;
+check('§133.19: до беженцев полоса считает товар', barBefore === '20%', barBefore);
 check('бесплатного выхода больше нет', !/бесплатн/i.test(text()));
 check('из товаров остались только те, что в трюме, и без покупки',
   d.querySelectorAll('#content [data-action="buy1"], #content [data-action="sell1"]').length === 0,
@@ -144,6 +158,9 @@ check('кнопка «Макс.» погасла', d.querySelector('[data-action
  */
 check('карточка беженцев на рынке одна', d.querySelectorAll('#content [data-action="refugees"]').length === 1);
 check('и кнопки «Высадить» здесь нет', !d.querySelector('#content [data-action="deliver-refugees"]'));
+/* §133.19: беженцы занимают место — значит полоса трюма заполнена. */
+const barAfter = stationCard()?.querySelector('.progress > div')?.style.width;
+check('§133.19: полоса в карточке станции заполнена беженцами', barAfter === '100%', barAfter);
 // Два упоминания — это карточка и счётчик в шапке трюма («· Беженцы: 20 т»).
 check('«Беженцы» упомянуты ровно дважды — карточка и счётчик',
   (text().match(/Беженцы/g) ?? []).length === 2, String((text().match(/Беженцы/g) ?? []).length));
@@ -258,6 +275,8 @@ await wait(300);
 const flightText = df.getElementById('content').textContent.replace(/\s+/g, ' ');
 check('в полёте экран называется «Трюм»', /Трюм/.test(flightText));
 check('и беженцы в нём видны', /На борту: 20 т/.test(flightText));
+const flightBar = df.querySelector('#content .progress > div')?.style.width;
+check('§133.19: в полёте полоса трюма тоже заполнена', flightBar === '100%', flightBar);
 const flightDrop = df.querySelector('[data-action="deliver-refugees"]');
 check('но высадить в полёте нельзя', !flightDrop || flightDrop.disabled === true,
   flightDrop ? flightDrop.outerHTML.slice(0, 120) + ' | ' + flightText.slice(0, 120) : 'кнопки нет');

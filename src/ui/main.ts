@@ -2003,12 +2003,20 @@ function priceChip(i: number): string {
 function holdBar(): string {
   const tons = cargoTons(state);
   /*
-   * §133.6: при беженцах на борту трюм занят, но груза нет — `tons + holdSpace`
-   * дало бы «0 из 0». Вместимость берём у корабля, а сумму оставляем как
-   * нижнюю границу для старых сейвов, где она могла быть больше.
+   * §133.19: БЕЖЕНЦЫ ЗАНИМАЮТ МЕСТО — ЗНАЧИТ ЗАПОЛНЯЮТ И ПОЛОСУ.
+   *
+   * Пользователь: «полоска груза в трюме не заполняется от беженцев». Полоса
+   * считалась только по товарам, и при полном трюме людей она оставалась
+   * пустой — рядом со строкой «Занято 20 из 20 т».
+   *
+   * §133.6: при беженцах на борту груза может не быть вовсе — `tons +
+   * holdSpace` дало бы «0 из 0», поэтому вместимость берём у корабля, а сумму
+   * оставляем как нижнюю границу для старых сейвов, где она могла быть больше.
    */
-  const cap = Math.max(holdCapacity(state.ship), tons + state.holdSpace);
-  const pct = cap > 0 ? Math.min(100, (tons / cap) * 100) : 0;
+  const people = refugeesAboard(state);
+  const used = tons + people;
+  const cap = Math.max(holdCapacity(state.ship), used + state.holdSpace);
+  const pct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
   return `<div class="progress"><div style="width:${pct}%"></div></div>`;
 }
 
@@ -2334,7 +2342,7 @@ function marketScreen(): string {
       <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
-    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами. Нет топлива на прыжок — уходите в другую галактику, но награды не будет.</div>` : ''}</div></div>${refugeeAboardCard(!state.flight)}${locked ? refugeeCard + leaveCards : rows}`;
+    </div></div>${refugeeAboardCard(!state.flight)}${locked ? refugeeCard + leaveCards : rows}`;
 }
 
 /*
