@@ -1304,7 +1304,8 @@ function mapScreen(): string {
       <canvas id="map-local" data-local="1"></canvas>
       <div class="sub" id="local-hint">Доступный радиус прыжка. Нажмите на точку, чтобы выбрать цель.</div>
     </div>
-    <div class="card">${info}</div>`;
+    <div class="card">${info}</div>
+    ${galacticCard()}`;
 }
 
 /* ---------- Карты ---------- */
@@ -2509,8 +2510,7 @@ function hangarScreen(): string {
       <div class="sub">Здесь технологический уровень ${currentSystem(state).techLevel + 1}: показано только то, что на этой станции продаётся. Установлен один лазер — новый заменяет прежний.</div>
       ${equipmentRows()}</div>
     ${shipyardCard()}
-    ${pilotsSummaryCard()}
-    ${galacticCard()}`}`;
+    ${pilotsSummaryCard()}`}`;
 }
 
 /**
@@ -3075,11 +3075,113 @@ function galacticCard(): string {
   const explain = drive
     ? `Прибытие: точка (96, 96) → ближайшая система <b>${arrival.name}</b> в галактике ${next}. Двигатель одноразовый, криминальное дозье будет сброшено.`
     : `Установите галактический гипердвигатель на станции с достаточным технологическим уровнем (№12 на верфи).`;
+  /*
+   * §133.14: АКТИВИРОВАТЬ — С ОТСЧЁТОМ.
+   *
+   * Пользователь: «добавить в эту карточку кнопку „Активировать“, по нажатию
+   * которой эта кнопка становится „Отменить“ и справа появляется таймер на
+   * 10 секунд (пока он идёт, можно нажать „Отмена“ и остаться в текущей
+   * галактике)».
+   *
+   * Отсчёт — единственная защита от промаха: прыжок необратим, двигатель
+   * одноразовый, а карта на телефоне листается пальцем.
+   */
+  const armed = galacticAt !== null;
+  const canArm = drive && !state.flight && !state.combat;
+  const actions = armed
+    ? `<button class="btn tonal" data-action="galactic-toggle">Отменить</button>
+        <span class="spacer"></span>
+        <span class="galactic-timer" id="galactic-timer">${galacticTimerText(galacticLeft())}</span>`
+    : `<button class="btn" data-action="galactic-toggle" ${canArm ? '' : 'disabled'}>Активировать</button>`;
+  const hint = armed
+    ? 'Отсчёт идёт на ваших глазах: нажмите «Отменить», пока горит таймер, — и останетесь здесь.'
+    : drive
+      ? 'Прыжок начнётся через 10 секунд после нажатия — этого хватает, чтобы передумать.'
+      : 'Кнопка появится, когда двигатель будет установлен.';
   return `<div class="card warn"><h2>Галактический гиперпрыжок</h2>
       <div class="sub">${explain}</div>
-      <div class="sub" style="margin-top:8px;color:var(--dim)">
-        Прыжок выполняется только в космосе: карта → «Отстыковка» → «ГАЛАКТИКА».
-      </div></div>`;
+      <div class="row" style="margin-top:10px">${actions}</div>
+      <div class="sub" style="margin-top:8px;color:var(--dim)">${hint}</div></div>`;
+}
+
+/* ---------- §133.14: отсчёт галактического прыжка ---------- */
+
+/** Сколько горит таймер от нажатия «Активировать». */
+const GALACTIC_ARM_MS = 10_000;
+
+/** Когда прыжок сработает; `null` — отсчёт не идёт. Не сохраняется в сейв. */
+let galacticAt: number | null = null;
+let galacticTicker: number | undefined;
+
+/** Остаток отсчёта в миллисекундах (0, если он не идёт). */
+function galacticLeft(now = Date.now()): number {
+  return galacticAt === null ? 0 : Math.max(0, galacticAt - now);
+}
+
+/** «10.0 с» — одна десятая, чтобы тиканье было видно. */
+function galacticTimerText(ms: number): string {
+  return `${(ms / 1000).toFixed(1)} с`;
+}
+
+function stopGalacticTicker(): void {
+  if (galacticTicker !== undefined) {
+    clearInterval(galacticTicker);
+    galacticTicker = undefined;
+  }
+}
+
+/**
+ * Запускает отсчёт.
+ *
+ * Перерисовываем только метку таймера, а не весь экран: полная перерисовка
+ * десять раз в секунду дёргала бы прокрутку карты и мигала всеми карточками.
+ */
+function armGalacticJump(): void {
+  if (galacticAt !== null) return;
+  if (!state.ship.galacticHyperdrive || state.flight || state.combat) return;
+  galacticAt = Date.now() + GALACTIC_ARM_MS;
+  stopGalacticTicker();
+  galacticTicker = window.setInterval(() => {
+    if (galacticAt === null) return;
+    const left = galacticAt - Date.now();
+    if (left <= 0) {
+      fireGalacticJump();
+      return;
+    }
+    const label = document.getElementById('galactic-timer');
+    if (label) label.textContent = galacticTimerText(left);
+  }, 100);
+  addLog(`Галактический гиперпрыжок: двигатель запущен, ${GALACTIC_ARM_MS / 1000} секунд на отмену`);
+  render();
+}
+
+/** Отмена: таймер гаснет, галактика остаётся прежней. */
+function cancelGalacticJump(): void {
+  if (galacticAt === null) return;
+  galacticAt = null;
+  stopGalacticTicker();
+  addLog(`Галактический гиперпрыжок отменён: остаёмся в галактике ${state.galaxy}`);
+  render();
+}
+
+/** Отсчёт дошёл до нуля — прыгаем тем же путём, что и раньше. */
+function fireGalacticJump(): void {
+  const from = state.galaxy;
+  galacticAt = null;
+  stopGalacticTicker();
+  const r = galacticJump(state, Date.now());
+  if (r.error) {
+    addLog(r.error === 'no-drive' ? 'Галактический гипердвигатель не установлен' : 'Галактический прыжок невозможен: корабль в пути');
+    render();
+    return;
+  }
+  state = r.state;
+  selected = null;
+  addLog(
+    `Галактический гиперпрыжок: галактика ${from} → ${state.galaxy}, прибытие в систему ${currentSystem(state).name}. Двигатель израсходован`,
+  );
+  tab = 'map';
+  render();
 }
 
 function select(key: string, options: [string, string][], current: string): string {
@@ -4078,6 +4180,12 @@ function onAction(el: HTMLElement): void {
       const r = jettisonCargo(state, i, state.cargo[i] ?? 0);
       state = r.state;
       if (r.dropped > 0) addLog(`Оставлено на станции: ${COMMODITIES[i].name} — ${r.dropped}`);
+      break;
+    }
+    case 'galactic-toggle': {
+      // §133.14: одна кнопка на два состояния — «Активировать» / «Отменить».
+      if (galacticAt === null) armGalacticJump();
+      else cancelGalacticJump();
       break;
     }
     case 'refugees': {

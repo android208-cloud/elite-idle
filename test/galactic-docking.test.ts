@@ -5,8 +5,11 @@
  * кнопки больше нет — только информация, а сам прыжок выполняется
  * из мини-игры стыковки, как и обычный.
  *
+ * §133.14: карточка переехала из ангара на карту, и в ней своя кнопка
+ * «Активировать» с десятисекундным отсчётом (§133.14 в `main.ts`).
+ *
  * Что проверяем:
- *  1. Кнопки на «Корабле» больше не существует.
+ *  1. Кнопки на «Корабле» больше не существует, а карточка стоит на карте.
  *  2. Галактический прыжок не требует топлива (в оригинале — только
  *     одноразовый двигатель, `GalacticHyperspaceJump` $D61A).
  *  3. Он расходится с обычным: другая галактика, свой номер по кругу.
@@ -22,15 +25,22 @@ import { DEFAULT_SETTINGS, galacticJump, newGame, startJump } from '../src/core/
 
 const wrap = (msg: Record<string, unknown>) => ({ channel: DOCKING_CHANNEL, ...msg });
 
-test('на «Корабле» нет кнопки галактического прыжка', () => {
+test('на «Корабле» нет кнопки галактического прыжка, а карточка стоит на карте', () => {
   const src = readFileSync(new URL('../src/ui/main.ts', import.meta.url), 'utf8');
   assert.ok(
     !src.includes('data-action="galactic-jump"'),
     'кнопка должна быть убрана: прыжок только в космосе',
   );
+  // §133.14: пользователь перенёс карточку на карту и попросил кнопку с
+  // отсчётом. Ищем именно `mapScreen`, а не весь файл: одно упоминание
+  // ничего не докажет, а сборка экрана — докажет.
+  const map = src.slice(src.indexOf('function mapScreen()'), src.indexOf('/* ---------- Карты ----------'));
+  assert.ok(map.includes('${galacticCard()}'), 'карточка вызывается с карты');
+  const hangar = src.slice(src.indexOf('function hangarScreen()'), src.indexOf('function shipyardCard()'));
+  assert.ok(!hangar.includes('galacticCard()'), 'и больше не висит в ангаре');
   assert.ok(
-    src.includes('«Отстыковка» → «ГАЛАКТИКА»'),
-    'но подсказка, где прыгать, должна остаться',
+    src.includes('data-action="galactic-toggle"') && src.includes('GALACTIC_ARM_MS = 10_000'),
+    'в карточке кнопка «Активировать/Отменить» и таймер на 10 секунд',
   );
 });
 

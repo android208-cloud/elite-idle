@@ -284,6 +284,9 @@ main { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
 .btn.tonal { background: var(--primary-container); color: var(--on-primary-container); }
 .btn.text { background: none; color: var(--primary); padding: 10px 12px; }
 .btn:disabled { opacity: .38; cursor: default; }
+/* §133.14: таймер отсчёта галактического прыжка — справа от кнопки. */
+.galactic-timer { font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 600;
+  color: var(--warn); min-width: 74px; text-align: right; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .spacer { flex: 1; }
 
