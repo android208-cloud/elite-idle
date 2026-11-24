@@ -3370,6 +3370,19 @@ function devScreen(): string {
     </div>`;
 }
 
+/**
+ * §133.16: КАКАЯ СБОРКА ОТКРЫТА.
+ *
+ * Пользователь скачал новый релиз, но увидел старое поведение — и не мог
+ * понять, обновился ли файл вообще. Номер сборки теперь напечатан в
+ * «Настройках»: если строки нет или номер старый, значит открыт старый файл
+ * (или его отдал кэш), и искать баг в коде бессмысленно.
+ */
+const BUILD_ID = (() => {
+  if (typeof document === 'undefined') return 'dev';
+  return document.querySelector('meta[name="build"]')?.getAttribute('content') ?? 'dev';
+})();
+
 function logScreen(): string {
   // ×0.5 убран по просьбе пользователя (§76): на этапе расчётов он был
   // полезен (позволял замерить «полтора часа отсутствия»), в игре лишний.
@@ -3399,7 +3412,8 @@ function logScreen(): string {
         ? 'Прыжок — только из мини-игры стыковки. На карте «Отстыковка».'
         : 'Прыжок — прямо с карты, без мини-игры.'}</div>
       <div class="row" style="margin-top:12px">${notif}<span class="spacer"></span><button class="btn text" data-action="reset">Начать заново</button></div>
-      <div class="row" style="margin-top:6px"><button class="btn text" data-action="dev-open">Для разработчика →</button></div></div>
+      <div class="row" style="margin-top:6px"><button class="btn text" data-action="dev-open">Для разработчика →</button></div>
+      <div class="sub" style="margin-top:10px;color:var(--dim)">Сборка ${BUILD_ID}</div></div>
     ${saveCard()}
     ${logCard()}`;
 }

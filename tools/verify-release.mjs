@@ -89,5 +89,19 @@ check('«Рынок» и «Ангар» — кредиты', /CR$/.test(byTab.ma
 check('«Корабль» — название стартового корабля', byTab.ship === 'Adder', byTab.ship);
 check('«Карта» — система', byTab.map === 'LAVE' || /^[A-ZА-Я]/.test(byTab.map), byTab.map);
 
+/*
+ * §133.16: номер сборки виден ВНУТРИ игры.
+ *
+ * Пользователь скачал новый файл и увидел старое поведение — и не мог
+ * отличить «баг не исправлен» от «открылся старый файл». Теперь в
+ * «Настройках» напечатана та же отметка, что в `<meta name="build">`:
+ * не совпало — значит открыт не тот файл.
+ */
+const metaBuild = build.replace(/\s+/g, ' ').trim();
+click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
+await new Promise((r) => setTimeout(r, 150));
+const logText = d.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('в настройках видна отметка сборки', logText.includes(metaBuild), metaBuild);
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad ? 1 : 0);

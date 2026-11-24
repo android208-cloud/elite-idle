@@ -63,14 +63,20 @@ describe('§133.15 прыжок не уносит флот', () => {
     assert.notEqual(r.state.pilots[0].route, null, 'и маршрут свой сохранил');
   });
 
-  it('старый сейв без поля галактики считается местным', () => {
-    const s = fleet();
+  it('старый сейв без поля галактики: флот остался в первой галактике', () => {
+    // Самая частая ситуация: игрок прыгнул во вторую галактику, а сейв
+    // сделан до §133.15 — поля `galaxy` у пилота нет. Если приписать его
+    // текущей галактике (2), оживёт ровно тот баг, о котором сообщил
+    // пользователь: маршруты старой галактики на новой карте.
+    const s = { ...fleet(), galaxy: 2 };
     const raw = JSON.parse(serialize(s)) as Record<string, unknown>;
-    (raw.pilots as Record<string, unknown>[])[0].galaxy = undefined;
     delete (raw.pilots as Record<string, unknown>[])[0].galaxy;
+    delete (raw.pilots as Record<string, unknown>[])[0].pending;
     const back = deserialize(JSON.stringify(raw));
-    assert.equal(back.pilots[0].galaxy, back.galaxy, 'миграция подставила текущую галактику');
+    assert.equal(back.galaxy, 2);
+    assert.equal(back.pilots[0].galaxy, 1, 'флот из старых сейвов — в галактике 1');
     assert.equal(back.pilots[0].pending, 0);
+    assert.equal(pilotGalaxy(back, back.pilots[0]), 1);
   });
 });
 
