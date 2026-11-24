@@ -32,6 +32,7 @@ import {
 } from '../src/core/state.ts';
 import {
   deliverRefugees,
+  refugeesAboard,
   galacticEscapeSupernova,
   newSystemsVisited,
   noteVisit,
@@ -236,6 +237,38 @@ test('§133.9: «все 200 взяты» — полный трюм, даже е�
   const jumped = startJump(taken, neighbour(taken), T0 + 2000, calm).state;
   const landed = deliverRefugees({ ...jumped, system: 11, flight: null }, T0 + 3000, calm);
   assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS, 'взяли всех — награда есть');
+});
+
+test('§133.17: беженцы видны в трюме и высаживаются по кнопке, а не сами', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  const aboard = refugeesAboard(taken);
+  assert.equal(aboard, Math.min(SUPERNOVA_REFUGEES_TONS, holdCapacity(taken.ship)), 'люди учтены');
+  assert.equal(refugeesAboard(base), 0, 'до посадки никого нет');
+
+  // Прыжок и прибытие: раньше здесь выдавались камни автоматически.
+  const jumped = startJump(taken, neighbour(taken), T0 + 2000, calm);
+  assert.equal(jumped.error, undefined);
+  const arrived = advance(jumped.state, T0 + 2000 + 60 * 60_000, calm).state;
+  assert.notEqual(arrived.system, 3, 'мы действительно улетели');
+  assert.equal(refugeesAboard(arrived), aboard, 'люди всё ещё на борту');
+  assert.equal(arrived.cargo[GEMS_INDEX], 0, 'и награды пока нет — её надо взять кнопкой');
+  assert.equal(arrived.holdSpace, taken.holdSpace, 'место в трюме всё ещё занято');
+
+  // Высадка на станции: камни, место освободилось, событие закрыто.
+  const landed = deliverRefugees({ ...arrived, flight: null }, T0 + 5000, calm);
+  assert.equal(refugeesAboard(landed.state), 0, 'высадили');
+  assert.equal(landed.state.cargo[GEMS_INDEX], SUPERNOVA_REWARD_GEMS);
+  assert.equal(landed.state.holdSpace, holdCapacity(landed.state.ship), 'трюм свободен');
+});
+
+test('§133.17: на той же станции высадить некуда', () => {
+  const base = startSupernova(veteran(), T0, calm).state;
+  const taken = takeRefugees(base, T0 + 1000).state;
+  // «Ушли» и вернулись в ту же систему — высадки нет.
+  const same = { ...taken, supernova: { ...supernovaOf(taken)!, escaped: true }, flight: null };
+  assert.equal(deliverRefugees(same, T0 + 2000, calm).state, same);
+  assert.equal(refugeesAboard(same) > 0, true);
 });
 
 test('§133.6: уход прыжком сохраняет двигатель и гасит утечку', () => {

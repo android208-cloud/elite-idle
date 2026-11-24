@@ -25,12 +25,12 @@ const check = (name, cond, extra = '') => {
 const HOUR = 3_600_000;
 const NOW = Date.now();
 
-function boot({ supernova }) {
+function boot({ supernova, system = 3, holdSpace = 16, cargo, flight = null }) {
   const state = {
-    version: 6, galaxy: 2, system: 3, cash: 200000, fuel: 60, holdSpace: 16,
-    cargo: Array(17).fill(0).map((_, i) => (i === 0 ? 4 : 0)),
+    version: 6, galaxy: 2, system, cash: 200000, fuel: 60, holdSpace,
+    cargo: cargo ?? Array(17).fill(0).map((_, i) => (i === 0 ? 4 : 0)),
     market: Array(17).fill({ price: 100, quantity: 5 }),
-    rng: 1, flight: null,
+    rng: 1, flight,
     ship: {
       model: 'cobra3', laser: 'pulse', missiles: 4, ecm: false, energyBomb: false,
       energyUnit: false, fuelScoops: false, dockingComputer: false,
@@ -163,6 +163,85 @@ check('полоса события спрятана', d2.getElementById('superno
 const buy2 = [...d2.querySelectorAll('#content [data-action="buy1"]')];
 check('и торговля живая', buy2.length > 0 && buy2.some((b) => !b.disabled));
 w2.close();
+
+/* ---------- §133.17: беженцы на борту ---------- */
+/*
+ * Пользователь: «забрал беженцев, но в трюме они не отображаются. По прибытии
+ * на другую станцию в рынке их нет, чтобы высадить».
+ *
+ * Сейв: событие уже пережито (escaped), люди на борту, корабль стоит на
+ * станции в другой системе. Трюм занят под них.
+ */
+const escapedEvent = {
+  galaxy: 2, system: 3, startedAt: NOW - 3 * HOUR, at: NOW - HOUR,
+  leakedTo: NOW - 3 * HOUR, maydayAt: NOW, maydays: 2,
+  taken: 20, refugees: true, escaped: true,
+};
+const aboard = boot({
+  supernova: escapedEvent, system: 11, holdSpace: 0, cargo: Array(17).fill(0),
+});
+const wa = aboard.window;
+const da = wa.document;
+await wait(900);
+da.querySelector('[data-action="tab"][data-tab="market"]')
+  .dispatchEvent(new wa.MouseEvent('click', { bubbles: true }));
+await wait(300);
+const aboardText = () => da.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('беженцы видны на рынке', /Беженцы/.test(aboardText()), aboardText().match(/Беженцы[^А-Я]{0,60}/)?.[0]);
+check('и в трюме посчитаны', /Беженцы: 20 т/.test(aboardText()));
+const drop = da.querySelector('[data-action="deliver-refugees"]');
+check('кнопка «Высадить» есть и живая', !!drop && drop.disabled === false);
+drop?.dispatchEvent(new wa.MouseEvent('click', { bubbles: true }));
+await wait(350);
+check('после высадки карточки беженцев нет', !/Высадить/.test(aboardText()));
+check('камни в трюме', /Драгоценные камни/.test(aboardText()), aboardText().match(/Драгоценные камни[^А-Я]{0,40}/)?.[0]);
+check('и трюм свободен', /Свободно: 20 т/.test(aboardText()));
+da.querySelector('[data-action="tab"][data-tab="log"]')
+  .dispatchEvent(new wa.MouseEvent('click', { bubbles: true }));
+await wait(250);
+const expand2 = da.querySelector('[data-action="log-toggle"]');
+if (expand2 && /Развернуть/.test(expand2.textContent)) { expand2.dispatchEvent(new wa.MouseEvent('click', { bubbles: true })); await wait(200); }
+check('в журнале написано о высадке', /Беженцы высажены/.test(da.getElementById('content').textContent));
+wa.close();
+
+/* ---------- §133.17: на той же станции высадить некуда ---------- */
+const same = boot({
+  supernova: { ...escapedEvent, system: 3 }, system: 3, holdSpace: 0, cargo: Array(17).fill(0),
+});
+const ws = same.window, ds = ws.document;
+await wait(900);
+ds.querySelector('[data-action="tab"][data-tab="market"]')
+  .dispatchEvent(new ws.MouseEvent('click', { bubbles: true }));
+await wait(300);
+const sameText = ds.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('на станции отправления кнопка погашена',
+  !!ds.querySelector('[data-action="deliver-refugees"]')?.disabled);
+check('и сказано, почему', /откуда вы ушли/.test(sameText));
+ws.close();
+
+/* ---------- §133.17: в полёте видно, но высадить нельзя ---------- */
+const inFlight = boot({
+  supernova: { ...escapedEvent },
+  holdSpace: 0,
+  cargo: Array(17).fill(0),
+  flight: {
+    from: 3, to: 11, departAt: NOW, dueAt: NOW, arriveAt: NOW + 5 * 60_000,
+    fuelUsed: 20, remainingBaseMs: 5 * 60_000, elapsedBaseMs: 0,
+    encounters: 0, lastEncounterAt: 0, patrol: false, patrolFuelUsed: 0,
+  },
+});
+const wf = inFlight.window, df = wf.document;
+await wait(900);
+df.querySelector('[data-action="tab"][data-tab="market"]')
+  .dispatchEvent(new wf.MouseEvent('click', { bubbles: true }));
+await wait(300);
+const flightText = df.getElementById('content').textContent.replace(/\s+/g, ' ');
+check('в полёте экран называется «Трюм»', /Трюм/.test(flightText));
+check('и беженцы в нём видны', /На борту: 20 т/.test(flightText));
+const flightDrop = df.querySelector('[data-action="deliver-refugees"]');
+check('но высадить в полёте нельзя', !flightDrop || flightDrop.disabled === true,
+  flightDrop ? flightDrop.outerHTML.slice(0, 120) + ' | ' + flightText.slice(0, 120) : 'кнопки нет');
+wf.close();
 
 console.log(`\n${ok}/${ok + bad} проверок §133.6 пройдено`);
 process.exit(bad === 0 ? 0 : 1);

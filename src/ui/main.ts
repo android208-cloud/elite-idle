@@ -31,7 +31,10 @@ import {
   supernovaOf,
   supernovaProgress,
   SUPERNOVA_REFUGEES_TONS,
+  SUPERNOVA_REWARD_GEMS,
   SUPERNOVA_TRIGGER_KILLS,
+  refugeesAboard,
+  deliverRefugees,
   takeRefugees,
   buy,
   buyEquipment,
@@ -2020,7 +2023,9 @@ function holdBar(): string {
  */
 function holdScreen(): string {
   const tons = cargoTons(state);
-  const cap = state.holdSpace + tons;
+  // §133.17: место под беженцев — часть вместимости, иначе в полёте было бы
+  // «Занято 0 из 0 т», хотя половина трюма занята людьми.
+  const cap = state.holdSpace + tons + refugeesAboard(state);
   const banned = contrabandGoods(state.cargo);
   const value = contrabandValue(state.cargo, state.market);
   /*
@@ -2080,11 +2085,16 @@ function holdScreen(): string {
   const warn = banned
     ? `<div class="alert">В трюме запрещённый товар: ${banned} — это ${cr(value)} по ценам станции. Пока он в трюме, побег от статуса невозможен (§80.1).</div>`
     : '';
+  /*
+   * §133.17: беженцы видны и в «Трюме» — в полёте это единственный экран,
+   * где игрок смотрит, что у него на борту. Кнопка высадки здесь погашена:
+   * садиться надо на станцию.
+   */
   return `<div class="card"><h2>Трюм</h2>
-      <div class="sub">Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т · Деньги: ${cr(state.cash)}</div>
+      <div class="sub">Занято ${tons} из ${cap} т · Свободно: ${state.holdSpace} т · Деньги: ${cr(state.cash)}${refugeesAboard(state) > 0 ? ` · Беженцы: ${refugeesAboard(state)} т` : ''}</div>
       ${holdBar()}
       ${warn}
-      <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${empty}${rows}
+      <div class="sub" style="margin-top:8px">Выброшенный груз пропадает навсегда — подобрать его в открытом космосе нельзя.</div></div>${refugeeAboardCard(false)}${empty}${rows}
     ${logCard()}`;
 }
 
@@ -2133,6 +2143,41 @@ function stationBuyActions(disabled = false): string {
   // §133.7: во время события станция не продаётся — кнопка гаснет целиком.
   const off = disabled || !affordable;
   return `<button class="btn tonal" data-action="station-buy" ${off ? 'disabled' : ''}>${disabled || !affordable ? '--' : 'Купить станцию'}</button>`;
+}
+
+/**
+ * §133.17: БЕЖЕНЦЫ НА БОРТУ.
+ *
+ * Пользователь: «забрал беженцев, но в трюме они не отображаются. По прибытии
+ * на другую станцию в рынке их нет, чтобы высадить».
+ *
+ * Люди занимали место в трюме, но нигде не были видны: ни карточки в трюме, ни
+ * кнопки в рынке. Теперь они — такая же карточка, как товар: те же строки, та
+ * же цена 0.0 CR, справа — «Высадить». Кнопка живая только на станции и не на
+ * той, откуда ушли: там уже никого нет.
+ */
+function refugeeAboardCard(docked: boolean): string {
+  const aboard = refugeesAboard(state);
+  if (aboard <= 0) return '';
+  const sn = supernovaOf(state);
+  const home = !!sn && sn.galaxy === state.galaxy && sn.system === state.system;
+  const needed = Math.min(SUPERNOVA_REFUGEES_TONS, holdCapacity(state.ship));
+  const full = aboard >= needed;
+  const reward = full
+    ? `В благодарность дадут ${SUPERNOVA_REWARD_GEMS} г драгоценных камней.`
+    : 'Часть трюма держал груз — награды не будет.';
+  const hint = home
+    ? 'Это та станция, откуда вы ушли, — высаживать людей некуда.'
+    : docked
+      ? reward
+      : `Высадить можно на любой станции, кроме этой. ${reward}`;
+  return `<div class="card"><div class="good-row">
+      <div><div class="name">Беженцы</div>
+        <div class="muted">На борту: ${aboard} т · место в трюме занято</div></div>
+      <div class="price">0.0 CR</div></div>
+    <div class="row" style="margin-top:10px"><span class="spacer"></span>
+      <button class="btn" data-action="deliver-refugees" ${docked && !home ? '' : 'disabled'}>Высадить</button></div>
+    <div class="sub" style="margin-top:8px">${hint}</div></div>`;
 }
 
 function marketScreen(): string {
@@ -2260,7 +2305,7 @@ function marketScreen(): string {
    */
   const takenNow = missionsOf(state).length;
   return `<div class="sticky-fuel"><div class="card"><h2>Станция ${currentSystem(state).name}</h2>
-    <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т</div>
+    <div class="sub">Трюм ${tons} из ${cap} т · Свободно: ${state.holdSpace} т${refugeesAboard(state) > 0 ? ` · Беженцы: ${refugeesAboard(state)} т` : ''}</div>
     ${holdBar()}
     <div class="row" style="margin-top:10px">
       ${stationBuyActions(locked)}
@@ -2268,7 +2313,7 @@ function marketScreen(): string {
       <button class="btn tonal" data-action="contracts-open" ${locked ? 'disabled' : ''}>Контракты${takenNow > 0 ? ` (${takenNow})` : ''}</button>
     </div>
     ${state.flight ? '<div class="sub">Торговля недоступна в полёте</div>' : ''}
-    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами. Нет топлива на прыжок — уходите в другую галактику, но награды не будет.</div>` : ''}</div></div>${locked ? refugeeCard + leaveCards : rows}`;
+    ${locked ? `<div class="sub">Сверхновая: топливо течёт, до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч. Станция торгует только беженцами. Нет топлива на прыжок — уходите в другую галактику, но награды не будет.</div>` : ''}</div></div>${refugeeAboardCard(!state.flight)}${locked ? refugeeCard + leaveCards : rows}`;
 }
 
 /*
@@ -4269,6 +4314,17 @@ function onAction(el: HTMLElement): void {
       // §133.14: одна кнопка на два состояния — «Активировать» / «Отменить».
       if (galacticAt === null) armGalacticJump();
       else cancelGalacticJump();
+      break;
+    }
+    case 'deliver-refugees': {
+      // §133.17: высадка — по кнопке, а не сама собой.
+      const r = deliverRefugees(state, Date.now(), settings);
+      if (r.state === state) {
+        addLog('Высадить беженцев некуда: нужна станция, кроме той, откуда ушли');
+      } else {
+        state = r.state;
+        handleEvents(r.events);
+      }
       break;
     }
     case 'refugees': {

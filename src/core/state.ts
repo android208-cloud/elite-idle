@@ -122,6 +122,7 @@ export {
 export type { Mission, MissionError, MissionKind, MissionResult } from './missions.ts';
 export {
   deliverRefugees,
+  refugeesAboard,
   hoursLeft,
   stationAlive,
   stationKey,
@@ -3172,25 +3173,15 @@ function arrive(state: GameState, at: number, events: GameEvent[]): GameState {
     nextMissionId: board.nextMissionId,
   };
   /*
-   * §133.6: прибытие — единственное место, где решается судьба «Сверхновой».
-   * Сначала высадка (если летели с беженцами), потом возможный старт события.
+   * §133.17: беженцев больше не высаживают автоматически.
+   *
+   * Пользователь: «по прибытии на другую станцию в рынке их нет, чтобы
+   * высадить». Автовысадка делала высадку невидимой: люди молча исчезали из
+   * трюма, а игрок искал в рынке кнопку. Теперь на станции есть карточка
+   * «Беженцы» с кнопкой «Высадить» (см. `marketScreen`), а ядро по-прежнему
+   * считает награду — `deliverRefugees`.
    */
-  return afterArrival(noteVisit(arrived), at, events);
-}
-
-/**
- * §133.6: что происходит на прибытии вокруг «Сверхновой».
- *
- * Порядок важен: сперва высадка беженцев (иначе старт нового события затёр бы
- * их судьбу), потом — проверка, не пора ли начать событие.
- */
-function afterArrival(state: GameState, at: number, events: GameEvent[]): GameState {
-  const delivered = deliverRefugees(state, at, DEFAULT_SETTINGS);
-  if (delivered.state !== state) {
-    state = delivered.state;
-    events.push(...delivered.events);
-  }
-  return state;
+  return noteVisit(arrived);
 }
 
 /**
