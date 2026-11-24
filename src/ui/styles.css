@@ -58,6 +58,7 @@ html.supernova {
   line-height: 1.4;
   animation: supernova-pulse 2.4s ease-in-out infinite;
 }
+.supernova-band span { display: block; }
 .supernova-band strong {
   display: block;
   font-size: 13px;

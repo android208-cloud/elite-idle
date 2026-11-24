@@ -801,5 +801,60 @@ check('§132.13: и цвет её остался',
   /255,\s*136,\s*0/.test(deadAfter?.style.background ?? ''), deadAfter?.style.background);
 w10.close();
 
+/* ---------- §133.18: полоса «Сверхновой» в редакторе ---------- */
+/*
+ * Пользователь: «шапка „сверхнова“ не поддаётся редактору». Она вне
+ * `#content`, поэтому в обход карточек не попадала. Теперь у неё свой ключ
+ * `n0` и свой набор правок `#band`.
+ */
+const bandState = {
+  ...state,
+  galaxy: 2, kills: 600, ship: { ...state.ship, galacticHyperdrive: true },
+  supernova: {
+    galaxy: 2, system: LAVE, startedAt: Date.now() - 60_000, at: Date.now() + 3 * 3_600_000,
+    leakedTo: Date.now() - 60_000, maydayAt: Date.now() + 3_600_000, maydays: 0,
+    taken: 0, refugees: false, escaped: false,
+  },
+};
+const w11 = boot({ state: JSON.stringify(bandState), log: [] });
+const d11 = w11.document;
+const c11 = (el) => el.dispatchEvent(new w11.MouseEvent('click', { bubbles: true, cancelable: true }));
+const a11 = (a) => [...d11.querySelectorAll(`[data-action="${a}"]`)][0];
+await wait(900);
+const band11 = d11.getElementById('supernova-band');
+check('§133.18: полоса события видна', !!band11 && band11.hidden === false);
+c11([...d11.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
+await wait(200);
+c11(a11('dev-open'));
+await wait(200);
+c11(d11.querySelector('[data-action="dev-editor"]'));
+await wait(200);
+c11(d11.getElementById('dev-pencil'));
+await wait(300);
+check('§133.18: в правке у полосы есть ключ', band11.dataset.uiKey === 'n0', band11.dataset.uiKey);
+check('§133.18: и её строки тоже размечены',
+  !!band11.querySelector('[data-ui-key="n0.t0"]') && !!band11.querySelector('[data-ui-key="n0.t1"]'));
+c11(band11);
+await wait(200);
+const p11 = d11.getElementById('ui-editor');
+check('§133.18: полоса выбирается как карточка', /Карточка/.test(p11.textContent ?? '') && /n0/.test(p11.textContent ?? ''),
+  (p11.textContent ?? '').split('\n')[0].slice(0, 20));
+check('§133.18: у неё есть высота и фон',
+  !!p11.querySelector('[data-ui-prop="h"]') && !!p11.querySelector('[data-ui-prop="bg"]'));
+const line11 = band11.querySelector('[data-ui-key="n0.t1"]');
+c11(line11);
+await wait(200);
+const p11b = d11.getElementById('ui-editor');
+check('§133.18: подпись правится как строка', /Строка текста/.test(p11b.textContent ?? ''));
+const field11 = p11b.querySelector('[data-ui-prop="text"][data-ui-kind="text"]');
+if (field11) { field11.value = 'УТЕЧКА: ДЕРЖИТЕСЬ'; field11.dispatchEvent(new w11.Event('input', { bubbles: true })); }
+await wait(300);
+check('§133.18: правка текста полосы применилась',
+  /УТЕЧКА: ДЕРЖИТЕСЬ/.test(band11.textContent ?? ''), band11.textContent);
+check('§133.18: и записалась в отдельный набор #band',
+  /#band/.test(w11.localStorage.getItem(EDIT_KEY) ?? ''),
+  (w11.localStorage.getItem(EDIT_KEY) ?? '').slice(0, 60));
+w11.close();
+
 console.log(`\nитог: ${ok} ✅ / ${bad} ❌`);
 process.exit(bad === 0 ? 0 : 1);

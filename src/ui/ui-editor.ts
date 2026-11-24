@@ -127,6 +127,21 @@ function currentScreen(): string {
   return deps?.screen() ?? 'unknown';
 }
 
+/**
+ * §133.18: ПОЛОСА «СВЕРХНОВОЙ» — ОТДЕЛЬНЫЙ ЭКРАН.
+ *
+ * Пользователь: «шапка „сверхнова“ не поддаётся редактору». Она живёт вне
+ * `#content` (между шапкой и экраном) и видна на ВСЕХ вкладках, поэтому правки
+ * у неё свои: ключ `n0`, экран `#band`. Иначе, выбирая полосу на «Рынке»,
+ * игрок правил бы её только на «Рынке».
+ */
+const BAND_SCREEN = '#band';
+
+/** К какому набору правок относится ключ. */
+function screenOf(key: string): string {
+  return key.startsWith('n') ? BAND_SCREEN : currentScreen();
+}
+
 function editsFor(screen: string): Record<string, UiStyle> {
   store[screen] ??= {};
   return store[screen];
@@ -447,7 +462,35 @@ export function applyUiEdits(content: HTMLElement, screen: string): void {
       applyButton(el, s);
     });
   });
-  if (picked && !content.querySelector(`[data-ui-key="${picked}"]`)) picked = null;
+  /*
+   * §133.18: полоса «Сверхновой» — такой же объект правки, как карточка.
+   * Ключ `n0`, строки `n0.t0` («СВЕРХНОВА») и `n0.t1` (подпись с таймером).
+   */
+  const band = document.getElementById('supernova-band');
+  if (band) {
+    const bandEdits = editsFor(BAND_SCREEN);
+    if (editing && !band.hidden) {
+      band.dataset.uiKey = 'n0';
+      applyCard(band, bandEdits.n0);
+      textLeaves(band).forEach((el2, j) => {
+        const k = `n0.t${j}`;
+        el2.dataset.uiKey = k;
+        liveText.set(`${BAND_SCREEN}|${k}`, rawText(el2));
+        const st = bandEdits[k];
+        if (st && st.text !== undefined && !st.ops) {
+          st.ops = diffOps(rawText(el2), st.text);
+          delete st.text;
+          save();
+        }
+        applyText(el2, st);
+      });
+    } else {
+      band.removeAttribute('data-ui-key');
+    }
+  }
+  // §133.18: ключ может жить и вне `#content` (полоса события) — ищем по всему
+  // документу, иначе выбор сбрасывался на следующей перерисовке.
+  if (picked && !document.querySelector(`[data-ui-key="${picked}"]`)) picked = null;
 }
 
 /* ---------- Панель ---------- */
@@ -470,7 +513,7 @@ function colorRow(label: string, prop: string, value: string): string {
 
 function panel(el: HTMLElement, key: string): string {
   const kind = kindOf(key);
-  const s = editsFor(currentScreen())[key] ?? {};
+  const s = editsFor(screenOf(key))[key] ?? {};
   const title = kind === 'card' ? 'Карточка' : kind === 'button' ? 'Кнопка' : 'Строка текста';
   const cs = getComputedStyle(el);
   const bg = s.bg ?? cs.backgroundColor;
@@ -615,7 +658,7 @@ function setProp(prop: string, raw: string): void {
   if (!picked) return;
   const node = document.querySelector<HTMLElement>(`[data-ui-key="${picked}"]`);
   if (!node) return;
-  const edits = editsFor(currentScreen());
+  const edits = editsFor(screenOf(picked));
   const s: UiStyle = (edits[picked] ??= {});
   const kind = kindOf(picked);
 

@@ -856,9 +856,21 @@ function unavailableNote(): string {
 
 function shipScreen(): string {
   const tons = cargoTons(state);
-  const items = COMMODITIES.map((c, i) => (state.cargo[i] > 0 ? `${c.name}: ${state.cargo[i]} ${UNITS[c.unit]}` : ''))
-    .filter(Boolean)
-    .join('<br>');
+  /*
+   * §133.18: БЕЖЕНЦЫ ВИДНЫ И НА ГЛАВНОМ ЭКРАНЕ.
+   *
+   * Пользователь: «по-прежнему беженцы не отображаются в трюме на главном
+   * экране». Они занимают место, значит должны быть и в счётчике «Трюм», и в
+   * карточке «Груз в трюме» — иначе игрок видит «0 из 20» и пустой трюм,
+   * хотя половину трюма занимают люди.
+   */
+  const people = refugeesAboard(state);
+  const used = tons + people;
+  const capacity = tons + state.holdSpace + people;
+  const items = [
+    people > 0 ? `Беженцы: ${people} т` : '',
+    ...COMMODITIES.map((c, i) => (state.cargo[i] > 0 ? `${c.name}: ${state.cargo[i]} ${UNITS[c.unit]}` : '')),
+  ].filter(Boolean).join('<br>');
   /*
    * §83.1: красная рамка у «Статуса» и «Груза».
    *
@@ -875,7 +887,7 @@ function shipScreen(): string {
     <div class="grid">
       ${stat('Деньги', cr(state.cash))}
       ${stat('Топливо', ly(state.fuel))}
-      ${stat('Трюм (т)', `${tons} / ${tons + state.holdSpace}`)}
+      ${stat('Трюм (т)', `${used} / ${capacity}`)}
       ${stat('Галактика', String(state.galaxy))}
       ${stat('Ранг', rankOf(state.kills))}
       ${stat('Статус', legalLabel(state.legal))}
@@ -2160,6 +2172,15 @@ function refugeeAboardCard(docked: boolean): string {
   const aboard = refugeesAboard(state);
   if (aboard <= 0) return '';
   const sn = supernovaOf(state);
+  /*
+   * §133.18: НА ГИБНУЩЕЙ СТАНЦИИ КАРТОЧКА НЕ ДУБЛИРУЕТСЯ.
+   *
+   * Пользователь: «при взятии беженцев карточка в рынке дублируется». Пока
+   * событие не закрыто, на экране уже есть карточка «Беженцы» с «Макс.» и
+   * счётчиком «На борту». Вторая, про высадку, рядом с ней — шум: высаживать
+   * здесь всё равно некуда, станция гибнет.
+   */
+  if (sn && !sn.escaped) return '';
   const home = !!sn && sn.galaxy === state.galaxy && sn.system === state.system;
   const needed = Math.min(SUPERNOVA_REFUGEES_TONS, holdCapacity(state.ship));
   const full = aboard >= needed;
@@ -3844,8 +3865,15 @@ function render(): void {
   const novaBand = document.getElementById('supernova-band');
   if (novaBand) {
     novaBand.hidden = !novaOn;
+    /*
+     * §133.18: полоса собрана из двух элементов, а не из строки.
+     *
+     * Редактор интерфейса (§132) правит СТРОКИ — элементы со своим текстом.
+     * Когда «СВЕРХНОВА» и подпись лежали в одном текстовом узле, полоса не
+     * выбиралась вовсе: клик не находил ни карточки, ни строки.
+     */
     novaBand.innerHTML = novaOn
-      ? `<strong>СВЕРХНОВА</strong>утечка топлива · до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч`
+      ? `<strong>СВЕРХНОВА</strong><span>утечка топлива · до взрыва ${hoursLeft(state, Date.now(), settings).toFixed(1)} игр. ч</span>`
       : '';
   }
   const blocked = inCombat || inSalvage ? TABS.map((t) => t.id) : blockedTabs();

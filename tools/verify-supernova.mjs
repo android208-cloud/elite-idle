@@ -135,6 +135,26 @@ const after = text();
 check('«Макс.» взял всех, кто влез', /На борту: 20 т/.test(after), after.match(/В наличии[^·]*·[^·]*/)?.[0] ?? '');
 check('трюм занят целиком', /Трюм 0 из 20/.test(after), after.match(/Трюм[^·]*/)?.[0] ?? '');
 check('кнопка «Макс.» погасла', d.querySelector('[data-action="refugees"]')?.disabled === true);
+/*
+ * §133.18: карточка не дублируется.
+ *
+ * Пользователь: «при взятии беженцев карточка в рынке дублируется». Вторая
+ * карточка — про высадку; на гибнущей станции она лишняя, там уже есть
+ * счётчик «На борту».
+ */
+check('карточка беженцев на рынке одна', d.querySelectorAll('#content [data-action="refugees"]').length === 1);
+check('и кнопки «Высадить» здесь нет', !d.querySelector('#content [data-action="deliver-refugees"]'));
+// Два упоминания — это карточка и счётчик в шапке трюма («· Беженцы: 20 т»).
+check('«Беженцы» упомянуты ровно дважды — карточка и счётчик',
+  (text().match(/Беженцы/g) ?? []).length === 2, String((text().match(/Беженцы/g) ?? []).length));
+
+// §133.18: на главном экране («Корабль») люди тоже видны.
+click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'ship'));
+await wait(300);
+const shipText = text();
+check('на «Корабле» трюм считает людей', /Трюм \(т\)20 \/ 20/.test(shipText),
+  shipText.match(/Трюм[^\s]*[^А-Я]{0,20}/)?.[0] ?? '');
+check('и в грузе написаны беженцы', /Беженцы: 20 т/.test(shipText));
 
 // Разворачиваем журнал и читаем его целиком.
 click([...d.querySelectorAll('[data-action="tab"]')].find((t) => t.dataset.tab === 'log'));
